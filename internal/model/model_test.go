@@ -20,9 +20,9 @@ func testModel(sessions []session.Session) Model {
 }
 
 var testSessions = []session.Session{
-	{Name: "alpha-session", Dir: "/home/user/projects/alpha", Status: session.StatusWorking, WindowIndex: "0"},
+	{Name: "alpha-session", Summary: "auth refactor", Dir: "/home/user/projects/alpha", Status: session.StatusWorking, WindowIndex: "0"},
 	{Name: "beta-session", Dir: "/home/user/projects/beta", Status: session.StatusIdle, WindowIndex: "1"},
-	{Name: "gamma-session", Dir: "/home/user/projects/gamma", Status: session.StatusWaiting, WindowIndex: "2"},
+	{Name: "gamma-session", Summary: "fix bug #42", Dir: "/home/user/projects/gamma", Status: session.StatusWaiting, WindowIndex: "2"},
 }
 
 // --- Helper function tests ---
@@ -201,8 +201,8 @@ func TestModeList_ShiftKSetsConfirmKill(t *testing.T) {
 	if rm.mode != ModeConfirmKill {
 		t.Errorf("expected ModeConfirmKill, got %v", rm.mode)
 	}
-	if rm.confirmTarget != testSessions[0].Name {
-		t.Errorf("expected confirmTarget=%q, got %q", testSessions[0].Name, rm.confirmTarget)
+	if rm.confirmTarget != testSessions[0].DisplayName() {
+		t.Errorf("expected confirmTarget=%q, got %q", testSessions[0].DisplayName(), rm.confirmTarget)
 	}
 	if rm.confirmWindowIndex != testSessions[0].WindowIndex {
 		t.Errorf("expected confirmWindowIndex=%q, got %q", testSessions[0].WindowIndex, rm.confirmWindowIndex)
@@ -483,8 +483,8 @@ func TestView_ModeListWithSessions(t *testing.T) {
 		t.Error("expected view to contain 'Clux'")
 	}
 	for _, s := range testSessions {
-		if !strings.Contains(view, s.Name) {
-			t.Errorf("expected view to contain session name %q", s.Name)
+		if !strings.Contains(view, s.DisplayName()) {
+			t.Errorf("expected view to contain session display name %q", s.DisplayName())
 		}
 	}
 	if !strings.Contains(view, "K:kill") {
