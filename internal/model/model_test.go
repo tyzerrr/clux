@@ -1,0 +1,546 @@
+package model
+
+import (
+	"os"
+	"strings"
+	"testing"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/tanaka0325/clux/internal/session"
+)
+
+// testModel creates a Model with test sessions set in both sessions and filtered.
+func testModel(sessions []session.Session) Model {
+	m := New()
+	m.sessions = sessions
+	m.filtered = sessions
+	return m
+}
+
+var testSessions = []session.Session{
+	{Name: "alpha-session", Dir: "/home/user/projects/alpha", Status: session.StatusWorking, WindowIndex: "0"},
+	{Name: "beta-session", Dir: "/home/user/projects/beta", Status: session.StatusIdle, WindowIndex: "1"},
+	{Name: "gamma-session", Dir: "/home/user/projects/gamma", Status: session.StatusWaiting, WindowIndex: "2"},
+}
+
+// --- Helper function tests ---
+
+func TestApplyFilter_EmptyQuery(t *testing.T) {
+	result := applyFilter(testSessions, "")
+	if len(result) != len(testSessions) {
+		t.Errorf("expected %d sessions, got %d", len(testSessions), len(result))
+	}
+}
+
+func TestApplyFilter_MatchByName(t *testing.T) {
+	result := applyFilter(testSessions, "alpha")
+	if len(result) == 0 {
+		t.Fatal("expected at least one match by name, got none")
+	}
+	found := false
+	for _, s := range result {
+		if s.Name == "alpha-session" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected 'alpha-session' in results")
+	}
+}
+
+func TestApplyFilter_MatchByDir(t *testing.T) {
+	result := applyFilter(testSessions, "gamma")
+	if len(result) == 0 {
+		t.Fatal("expected at least one match by dir, got none")
+	}
+	found := false
+	for _, s := range result {
+		if s.Name == "gamma-session" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected 'gamma-session' in results")
+	}
+}
+
+func TestApplyFilter_NoMatch(t *testing.T) {
+	result := applyFilter(testSessions, "zzznomatchzzz")
+	if len(result) != 0 {
+		t.Errorf("expected 0 results, got %d", len(result))
+	}
+}
+
+func TestFilterDirs_EmptyQuery(t *testing.T) {
+	dirs := []string{"/home/user/proj1", "/home/user/proj2", "/home/user/proj3"}
+	result := filterDirs(dirs, "")
+	if len(result) != len(dirs) {
+		t.Errorf("expected %d dirs, got %d", len(dirs), len(result))
+	}
+}
+
+func TestFilterDirs_FilterCorrectly(t *testing.T) {
+	dirs := []string{"/home/user/alpha", "/home/user/beta", "/home/user/gamma"}
+	result := filterDirs(dirs, "alpha")
+	if len(result) == 0 {
+		t.Fatal("expected at least one match, got none")
+	}
+	found := false
+	for _, d := range result {
+		if d == "/home/user/alpha" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected '/home/user/alpha' in results")
+	}
+}
+
+func TestShortenDir_ReplacesHomeDir(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("cannot determine home dir")
+	}
+	dir := home + "/projects/myrepo"
+	result := shortenDir(dir)
+	if !strings.HasPrefix(result, "~") {
+		t.Errorf("expected result to start with ~, got %q", result)
+	}
+	if strings.HasPrefix(result, home) {
+		t.Errorf("expected home dir to be replaced, got %q", result)
+	}
+}
+
+func TestShortenDir_NonHomePath(t *testing.T) {
+	dir := "/etc/something"
+	result := shortenDir(dir)
+	if result != dir {
+		t.Errorf("expected %q unchanged, got %q", dir, result)
+	}
+}
+
+// --- ModeList key handling tests ---
+
+func TestModeList_JMovesDown(t *testing.T) {
+	m := testModel(testSessions)
+	m.cursor = 0
+	msg := tea.KeyPressMsg{Code: 'j', Text: "j"}
+	result, _ := m.updateList(msg)
+	rm := result.(Model)
+	if rm.cursor != 1 {
+		t.Errorf("expected cursor=1, got %d", rm.cursor)
+	}
+}
+
+func TestModeList_DownMovesDown(t *testing.T) {
+	m := testModel(testSessions)
+	m.cursor = 0
+	msg := tea.KeyPressMsg{Code: tea.KeyDown}
+	result, _ := m.updateList(msg)
+	rm := result.(Model)
+	if rm.cursor != 1 {
+		t.Errorf("expected cursor=1, got %d", rm.cursor)
+	}
+}
+
+func TestModeList_JWrapsAround(t *testing.T) {
+	m := testModel(testSessions)
+	m.cursor = len(testSessions) - 1
+	msg := tea.KeyPressMsg{Code: 'j', Text: "j"}
+	result, _ := m.updateList(msg)
+	rm := result.(Model)
+	if rm.cursor != 0 {
+		t.Errorf("expected cursor to wrap to 0, got %d", rm.cursor)
+	}
+}
+
+func TestModeList_KMovesUp(t *testing.T) {
+	m := testModel(testSessions)
+	m.cursor = 1
+	msg := tea.KeyPressMsg{Code: 'k', Text: "k"}
+	result, _ := m.updateList(msg)
+	rm := result.(Model)
+	if rm.cursor != 0 {
+		t.Errorf("expected cursor=0, got %d", rm.cursor)
+	}
+}
+
+func TestModeList_UpMovesUp(t *testing.T) {
+	m := testModel(testSessions)
+	m.cursor = 1
+	msg := tea.KeyPressMsg{Code: tea.KeyUp}
+	result, _ := m.updateList(msg)
+	rm := result.(Model)
+	if rm.cursor != 0 {
+		t.Errorf("expected cursor=0, got %d", rm.cursor)
+	}
+}
+
+func TestModeList_KWrapsAround(t *testing.T) {
+	m := testModel(testSessions)
+	m.cursor = 0
+	msg := tea.KeyPressMsg{Code: 'k', Text: "k"}
+	result, _ := m.updateList(msg)
+	rm := result.(Model)
+	if rm.cursor != len(testSessions)-1 {
+		t.Errorf("expected cursor to wrap to %d, got %d", len(testSessions)-1, rm.cursor)
+	}
+}
+
+func TestModeList_ShiftKSetsConfirmKill(t *testing.T) {
+	m := testModel(testSessions)
+	m.cursor = 0
+	msg := tea.KeyPressMsg{Code: 'K', Text: "K", ShiftedCode: 'K', Mod: tea.ModShift}
+	result, _ := m.updateList(msg)
+	rm := result.(Model)
+	if rm.mode != ModeConfirmKill {
+		t.Errorf("expected ModeConfirmKill, got %v", rm.mode)
+	}
+	if rm.confirmTarget != testSessions[0].Name {
+		t.Errorf("expected confirmTarget=%q, got %q", testSessions[0].Name, rm.confirmTarget)
+	}
+	if rm.confirmWindowIndex != testSessions[0].WindowIndex {
+		t.Errorf("expected confirmWindowIndex=%q, got %q", testSessions[0].WindowIndex, rm.confirmWindowIndex)
+	}
+}
+
+func TestModeList_ShiftKWithEmptyList(t *testing.T) {
+	m := testModel([]session.Session{})
+	msg := tea.KeyPressMsg{Code: 'K', Text: "K", ShiftedCode: 'K', Mod: tea.ModShift}
+	result, _ := m.updateList(msg)
+	rm := result.(Model)
+	if rm.mode != ModeList {
+		t.Errorf("expected ModeList, got %v", rm.mode)
+	}
+}
+
+func TestModeList_NSetsNewSession(t *testing.T) {
+	m := testModel(testSessions)
+	msg := tea.KeyPressMsg{Code: 'n', Text: "n"}
+	result, _ := m.updateList(msg)
+	rm := result.(Model)
+	if rm.mode != ModeNewSession {
+		t.Errorf("expected ModeNewSession, got %v", rm.mode)
+	}
+}
+
+func TestModeList_RReturnsCmd(t *testing.T) {
+	m := testModel(testSessions)
+	msg := tea.KeyPressMsg{Code: 'R', Text: "R", ShiftedCode: 'R', Mod: tea.ModShift}
+	_, cmd := m.updateList(msg)
+	if cmd == nil {
+		t.Error("expected non-nil cmd from R key")
+	}
+}
+
+func TestModeList_SlashSetsFilterMode(t *testing.T) {
+	m := testModel(testSessions)
+	msg := tea.KeyPressMsg{Code: '/', Text: "/"}
+	result, _ := m.updateList(msg)
+	rm := result.(Model)
+	if rm.mode != ModeFilter {
+		t.Errorf("expected ModeFilter, got %v", rm.mode)
+	}
+}
+
+func TestModeList_QReturnsQuit(t *testing.T) {
+	m := testModel(testSessions)
+	msg := tea.KeyPressMsg{Code: 'q', Text: "q"}
+	_, cmd := m.updateList(msg)
+	if cmd == nil {
+		t.Error("expected non-nil cmd from q key")
+	}
+}
+
+func TestModeList_EscReturnsQuit(t *testing.T) {
+	m := testModel(testSessions)
+	msg := tea.KeyPressMsg{Code: tea.KeyEscape}
+	_, cmd := m.updateList(msg)
+	if cmd == nil {
+		t.Error("expected non-nil cmd from esc key")
+	}
+}
+
+func TestModeList_EnterWithSessionsReturnsCmd(t *testing.T) {
+	m := testModel(testSessions)
+	m.cursor = 0
+	msg := tea.KeyPressMsg{Code: tea.KeyEnter}
+	_, cmd := m.updateList(msg)
+	if cmd == nil {
+		t.Error("expected non-nil cmd from enter key with sessions")
+	}
+}
+
+func TestModeList_EnterWithEmptyListReturnsNilCmd(t *testing.T) {
+	m := testModel([]session.Session{})
+	msg := tea.KeyPressMsg{Code: tea.KeyEnter}
+	_, cmd := m.updateList(msg)
+	if cmd != nil {
+		t.Error("expected nil cmd from enter key with empty list")
+	}
+}
+
+// --- ModeConfirmKill key handling tests ---
+
+func TestModeConfirmKill_YGoesBackToList(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeConfirmKill
+	m.confirmTarget = "test-session"
+	m.confirmWindowIndex = "0"
+	msg := tea.KeyPressMsg{Code: 'y', Text: "y"}
+	result, cmd := m.updateConfirmKill(msg)
+	rm := result.(Model)
+	if rm.mode != ModeList {
+		t.Errorf("expected ModeList, got %v", rm.mode)
+	}
+	if rm.confirmTarget != "" {
+		t.Errorf("expected confirmTarget cleared, got %q", rm.confirmTarget)
+	}
+	if rm.confirmWindowIndex != "" {
+		t.Errorf("expected confirmWindowIndex cleared, got %q", rm.confirmWindowIndex)
+	}
+	if cmd == nil {
+		t.Error("expected non-nil cmd from y key in ConfirmKill mode")
+	}
+}
+
+func TestModeConfirmKill_NGoesBackToList(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeConfirmKill
+	m.confirmTarget = "test-session"
+	m.confirmWindowIndex = "0"
+	msg := tea.KeyPressMsg{Code: 'n', Text: "n"}
+	result, cmd := m.updateConfirmKill(msg)
+	rm := result.(Model)
+	if rm.mode != ModeList {
+		t.Errorf("expected ModeList, got %v", rm.mode)
+	}
+	if rm.confirmTarget != "" {
+		t.Errorf("expected confirmTarget cleared, got %q", rm.confirmTarget)
+	}
+	if rm.confirmWindowIndex != "" {
+		t.Errorf("expected confirmWindowIndex cleared, got %q", rm.confirmWindowIndex)
+	}
+	if cmd != nil {
+		t.Error("expected nil cmd from n key in ConfirmKill mode")
+	}
+}
+
+func TestModeConfirmKill_EscGoesBackToList(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeConfirmKill
+	m.confirmTarget = "test-session"
+	m.confirmWindowIndex = "0"
+	msg := tea.KeyPressMsg{Code: tea.KeyEscape}
+	result, _ := m.updateConfirmKill(msg)
+	rm := result.(Model)
+	if rm.mode != ModeList {
+		t.Errorf("expected ModeList, got %v", rm.mode)
+	}
+	if rm.confirmTarget != "" {
+		t.Errorf("expected confirmTarget cleared, got %q", rm.confirmTarget)
+	}
+	if rm.confirmWindowIndex != "" {
+		t.Errorf("expected confirmWindowIndex cleared, got %q", rm.confirmWindowIndex)
+	}
+}
+
+func TestModeConfirmKill_OtherKeyStays(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeConfirmKill
+	m.confirmTarget = "test-session"
+	msg := tea.KeyPressMsg{Code: 'x', Text: "x"}
+	result, _ := m.updateConfirmKill(msg)
+	rm := result.(Model)
+	if rm.mode != ModeConfirmKill {
+		t.Errorf("expected ModeConfirmKill, got %v", rm.mode)
+	}
+}
+
+// --- ModeFilter key handling tests ---
+
+func TestModeFilter_EnterGoesBackToList(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeFilter
+	_ = m.filterInput.Focus()
+	msg := tea.KeyPressMsg{Code: tea.KeyEnter}
+	result, _ := m.updateFilter(msg)
+	rm := result.(Model)
+	if rm.mode != ModeList {
+		t.Errorf("expected ModeList, got %v", rm.mode)
+	}
+}
+
+func TestModeFilter_EscGoesBackToListAndClearsFilter(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeFilter
+	_ = m.filterInput.Focus()
+	m.filterInput.SetValue("somefilter")
+	// filter down so filtered is a subset
+	m.filtered = testSessions[:1]
+	msg := tea.KeyPressMsg{Code: tea.KeyEscape}
+	result, _ := m.updateFilter(msg)
+	rm := result.(Model)
+	if rm.mode != ModeList {
+		t.Errorf("expected ModeList, got %v", rm.mode)
+	}
+	if rm.filterInput.Value() != "" {
+		t.Errorf("expected filter cleared, got %q", rm.filterInput.Value())
+	}
+	if len(rm.filtered) != len(testSessions) {
+		t.Errorf("expected filtered reset to full sessions (%d), got %d", len(testSessions), len(rm.filtered))
+	}
+}
+
+// --- ModeNewSession key handling tests ---
+
+func TestModeNewSession_EscGoesBackToList(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeNewSession
+	m.filteredDirs = []string{"/repo/a", "/repo/b", "/repo/c"}
+	msg := tea.KeyPressMsg{Code: tea.KeyEscape}
+	result, _ := m.updateNewSession(msg)
+	rm := result.(Model)
+	if rm.mode != ModeList {
+		t.Errorf("expected ModeList, got %v", rm.mode)
+	}
+}
+
+func TestModeNewSession_UpMovesCursorUp(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeNewSession
+	m.filteredDirs = []string{"/repo/a", "/repo/b", "/repo/c"}
+	m.newSessionCursor = 1
+	msg := tea.KeyPressMsg{Code: tea.KeyUp}
+	result, _ := m.updateNewSession(msg)
+	rm := result.(Model)
+	if rm.newSessionCursor != 0 {
+		t.Errorf("expected newSessionCursor=0, got %d", rm.newSessionCursor)
+	}
+}
+
+func TestModeNewSession_CtrlKMovesCursorUp(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeNewSession
+	m.filteredDirs = []string{"/repo/a", "/repo/b", "/repo/c"}
+	m.newSessionCursor = 2
+	msg := tea.KeyPressMsg{Code: 'k', Mod: tea.ModCtrl}
+	result, _ := m.updateNewSession(msg)
+	rm := result.(Model)
+	if rm.newSessionCursor != 1 {
+		t.Errorf("expected newSessionCursor=1, got %d", rm.newSessionCursor)
+	}
+}
+
+func TestModeNewSession_UpWrapsAround(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeNewSession
+	m.filteredDirs = []string{"/repo/a", "/repo/b", "/repo/c"}
+	m.newSessionCursor = 0
+	msg := tea.KeyPressMsg{Code: tea.KeyUp}
+	result, _ := m.updateNewSession(msg)
+	rm := result.(Model)
+	if rm.newSessionCursor != len(m.filteredDirs)-1 {
+		t.Errorf("expected newSessionCursor to wrap to %d, got %d", len(m.filteredDirs)-1, rm.newSessionCursor)
+	}
+}
+
+func TestModeNewSession_DownMovesCursorDown(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeNewSession
+	m.filteredDirs = []string{"/repo/a", "/repo/b", "/repo/c"}
+	m.newSessionCursor = 0
+	msg := tea.KeyPressMsg{Code: tea.KeyDown}
+	result, _ := m.updateNewSession(msg)
+	rm := result.(Model)
+	if rm.newSessionCursor != 1 {
+		t.Errorf("expected newSessionCursor=1, got %d", rm.newSessionCursor)
+	}
+}
+
+func TestModeNewSession_CtrlJMovesCursorDown(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeNewSession
+	m.filteredDirs = []string{"/repo/a", "/repo/b", "/repo/c"}
+	m.newSessionCursor = 1
+	msg := tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl}
+	result, _ := m.updateNewSession(msg)
+	rm := result.(Model)
+	if rm.newSessionCursor != 2 {
+		t.Errorf("expected newSessionCursor=2, got %d", rm.newSessionCursor)
+	}
+}
+
+func TestModeNewSession_DownWrapsAround(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeNewSession
+	dirs := []string{"/repo/a", "/repo/b", "/repo/c"}
+	m.filteredDirs = dirs
+	m.newSessionCursor = len(dirs) - 1
+	msg := tea.KeyPressMsg{Code: tea.KeyDown}
+	result, _ := m.updateNewSession(msg)
+	rm := result.(Model)
+	if rm.newSessionCursor != 0 {
+		t.Errorf("expected newSessionCursor to wrap to 0, got %d", rm.newSessionCursor)
+	}
+}
+
+// --- View output tests ---
+
+func TestView_ModeListWithSessions(t *testing.T) {
+	m := testModel(testSessions)
+	m.width = 120
+	m.height = 40
+	view := m.View().Content
+	if !strings.Contains(view, "Clux") {
+		t.Error("expected view to contain 'Clux'")
+	}
+	for _, s := range testSessions {
+		if !strings.Contains(view, s.Name) {
+			t.Errorf("expected view to contain session name %q", s.Name)
+		}
+	}
+	if !strings.Contains(view, "K:kill") {
+		t.Error("expected view to contain 'K:kill' in help bar")
+	}
+}
+
+func TestView_ModeListNoSessions(t *testing.T) {
+	m := testModel([]session.Session{})
+	view := m.View().Content
+	if !strings.Contains(view, "No Claude Code sessions found") {
+		t.Error("expected view to contain 'No Claude Code sessions found'")
+	}
+}
+
+func TestView_ModeConfirmKill(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeConfirmKill
+	m.confirmTarget = "alpha-session"
+	view := m.View().Content
+	if !strings.Contains(view, "Kill session") {
+		t.Error("expected view to contain 'Kill session'")
+	}
+	if !strings.Contains(view, "y:kill") {
+		t.Error("expected view to contain 'y:kill'")
+	}
+	if !strings.Contains(view, "n/Esc:cancel") {
+		t.Error("expected view to contain 'n/Esc:cancel'")
+	}
+}
+
+func TestView_ModeFilter(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeFilter
+	_ = m.filterInput.Focus()
+	view := m.View().Content
+	if !strings.Contains(view, "Enter:apply") {
+		t.Error("expected view to contain 'Enter:apply'")
+	}
+	if !strings.Contains(view, "Esc:clear") {
+		t.Error("expected view to contain 'Esc:clear'")
+	}
+}
