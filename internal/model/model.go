@@ -26,10 +26,13 @@ const (
 )
 
 // Custom message types.
-type sessionsMsg []session.Session
-type errMsg error
-type tickMsg time.Time
-type ghqDirsMsg []string
+type (
+	sessionsMsg     []session.Session
+	errMsg          error
+	tickMsg         time.Time
+	ghqDirsMsg      []string
+	windowKilledMsg struct{}
+)
 
 // Model is the main Bubble Tea model for Clux.
 type Model struct {
@@ -72,14 +75,14 @@ func New() Model {
 
 // --- Accessor methods ---
 
-func (m Model) Sessions() []session.Session   { return m.sessions }
-func (m Model) Filtered() []session.Session   { return m.filtered }
-func (m Model) Cursor() int                   { return m.cursor }
-func (m Model) GetMode() Mode                 { return m.mode }
-func (m Model) Width() int                    { return m.width }
-func (m Model) Height() int                   { return m.height }
-func (m Model) FilterInput() textinput.Model  { return m.filterInput }
-func (m Model) Err() error                    { return m.err }
+func (m Model) Sessions() []session.Session  { return m.sessions }
+func (m Model) Filtered() []session.Session  { return m.filtered }
+func (m Model) Cursor() int                  { return m.cursor }
+func (m Model) Mode() Mode                   { return m.mode }
+func (m Model) Width() int                   { return m.width }
+func (m Model) Height() int                  { return m.height }
+func (m Model) FilterInput() textinput.Model { return m.filterInput }
+func (m Model) Err() error                   { return m.err }
 
 // --- Command functions ---
 
@@ -194,11 +197,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tickMsg:
-		return m, tea.Batch(fetchSessionsCmd, doTick())
+		if m.mode == ModeList || m.mode == ModeFilter {
+			return m, tea.Batch(fetchSessionsCmd, doTick())
+		}
+		return m, doTick()
+
+	case windowKilledMsg:
+		return m, fetchSessionsCmd
 
 	case ghqDirsMsg:
 		m.repoDirs = []string(msg)
 		m.filteredDirs = filterDirs(m.repoDirs, m.newSessionInput.Value())
+		if len(m.filteredDirs) == 0 {
+			m.newSessionCursor = 0
+		} else if m.newSessionCursor >= len(m.filteredDirs) {
+			m.newSessionCursor = len(m.filteredDirs) - 1
+		}
 		return m, nil
 
 	case tea.KeyPressMsg:
@@ -236,22 +250,32 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if len(m.filtered) > 0 {
 			windowIndex := m.filtered[m.cursor].WindowIndex
 			return m, func() tea.Msg {
-				_ = tmux.SwitchWindow(windowIndex)
-				return tea.Quit()
+				if err := tmux.SwitchWindow(windowIndex); err != nil {
+					return errMsg(err)
+				}
+				return tea.QuitMsg{}
 			}
 		}
 
 	case "n":
 		m.mode = ModeNewSession
+		m.err = nil
 		m.newSessionInput.SetValue("")
 		m.newSessionCursor = 0
-		return m, tea.Batch(m.newSessionInput.Focus(), fetchGhqDirs)
+		cmds := []tea.Cmd{m.newSessionInput.Focus()}
+		if len(m.repoDirs) == 0 {
+			cmds = append(cmds, fetchGhqDirs)
+		} else {
+			m.filteredDirs = m.repoDirs
+		}
+		return m, tea.Batch(cmds...)
 
 	case "K":
 		if len(m.filtered) > 0 {
 			s := m.filtered[m.cursor]
 			m.confirmTarget = s.Name
 			m.confirmWindowIndex = s.WindowIndex
+			m.err = nil
 			m.mode = ModeConfirmKill
 		}
 
@@ -280,7 +304,8 @@ func (m Model) updateConfirmKill(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if err := tmux.KillWindow(windowIndex); err != nil {
 				return errMsg(err)
 			}
-			return fetchSessionsCmd()
+			// Return a dedicated message, handled by Update to trigger fetch
+			return windowKilledMsg{}
 		}
 	case "n", "esc":
 		m.confirmTarget = ""
@@ -333,7 +358,7 @@ func (m Model) updateNewSession(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				if err := tmux.CreateWindow(name, dir); err != nil {
 					return errMsg(err)
 				}
-				return tea.Quit()
+				return tea.QuitMsg{}
 			}
 		}
 		return m, nil
@@ -378,7 +403,7 @@ var (
 	styleWorking = lipgloss.NewStyle().Foreground(lipgloss.Color("2")) // green
 	styleWaiting = lipgloss.NewStyle().Foreground(lipgloss.Color("3")) // yellow
 	styleIdle    = lipgloss.NewStyle().Foreground(lipgloss.Color("8")) // gray
-	styleUnknown = lipgloss.NewStyle().Foreground(lipgloss.Color("9")) // red
+	styleUnknown = lipgloss.NewStyle().Foreground(lipgloss.Color("5")) // magenta
 )
 
 func shortenDir(dir string) string {
@@ -412,6 +437,14 @@ func newView(s string) tea.View {
 func (m Model) View() tea.View {
 	var b strings.Builder
 
+	if m.mode == ModeConfirmKill {
+		return newView(m.viewConfirmKill(&b))
+	}
+
+	if m.mode == ModeNewSession {
+		return newView(m.viewNewSession(&b))
+	}
+
 	// Header.
 	header := fmt.Sprintf("Clux — Sessions (%d)", len(m.filtered))
 	b.WriteString(styleHeader.Render(header))
@@ -421,14 +454,6 @@ func (m Model) View() tea.View {
 	if m.err != nil {
 		b.WriteString(styleError.Render("Error: " + m.err.Error()))
 		b.WriteString("\n\n")
-	}
-
-	if m.mode == ModeConfirmKill {
-		return newView(m.viewConfirmKill(&b))
-	}
-
-	if m.mode == ModeNewSession {
-		return newView(m.viewNewSession(&b))
 	}
 
 	// Session list.
@@ -465,6 +490,10 @@ func (m Model) View() tea.View {
 }
 
 func (m Model) viewNewSession(b *strings.Builder) string {
+	if m.err != nil {
+		b.WriteString(styleError.Render("Error: " + m.err.Error()))
+		b.WriteString("\n\n")
+	}
 	b.WriteString(styleHeader.Render("New Session — Select Repository"))
 	b.WriteString("\n\n")
 	b.WriteString(" ")
@@ -474,12 +503,17 @@ func (m Model) viewNewSession(b *strings.Builder) string {
 	if len(m.filteredDirs) == 0 {
 		b.WriteString(styleHelpBar.Render(" No repositories found."))
 	} else {
-		// Show at most 20 items to avoid flooding the screen
+		// Show at most 20 items with viewport offset to keep cursor visible.
 		maxShow := 20
-		if maxShow > len(m.filteredDirs) {
-			maxShow = len(m.filteredDirs)
+		offset := 0
+		if m.newSessionCursor >= maxShow {
+			offset = m.newSessionCursor - maxShow + 1
 		}
-		for i := 0; i < maxShow; i++ {
+		end := offset + maxShow
+		if end > len(m.filteredDirs) {
+			end = len(m.filteredDirs)
+		}
+		for i := offset; i < end; i++ {
 			dir := shortenDir(m.filteredDirs[i])
 			if i == m.newSessionCursor {
 				b.WriteString(styleSelected.Render(fmt.Sprintf(" > %s", dir)))
@@ -488,8 +522,8 @@ func (m Model) viewNewSession(b *strings.Builder) string {
 			}
 			b.WriteString("\n")
 		}
-		if len(m.filteredDirs) > maxShow {
-			b.WriteString(styleHelpBar.Render(fmt.Sprintf("\n   ... and %d more", len(m.filteredDirs)-maxShow)))
+		if end < len(m.filteredDirs) {
+			b.WriteString(styleHelpBar.Render(fmt.Sprintf("\n   ... and %d more", len(m.filteredDirs)-end)))
 		}
 	}
 
@@ -500,6 +534,10 @@ func (m Model) viewNewSession(b *strings.Builder) string {
 }
 
 func (m Model) viewConfirmKill(b *strings.Builder) string {
+	if m.err != nil {
+		b.WriteString(styleError.Render("Error: " + m.err.Error()))
+		b.WriteString("\n\n")
+	}
 	b.WriteString(fmt.Sprintf("Kill session %q? (y/n)", m.confirmTarget))
 	b.WriteString("\n\n")
 	b.WriteString(styleHelpBar.Render("y:kill  n/Esc:cancel"))
