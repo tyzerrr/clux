@@ -26,6 +26,25 @@ func TestStatusIcon(t *testing.T) {
 	}
 }
 
+func TestDisplayName(t *testing.T) {
+	tests := []struct {
+		name    string
+		session Session
+		want    string
+	}{
+		{"Summary set", Session{Name: "win-name", Summary: "my task"}, "my task"},
+		{"Summary empty", Session{Name: "win-name", Summary: ""}, "win-name"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.session.DisplayName()
+			if got != tt.want {
+				t.Errorf("DisplayName() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestStatusString(t *testing.T) {
 	tests := []struct {
 		name   string

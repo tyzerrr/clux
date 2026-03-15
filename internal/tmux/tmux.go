@@ -102,8 +102,11 @@ func ListWindows() ([]session.Session, error) {
 		if !isClaudeCode {
 			continue
 		}
+		summary := getWindowSummary(w.index)
+
 		sessions = append(sessions, session.Session{
 			Name:        w.name,
+			Summary:     summary,
 			Dir:         w.dir,
 			Status:      status,
 			WindowIndex: w.index,
@@ -283,6 +286,17 @@ func isWorking(content string) bool {
 	return false
 }
 
+// getWindowSummary retrieves the @clux-summary user option for a window.
+// Returns empty string if not set or on error.
+func getWindowSummary(windowIndex string) string {
+	target := SessionName + ":" + windowIndex + ".0"
+	out, err := exec.Command("tmux", "display-message", "-t", target, "-p", "#{@clux-summary}").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // isIdle returns true when the pane is at the Claude Code input prompt.
 func isIdle(content string) bool {
 	lines := strings.Split(content, "\n")
@@ -297,7 +311,23 @@ func isIdle(content string) bool {
 		if strings.HasPrefix(line, "-- INSERT --") {
 			continue
 		}
+		if isSeparatorLine(line) {
+			continue
+		}
 		break
 	}
 	return false
+}
+
+// isSeparatorLine returns true if the line consists entirely of box-drawing horizontal characters (─).
+func isSeparatorLine(line string) bool {
+	if line == "" {
+		return false
+	}
+	for _, r := range line {
+		if r != '─' {
+			return false
+		}
+	}
+	return true
 }

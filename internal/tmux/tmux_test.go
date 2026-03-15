@@ -116,6 +116,11 @@ func TestIsIdle(t *testing.T) {
 			true,
 		},
 		{
+			"idle with separator line and INSERT",
+			"some output\n❯ \n────────────────────\n  -- INSERT --\n\n",
+			true,
+		},
+		{
 			"no idle prompt",
 			"-- INSERT --\nsome text\n✻ Working",
 			false,

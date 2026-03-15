@@ -14,9 +14,18 @@ const (
 // Session holds information about a tmux window running Claude Code.
 type Session struct {
 	Name        string
+	Summary     string // @clux-summary user option; empty if not set
 	Dir         string // pane_current_path
 	Status      Status
 	WindowIndex string // tmux window index
+}
+
+// DisplayName returns Summary if set, otherwise Name.
+func (s Session) DisplayName() string {
+	if s.Summary != "" {
+		return s.Summary
+	}
+	return s.Name
 }
 
 // Icon returns an emoji icon representing the status.

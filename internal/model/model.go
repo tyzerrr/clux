@@ -136,6 +136,18 @@ func applyFilter(sessions []session.Session, query string) []session.Session {
 		}
 	}
 
+	// Match against summaries
+	summaries := make([]string, len(sessions))
+	for i, s := range sessions {
+		summaries[i] = s.Summary
+	}
+	for _, m := range fuzzy.Find(query, summaries) {
+		if !seen[m.Index] {
+			seen[m.Index] = true
+			result = append(result, sessions[m.Index])
+		}
+	}
+
 	// Match against dirs
 	dirs := make([]string, len(sessions))
 	for i, s := range sessions {
@@ -273,7 +285,7 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "K":
 		if len(m.filtered) > 0 {
 			s := m.filtered[m.cursor]
-			m.confirmTarget = s.Name
+			m.confirmTarget = s.DisplayName()
 			m.confirmWindowIndex = s.WindowIndex
 			m.err = nil
 			m.mode = ModeConfirmKill
@@ -465,7 +477,7 @@ func (m Model) View() tea.View {
 		for i, s := range m.filtered {
 			statusText := statusStyle(s.Status).Render(fmt.Sprintf("%s %-7s", s.Status.Icon(), s.Status.String()))
 			dir := styleDir.Render(shortenDir(s.Dir))
-			row := fmt.Sprintf(" %s  %-30s  %s", statusText, s.Name, dir)
+			row := fmt.Sprintf(" %s  %-30s  %s", statusText, s.DisplayName(), dir)
 			if i == m.cursor {
 				row = styleSelected.Render(row)
 			}
