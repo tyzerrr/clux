@@ -98,7 +98,7 @@ func ListWindows() ([]session.Session, error) {
 		if results[i].err != nil {
 			continue
 		}
-		status, isClaudeCode := detectStatus(results[i].content)
+		status, isClaudeCode := detectStatusWithHooks(results[i].content, w.index)
 		if !isClaudeCode {
 			continue
 		}
@@ -212,23 +212,130 @@ func capturePaneContent(windowIndex string) (string, error) {
 	return string(out), nil
 }
 
-// detectStatus analyzes captured pane content to determine whether Claude Code is
-// running and, if so, what state it is in.
+// bottomScanLines is the number of lines from the bottom of the pane to use
+// for state detection. This avoids false positives from indicators that remain
+// visible in scrolled-up output from previous interactions.
+const bottomScanLines = 15
+
+// bottomContent returns the last n lines of content.
+func bottomContent(content string, n int) string {
+	lines := strings.Split(content, "\n")
+	if len(lines) <= n {
+		return content
+	}
+	return strings.Join(lines[len(lines)-n:], "\n")
+}
+
+// getClaudeStatus reads the @claude-status tmux user option set by Claude Code hooks.
+// Returns the status string ("working", "idle", "waiting") or empty if not set.
+func getClaudeStatus(windowIndex string) string {
+	target := SessionName + ":" + windowIndex + ".0"
+	out, err := exec.Command("tmux", "display-message", "-t", target, "-p", "#{@claude-status}").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// parseClaudeStatus converts a @claude-status string to a session.Status.
+// Returns the status and true if the string was recognized, or StatusUnknown and false otherwise.
+func parseClaudeStatus(s string) (session.Status, bool) {
+	switch s {
+	case "working":
+		return session.StatusWorking, true
+	case "idle":
+		return session.StatusIdle, true
+	case "waiting":
+		return session.StatusWaiting, true
+	default:
+		return session.StatusUnknown, false
+	}
+}
+
+// hasActiveChildren checks whether the pane's process has grandchild processes,
+// indicating that Claude Code is actively executing a tool (e.g., bash command).
+// The pane PID is the shell, its child is Claude Code (node), and grandchildren
+// are tool processes.
+func hasActiveChildren(windowIndex string) bool {
+	target := SessionName + ":" + windowIndex + ".0"
+	out, err := exec.Command("tmux", "display-message", "-t", target, "-p", "#{pane_pid}").Output()
+	if err != nil {
+		return false
+	}
+	panePID := strings.TrimSpace(string(out))
+	if panePID == "" {
+		return false
+	}
+	// Find direct children of the pane shell (e.g., the node process).
+	childOut, err := exec.Command("pgrep", "-P", panePID).Output()
+	if err != nil {
+		return false
+	}
+	children := strings.Split(strings.TrimSpace(string(childOut)), "\n")
+	for _, child := range children {
+		child = strings.TrimSpace(child)
+		if child == "" {
+			continue
+		}
+		// Check if this child has its own children (tool processes).
+		if err := exec.Command("pgrep", "-P", child).Run(); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// detectStatus determines the status of a Claude Code session in a tmux window.
 //
-// Claude Code detection uses multiple indicators: "-- INSERT --", "Do you want to proceed?",
-// and "Esc to cancel". Any match means Claude Code is present.
-// Priority: Waiting > Working > Idle > Unknown.
+// It uses a two-tier approach:
+//  1. Hooks-based: reads the @claude-status tmux option set by Claude Code hooks.
+//     This is the most reliable method when configured.
+//  2. Fallback: combines process tree inspection with pane content pattern matching.
+//     Process tree detects active tool execution (Working). Pattern matching
+//     distinguishes Waiting vs Idle from the bottom portion of the pane.
 func detectStatus(content string) (status session.Status, isClaudeCode bool) {
 	if !hasClaudeCode(content) {
 		return session.StatusUnknown, false
 	}
-	if isWaiting(content) {
+	bottom := bottomContent(content, bottomScanLines)
+	if isWaiting(bottom) {
 		return session.StatusWaiting, true
 	}
-	if isWorking(content) {
+	if isWorking(bottom) {
 		return session.StatusWorking, true
 	}
-	if isIdle(content) {
+	if isIdle(bottom) {
+		return session.StatusIdle, true
+	}
+	return session.StatusUnknown, true
+}
+
+// detectStatusWithHooks determines status using hooks (@claude-status) first,
+// then falls back to process tree + pane content analysis.
+func detectStatusWithHooks(content, windowIndex string) (status session.Status, isClaudeCode bool) {
+	// Tier 1: Check @claude-status hook.
+	if cs := getClaudeStatus(windowIndex); cs != "" {
+		if st, ok := parseClaudeStatus(cs); ok {
+			return st, true
+		}
+	}
+
+	// Tier 2: Fallback — require Claude Code presence in pane content.
+	if !hasClaudeCode(content) {
+		return session.StatusUnknown, false
+	}
+
+	// Use process tree to detect active tool execution.
+	if hasActiveChildren(windowIndex) {
+		return session.StatusWorking, true
+	}
+
+	// Fall back to pattern matching on the bottom of the pane.
+	bottom := bottomContent(content, bottomScanLines)
+	if isWaiting(bottom) {
+		return session.StatusWaiting, true
+	}
+	if isIdle(bottom) {
 		return session.StatusIdle, true
 	}
 	return session.StatusUnknown, true
@@ -252,13 +359,14 @@ func hasClaudeCode(content string) bool {
 }
 
 // isWaiting returns true when the pane appears to be showing a permission prompt.
+// Note: "Esc to cancel" is intentionally excluded here because it also appears
+// during active tool execution (working state), causing false Waiting detection.
 func isWaiting(content string) bool {
 	prompts := []string{
 		"Do you want to proceed?",
 		"[Y/n]",
 		"[y/n]",
 		"[y/N]",
-		"Esc to cancel",
 	}
 	for _, p := range prompts {
 		if strings.Contains(content, p) {

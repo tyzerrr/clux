@@ -2,6 +2,7 @@ package tmux
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/tanaka0325/clux/internal/session"
@@ -44,7 +45,7 @@ func TestIsWaiting(t *testing.T) {
 		{"contains [y/n]", "Overwrite? [y/n]", true},
 		{"contains [y/N]", "Continue? [y/N]", true},
 		{"contains Do you want to proceed?", "Do you want to proceed?", true},
-		{"contains Esc to cancel", "Press Esc to cancel the operation", true},
+		{"Esc to cancel is not a waiting indicator", "Press Esc to cancel the operation", false},
 		{"no waiting prompt", "-- INSERT --\nnormal output", false},
 		{"empty string", "", false},
 	}
@@ -82,6 +83,30 @@ func TestIsWorking(t *testing.T) {
 			got := isWorking(tt.content)
 			if got != tt.want {
 				t.Errorf("isWorking(%q) = %v, want %v", tt.content, got, tt.want)
+			}
+		})
+	}
+}
+
+// --- bottomContent ---
+
+func TestBottomContent(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		n       int
+		want    string
+	}{
+		{"fewer lines than n", "a\nb\nc", 5, "a\nb\nc"},
+		{"exact lines", "a\nb\nc", 3, "a\nb\nc"},
+		{"more lines than n", "a\nb\nc\nd\ne", 3, "c\nd\ne"},
+		{"empty content", "", 5, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := bottomContent(tt.content, tt.n)
+			if got != tt.want {
+				t.Errorf("bottomContent() = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -238,6 +263,31 @@ func TestSanitizeWindowName(t *testing.T) {
 	}
 }
 
+// --- parseClaudeStatus ---
+
+func TestParseClaudeStatus(t *testing.T) {
+	tests := []struct {
+		input    string
+		wantSt   session.Status
+		wantOK   bool
+	}{
+		{"working", session.StatusWorking, true},
+		{"idle", session.StatusIdle, true},
+		{"waiting", session.StatusWaiting, true},
+		{"", session.StatusUnknown, false},
+		{"unknown", session.StatusUnknown, false},
+		{"WORKING", session.StatusUnknown, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			st, ok := parseClaudeStatus(tt.input)
+			if st != tt.wantSt || ok != tt.wantOK {
+				t.Errorf("parseClaudeStatus(%q) = (%v, %v), want (%v, %v)", tt.input, st, ok, tt.wantSt, tt.wantOK)
+			}
+		})
+	}
+}
+
 // --- detectStatus ---
 
 func TestDetectStatus(t *testing.T) {
@@ -287,6 +337,24 @@ func TestDetectStatus(t *testing.T) {
 			name:           "Unknown when Claude Code but no recognizable state",
 			content:        "-- INSERT --\nsome unrecognized output",
 			wantStatus:     session.StatusUnknown,
+			wantIsClaudeCode: true,
+		},
+		{
+			name:           "old Esc to cancel in scrollback does not trigger Waiting",
+			content:        "-- INSERT --\nEsc to cancel\n" + strings.Repeat("filler line\n", 20) + "❯ \n",
+			wantStatus:     session.StatusIdle,
+			wantIsClaudeCode: true,
+		},
+		{
+			name:           "old working indicator in scrollback does not trigger Working",
+			content:        "-- INSERT --\n⏺ running task\n" + strings.Repeat("filler line\n", 20) + "❯ \n",
+			wantStatus:     session.StatusIdle,
+			wantIsClaudeCode: true,
+		},
+		{
+			name:           "Esc to cancel with working indicator is Working not Waiting",
+			content:        "-- INSERT --\n⏺ running task\nEsc to cancel\n",
+			wantStatus:     session.StatusWorking,
 			wantIsClaudeCode: true,
 		},
 	}
