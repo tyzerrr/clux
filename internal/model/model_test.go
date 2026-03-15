@@ -1,9 +1,11 @@
 package model
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/tanaka0325/clux/internal/session"
@@ -243,24 +245,6 @@ func TestModeList_SlashSetsFilterMode(t *testing.T) {
 	rm := result.(Model)
 	if rm.mode != ModeFilter {
 		t.Errorf("expected ModeFilter, got %v", rm.mode)
-	}
-}
-
-func TestModeList_QReturnsQuit(t *testing.T) {
-	m := testModel(testSessions)
-	msg := tea.KeyPressMsg{Code: 'q', Text: "q"}
-	_, cmd := m.updateList(msg)
-	if cmd == nil {
-		t.Error("expected non-nil cmd from q key")
-	}
-}
-
-func TestModeList_EscReturnsQuit(t *testing.T) {
-	m := testModel(testSessions)
-	msg := tea.KeyPressMsg{Code: tea.KeyEscape}
-	_, cmd := m.updateList(msg)
-	if cmd == nil {
-		t.Error("expected non-nil cmd from esc key")
 	}
 }
 
@@ -542,5 +526,241 @@ func TestView_ModeFilter(t *testing.T) {
 	}
 	if !strings.Contains(view, "Esc:clear") {
 		t.Error("expected view to contain 'Esc:clear'")
+	}
+}
+
+// --- Update top-level dispatch tests (Issue 13) ---
+
+func TestUpdate_SessionsMsg(t *testing.T) {
+	m := New()
+	sessions := []session.Session{
+		{Name: "test", Dir: "/tmp", Status: session.StatusIdle, WindowIndex: "0"},
+	}
+	msg := sessionsMsg(sessions)
+	result, cmd := m.Update(msg)
+	rm := result.(Model)
+	if cmd != nil {
+		t.Error("expected nil cmd from sessionsMsg")
+	}
+	if len(rm.sessions) != 1 {
+		t.Errorf("expected 1 session, got %d", len(rm.sessions))
+	}
+	if rm.sessions[0].Name != "test" {
+		t.Errorf("expected session name 'test', got %q", rm.sessions[0].Name)
+	}
+	if len(rm.filtered) != 1 {
+		t.Errorf("expected 1 filtered session, got %d", len(rm.filtered))
+	}
+}
+
+func TestUpdate_SessionsMsg_ClampsCursor(t *testing.T) {
+	m := New()
+	// Set cursor beyond the new sessions length
+	m.cursor = 5
+	sessions := []session.Session{
+		{Name: "only-one", Dir: "/tmp", Status: session.StatusIdle, WindowIndex: "0"},
+	}
+	msg := sessionsMsg(sessions)
+	result, _ := m.Update(msg)
+	rm := result.(Model)
+	if rm.cursor != 0 {
+		t.Errorf("expected cursor clamped to 0, got %d", rm.cursor)
+	}
+}
+
+func TestUpdate_ErrMsg(t *testing.T) {
+	m := New()
+	msg := errMsg(fmt.Errorf("test error"))
+	result, cmd := m.Update(msg)
+	rm := result.(Model)
+	if cmd != nil {
+		t.Error("expected nil cmd from errMsg")
+	}
+	if rm.err == nil {
+		t.Fatal("expected err to be set")
+	}
+	if rm.err.Error() != "test error" {
+		t.Errorf("expected err='test error', got %q", rm.err.Error())
+	}
+}
+
+func TestUpdate_WindowSizeMsg(t *testing.T) {
+	m := New()
+	msg := tea.WindowSizeMsg{Width: 120, Height: 40}
+	result, cmd := m.Update(msg)
+	rm := result.(Model)
+	if cmd != nil {
+		t.Error("expected nil cmd from WindowSizeMsg")
+	}
+	if rm.width != 120 {
+		t.Errorf("expected width=120, got %d", rm.width)
+	}
+	if rm.height != 40 {
+		t.Errorf("expected height=40, got %d", rm.height)
+	}
+}
+
+func TestUpdate_TickMsg_InListMode(t *testing.T) {
+	m := New()
+	m.mode = ModeList
+	msg := tickMsg(time.Now())
+	_, cmd := m.Update(msg)
+	if cmd == nil {
+		t.Error("expected non-nil cmd from tickMsg in ModeList")
+	}
+}
+
+func TestUpdate_TickMsg_InConfirmKillMode(t *testing.T) {
+	m := New()
+	m.mode = ModeConfirmKill
+	msg := tickMsg(time.Now())
+	_, cmd := m.Update(msg)
+	if cmd == nil {
+		t.Error("expected non-nil cmd from tickMsg in ModeConfirmKill")
+	}
+}
+
+// --- Improved quit tests (Issue 15) ---
+
+func TestModeList_QReturnsQuitMsg(t *testing.T) {
+	m := testModel(testSessions)
+	msg := tea.KeyPressMsg{Code: 'q', Text: "q"}
+	_, cmd := m.updateList(msg)
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd from q key")
+	}
+	// Execute the cmd and verify it returns a tea.QuitMsg.
+	result := cmd()
+	if _, ok := result.(tea.QuitMsg); !ok {
+		t.Errorf("expected cmd() to return tea.QuitMsg, got %T", result)
+	}
+}
+
+func TestModeList_EscReturnsQuitMsg(t *testing.T) {
+	m := testModel(testSessions)
+	msg := tea.KeyPressMsg{Code: tea.KeyEscape}
+	_, cmd := m.updateList(msg)
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd from esc key")
+	}
+	// Execute the cmd and verify it returns a tea.QuitMsg.
+	result := cmd()
+	if _, ok := result.(tea.QuitMsg); !ok {
+		t.Errorf("expected cmd() to return tea.QuitMsg, got %T", result)
+	}
+}
+
+func TestUpdate_WindowKilledMsg(t *testing.T) {
+	m := New()
+	msg := windowKilledMsg{}
+	_, cmd := m.Update(msg)
+	if cmd == nil {
+		t.Error("expected non-nil cmd from windowKilledMsg (should dispatch fetchSessionsCmd)")
+	}
+}
+
+func TestUpdate_GhqDirsMsg(t *testing.T) {
+	m := New()
+	m.mode = ModeNewSession
+	msg := ghqDirsMsg([]string{"/repo/a", "/repo/b"})
+	result, _ := m.Update(msg)
+	rm := result.(Model)
+	if len(rm.repoDirs) != 2 {
+		t.Fatalf("expected 2 repoDirs, got %d", len(rm.repoDirs))
+	}
+	if rm.repoDirs[0] != "/repo/a" {
+		t.Errorf("expected repoDirs[0]='/repo/a', got %q", rm.repoDirs[0])
+	}
+	if rm.repoDirs[1] != "/repo/b" {
+		t.Errorf("expected repoDirs[1]='/repo/b', got %q", rm.repoDirs[1])
+	}
+}
+
+func TestUpdate_TickMsg_InModeFilter(t *testing.T) {
+	m := New()
+	m.mode = ModeFilter
+	msg := tickMsg(time.Now())
+	_, cmd := m.Update(msg)
+	if cmd == nil {
+		t.Error("expected non-nil cmd from tickMsg in ModeFilter (fetch should happen)")
+	}
+}
+
+func TestUpdate_CtrlDotQuit(t *testing.T) {
+	m := New()
+	msg := tea.KeyPressMsg{Code: '.', Mod: tea.ModCtrl}
+	_, cmd := m.Update(msg)
+	if cmd == nil {
+		t.Error("expected non-nil cmd from ctrl+. key")
+	}
+	result := cmd()
+	if _, ok := result.(tea.QuitMsg); !ok {
+		t.Errorf("expected cmd() to return tea.QuitMsg, got %T", result)
+	}
+}
+
+func TestView_ModeNewSession(t *testing.T) {
+	m := New()
+	m.mode = ModeNewSession
+	m.filteredDirs = []string{"/repo/alpha", "/repo/beta", "/repo/charlie"}
+	m.newSessionCursor = 1
+	view := m.View().Content
+	if !strings.Contains(view, "New Session") {
+		t.Error("expected view to contain 'New Session'")
+	}
+	if !strings.Contains(view, "Enter:create") {
+		t.Error("expected view to contain 'Enter:create'")
+	}
+	if !strings.Contains(view, "beta") {
+		t.Error("expected view to contain 'beta' (the selected item)")
+	}
+}
+
+func TestView_ModeNewSession_WithError(t *testing.T) {
+	m := New()
+	m.mode = ModeNewSession
+	m.err = fmt.Errorf("test error")
+	view := m.View().Content
+	if !strings.Contains(view, "Error:") {
+		t.Error("expected view to contain 'Error:'")
+	}
+}
+
+func TestModeNewSession_EnterWithValidDir(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeNewSession
+	m.filteredDirs = []string{os.TempDir()}
+	m.newSessionCursor = 0
+	msg := tea.KeyPressMsg{Code: tea.KeyEnter}
+	_, cmd := m.updateNewSession(msg)
+	if cmd == nil {
+		t.Error("expected non-nil cmd when entering with valid dir")
+	}
+}
+
+func TestModeNewSession_EnterWithInvalidDir(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeNewSession
+	m.filteredDirs = []string{"/nonexistent/path/xyz"}
+	m.newSessionCursor = 0
+	msg := tea.KeyPressMsg{Code: tea.KeyEnter}
+	result, cmd := m.updateNewSession(msg)
+	rm := result.(Model)
+	if rm.err == nil {
+		t.Error("expected err to be set for invalid dir")
+	}
+	if cmd != nil {
+		t.Error("expected nil cmd for invalid dir")
+	}
+}
+
+func TestView_ModeConfirmKill_WithError(t *testing.T) {
+	m := New()
+	m.mode = ModeConfirmKill
+	m.confirmTarget = "test-session"
+	m.err = fmt.Errorf("test error")
+	view := m.View().Content
+	if !strings.Contains(view, "Error:") {
+		t.Error("expected view to contain 'Error:'")
 	}
 }

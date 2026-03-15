@@ -4,10 +4,11 @@ package session
 type Status int
 
 const (
-	StatusWorking Status = iota
+	// StatusUnknown is iota 0 intentionally so that zero-initialized Session defaults to Unknown, not Working.
+	StatusUnknown Status = iota
+	StatusWorking
 	StatusIdle
 	StatusWaiting
-	StatusUnknown
 )
 
 // Session holds information about a tmux window running Claude Code.
@@ -38,7 +39,7 @@ func (s Status) String() string {
 	case StatusWorking:
 		return "Working"
 	case StatusIdle:
-		return "Done"
+		return "Idle"
 	case StatusWaiting:
 		return "Waiting"
 	default:

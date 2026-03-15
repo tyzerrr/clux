@@ -33,7 +33,7 @@ func TestStatusString(t *testing.T) {
 		want   string
 	}{
 		{"Working", StatusWorking, "Working"},
-		{"Idle", StatusIdle, "Done"},
+		{"Idle", StatusIdle, "Idle"},
 		{"Waiting", StatusWaiting, "Waiting"},
 		{"Unknown", StatusUnknown, "Unknown"},
 		{"OutOfRange negative", Status(-1), "Unknown"},

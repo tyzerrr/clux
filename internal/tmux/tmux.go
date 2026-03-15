@@ -5,13 +5,20 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/tanaka0325/clux/internal/session"
 )
 
 // SessionName is the name of the dedicated clux tmux session.
 const SessionName = "clux"
+
+var (
+	validWindowIndex = regexp.MustCompile(`^\d+$`)
+	safeWindowName   = regexp.MustCompile(`[^a-zA-Z0-9_\-.]`)
+)
 
 // CheckTmux verifies that the current process is running inside a tmux session.
 func CheckTmux() error {
@@ -32,42 +39,74 @@ func EnsureSession() error {
 	return nil
 }
 
+// windowInfo holds parsed window metadata from list-windows.
+type windowInfo struct {
+	index string
+	name  string
+	dir   string
+}
+
 // ListWindows returns all windows in the clux session that are running Claude Code, with their status.
+// Pane captures are run concurrently to minimize latency.
 func ListWindows() ([]session.Session, error) {
-	out, err := exec.Command("tmux", "list-windows", "-t", SessionName, "-F", "#{window_index} #{window_name}").Output()
+	out, err := exec.Command("tmux", "list-windows", "-t", SessionName, "-F", "#{window_index}\t#{window_name}\t#{pane_current_path}").Output()
 	if err != nil {
 		return nil, fmt.Errorf("listing windows: %w", err)
 	}
 
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	var sessions []session.Session
+	var windows []windowInfo
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		parts := strings.SplitN(line, " ", 2)
-		if len(parts) < 2 {
+		parts := strings.SplitN(line, "\t", 3)
+		if len(parts) < 3 {
 			continue
 		}
-		windowIndex := parts[0]
-		windowName := parts[1]
-
-		paneContent, dir, err := getPaneInfo(windowIndex)
-		if err != nil {
+		idx := parts[0]
+		if !validWindowIndex.MatchString(idx) {
 			continue
 		}
+		windows = append(windows, windowInfo{index: idx, name: parts[1], dir: parts[2]})
+	}
 
-		status, isClaudeCode := detectStatus(paneContent)
+	if len(windows) == 0 {
+		return nil, nil
+	}
+
+	// Capture pane content concurrently.
+	type captureResult struct {
+		content string
+		err     error
+	}
+	results := make([]captureResult, len(windows))
+	var wg sync.WaitGroup
+	for i, w := range windows {
+		wg.Add(1)
+		go func(i int, idx string) {
+			defer wg.Done()
+			content, err := capturePaneContent(idx)
+			results[i] = captureResult{content: content, err: err}
+		}(i, w.index)
+	}
+	wg.Wait()
+
+	var sessions []session.Session
+	for i, w := range windows {
+		if results[i].err != nil {
+			continue
+		}
+		status, isClaudeCode := detectStatus(results[i].content)
 		if !isClaudeCode {
 			continue
 		}
-
 		sessions = append(sessions, session.Session{
-			Name:        windowName,
-			Dir:         dir,
+			Name:        w.name,
+			Dir:         w.dir,
 			Status:      status,
-			WindowIndex: windowIndex,
+			WindowIndex: w.index,
 		})
 	}
 
@@ -77,15 +116,15 @@ func ListWindows() ([]session.Session, error) {
 // CreateWindow creates a new window in the clux session with the given name and directory,
 // then starts Claude Code in it via send-keys so the shell persists after CC exits.
 func CreateWindow(name, dir string) error {
-	if err := exec.Command("tmux", "new-window", "-t", SessionName, "-n", name, "-c", dir).Run(); err != nil {
+	name = sanitizeWindowName(name)
+	out, err := exec.Command("tmux", "new-window", "-t", SessionName, "-n", name, "-c", dir, "-P", "-F", "#{window_index}").Output()
+	if err != nil {
 		return fmt.Errorf("creating window %q: %w", name, err)
 	}
-	// Get the new window's index
-	out, err := exec.Command("tmux", "display-message", "-t", SessionName+":", "-p", "#{window_index}").Output()
-	if err != nil {
-		return fmt.Errorf("getting window index: %w", err)
-	}
 	windowIndex := strings.TrimSpace(string(out))
+	if !validWindowIndex.MatchString(windowIndex) {
+		return fmt.Errorf("unexpected window index %q from tmux", windowIndex)
+	}
 	if err := exec.Command("tmux", "send-keys", "-t", SessionName+":"+windowIndex, "claude", "Enter").Run(); err != nil {
 		return fmt.Errorf("starting claude in window %q: %w", name, err)
 	}
@@ -107,7 +146,7 @@ func ValidateDir(dir string) error {
 // GenerateWindowName creates a unique window name based on the directory basename.
 // Appends -2, -3, etc. if the name already exists.
 func GenerateWindowName(dir string) string {
-	base := filepath.Base(dir)
+	base := sanitizeWindowName(filepath.Base(dir))
 	out, err := exec.Command("tmux", "list-windows", "-t", SessionName, "-F", "#{window_name}").Output()
 	if err != nil {
 		return base
@@ -120,16 +159,29 @@ func GenerateWindowName(dir string) string {
 	if !nameSet[base] {
 		return base
 	}
-	for i := 2; ; i++ {
+	for i := 2; i <= 100; i++ {
 		candidate := fmt.Sprintf("%s-%d", base, i)
 		if !nameSet[candidate] {
 			return candidate
 		}
 	}
+	return fmt.Sprintf("%s-%d", base, 101)
+}
+
+// sanitizeWindowName removes characters that could interfere with tmux target parsing.
+func sanitizeWindowName(name string) string {
+	s := safeWindowName.ReplaceAllString(name, "_")
+	if s == "" {
+		return "window"
+	}
+	return s
 }
 
 // SwitchWindow selects a window in the clux session by its window index.
 func SwitchWindow(windowIndex string) error {
+	if !validWindowIndex.MatchString(windowIndex) {
+		return fmt.Errorf("invalid window index %q", windowIndex)
+	}
 	if err := exec.Command("tmux", "select-window", "-t", SessionName+":"+windowIndex).Run(); err != nil {
 		return fmt.Errorf("switching to window %q: %w", windowIndex, err)
 	}
@@ -138,34 +190,30 @@ func SwitchWindow(windowIndex string) error {
 
 // KillWindow kills a window in the clux session by its window index.
 func KillWindow(windowIndex string) error {
+	if !validWindowIndex.MatchString(windowIndex) {
+		return fmt.Errorf("invalid window index %q", windowIndex)
+	}
 	if err := exec.Command("tmux", "kill-window", "-t", SessionName+":"+windowIndex).Run(); err != nil {
 		return fmt.Errorf("killing window %q: %w", windowIndex, err)
 	}
 	return nil
 }
 
-// getPaneInfo captures the content of the first pane in the window and its working directory.
-func getPaneInfo(windowIndex string) (content, dir string, err error) {
+// capturePaneContent captures the content of the first pane in the window.
+func capturePaneContent(windowIndex string) (string, error) {
 	target := SessionName + ":" + windowIndex + ".0"
-
 	out, err := exec.Command("tmux", "capture-pane", "-t", target, "-p").Output()
 	if err != nil {
-		return "", "", fmt.Errorf("capturing pane for window %q: %w", windowIndex, err)
+		return "", fmt.Errorf("capturing pane for window %q: %w", windowIndex, err)
 	}
-	content = string(out)
-
-	dirOut, err := exec.Command("tmux", "display-message", "-t", target, "-p", "#{pane_current_path}").Output()
-	if err != nil {
-		return content, "", nil
-	}
-	dir = strings.TrimSpace(string(dirOut))
-	return content, dir, nil
+	return string(out), nil
 }
 
-// detectStatus analyses captured pane content to determine whether Claude Code is
+// detectStatus analyzes captured pane content to determine whether Claude Code is
 // running and, if so, what state it is in.
 //
-// Claude Code detection: look for "-- INSERT --" status line which is unique to Claude Code TUI.
+// Claude Code detection uses multiple indicators: "-- INSERT --", "Do you want to proceed?",
+// and "Esc to cancel". Any match means Claude Code is present.
 // Priority: Waiting > Working > Idle > Unknown.
 func detectStatus(content string) (status session.Status, isClaudeCode bool) {
 	if !hasClaudeCode(content) {
@@ -184,6 +232,8 @@ func detectStatus(content string) (status session.Status, isClaudeCode bool) {
 }
 
 // hasClaudeCode checks whether the pane content looks like Claude Code is running.
+// Some indicators intentionally overlap with isWaiting — this is by design so that
+// waiting prompts also serve as Claude Code detection signals.
 func hasClaudeCode(content string) bool {
 	indicators := []string{
 		"-- INSERT --",
