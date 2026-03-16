@@ -330,9 +330,18 @@ func (m Model) updateConfirmKill(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m Model) updateFilter(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "enter":
-		// Exit filter mode, stay on filtered list.
-		m.mode = ModeList
+		// Exit filter mode and attach to the selected session directly.
 		m.filterInput.Blur()
+		m.mode = ModeList
+		if len(m.filtered) > 0 {
+			windowIndex := m.filtered[m.cursor].WindowIndex
+			return m, func() tea.Msg {
+				if err := tmux.SwitchWindow(windowIndex); err != nil {
+					return errMsg(err)
+				}
+				return tea.QuitMsg{}
+			}
+		}
 		return m, nil
 
 	case "esc":
