@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/sahilm/fuzzy"
+	"github.com/tanaka0325/clux/internal/config"
 	"github.com/tanaka0325/clux/internal/session"
 	"github.com/tanaka0325/clux/internal/tmux"
 )
@@ -23,16 +24,20 @@ const (
 	ModeFilter
 	ModeNewSession
 	ModeConfirmKill
+	ModeAddExternal
 )
 
 // Custom message types.
 type (
-	sessionsMsg     []session.Session
-	errMsg          error
-	tickMsg         time.Time
-	ghqDirsMsg      []string
-	windowKilledMsg struct{}
-	previewMsg      string // pane content for preview
+	sessionsMsg          []session.Session
+	errMsg               error
+	tickMsg              time.Time
+	ghqDirsMsg           []string
+	windowKilledMsg      struct{}
+	sessionUnregistered  struct{} // external session unregistered from config
+	previewMsg           string   // pane content for preview
+	externalWindowsMsg   []tmux.ExternalWindowInfo
+	externalAddedMsg     struct{} // session registered successfully
 )
 
 // Model is the main Bubble Tea model for Clux.
@@ -45,10 +50,13 @@ type Model struct {
 	height      int
 	err         error
 	filterInput textinput.Model
+	cfg         *config.Config // persistent config for external sessions
 
 	// Confirm kill mode
 	confirmTarget      string // window name for display
 	confirmWindowIndex string // window index for tmux command
+	confirmExternal    bool   // true if confirming unregister (not kill)
+	confirmSessionName string // tmux session name for external sessions
 
 	// New session mode
 	repoDirs         []string // all dirs from ghq
@@ -59,6 +67,12 @@ type Model struct {
 	// Preview mode
 	previewEnabled bool   // toggle state, default false
 	previewContent string // captured pane content for selected session
+
+	// Add external session mode
+	externalWindows    []tmux.ExternalWindowInfo // all available windows
+	filteredExtWindows []tmux.ExternalWindowInfo // filtered by search
+	addExtInput        textinput.Model
+	addExtCursor       int
 }
 
 // New creates and returns an initialized Model.
@@ -71,10 +85,21 @@ func New() Model {
 	ni.Placeholder = "Search repository..."
 	ni.CharLimit = 64
 
+	ai := textinput.New()
+	ai.Placeholder = "Search session:window..."
+	ai.CharLimit = 64
+
+	cfg, _ := config.Load()
+	if cfg == nil {
+		cfg = &config.Config{}
+	}
+
 	return Model{
 		mode:            ModeList,
 		filterInput:     ti,
 		newSessionInput: ni,
+		addExtInput:     ai,
+		cfg:             cfg,
 	}
 }
 
@@ -91,12 +116,18 @@ func (m Model) Err() error                   { return m.err }
 
 // --- Command functions ---
 
-func fetchSessionsCmd() tea.Msg {
-	sessions, err := tmux.ListWindows()
-	if err != nil {
-		return errMsg(err)
+func fetchSessionsCmdWithExternals(cfg *config.Config) func() tea.Msg {
+	return func() tea.Msg {
+		sessions, err := tmux.ListWindows()
+		if err != nil {
+			return errMsg(err)
+		}
+		if cfg != nil && len(cfg.ExternalSessions) > 0 {
+			ext := tmux.ListExternalWindows(cfg.ExternalSessions)
+			sessions = append(sessions, ext...)
+		}
+		return sessionsMsg(sessions)
 	}
-	return sessionsMsg(sessions)
 }
 
 func doTick() tea.Cmd {
@@ -105,9 +136,13 @@ func doTick() tea.Cmd {
 	})
 }
 
-func fetchPreviewCmd(windowIndex string) tea.Cmd {
+func fetchPreviewCmdForSession(s session.Session) tea.Cmd {
 	return func() tea.Msg {
-		content, err := tmux.CapturePane(windowIndex)
+		sessionName := tmux.SessionName
+		if s.External && s.SessionName != "" {
+			sessionName = s.SessionName
+		}
+		content, err := tmux.CapturePaneForSession(sessionName, s.WindowIndex)
 		if err != nil {
 			return previewMsg("")
 		}
@@ -178,6 +213,31 @@ func applyFilter(sessions []session.Session, query string) []session.Session {
 	return result
 }
 
+func fetchExternalWindowsCmd() tea.Msg {
+	windows, err := tmux.ListAllWindows()
+	if err != nil {
+		return errMsg(err)
+	}
+	return externalWindowsMsg(windows)
+}
+
+// filterExtWindows does fuzzy matching on "session:index windowname dir" combined.
+func filterExtWindows(windows []tmux.ExternalWindowInfo, query string) []tmux.ExternalWindowInfo {
+	if query == "" {
+		return windows
+	}
+	combined := make([]string, len(windows))
+	for i, w := range windows {
+		combined[i] = w.Session + ":" + w.WindowIndex + " " + w.WindowName + " " + w.Dir
+	}
+	matches := fuzzy.Find(query, combined)
+	result := make([]tmux.ExternalWindowInfo, len(matches))
+	for i, m := range matches {
+		result[i] = windows[m.Index]
+	}
+	return result
+}
+
 func filterDirs(dirs []string, query string) []string {
 	if query == "" {
 		return dirs
@@ -194,7 +254,7 @@ func filterDirs(dirs []string, query string) []string {
 
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
-		fetchSessionsCmd,
+		fetchSessionsCmdWithExternals(m.cfg),
 		doTick(),
 	)
 }
@@ -218,7 +278,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cursor = len(m.filtered) - 1
 		}
 		if m.previewEnabled && len(m.filtered) > 0 {
-			return m, fetchPreviewCmd(m.filtered[m.cursor].WindowIndex)
+			return m, fetchPreviewCmdForSession(m.filtered[m.cursor])
 		}
 		return m, nil
 
@@ -232,16 +292,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tickMsg:
 		if m.mode == ModeList || m.mode == ModeFilter {
-			cmds := []tea.Cmd{fetchSessionsCmd, doTick()}
+			cmds := []tea.Cmd{fetchSessionsCmdWithExternals(m.cfg), doTick()}
 			if m.previewEnabled && len(m.filtered) > 0 {
-				cmds = append(cmds, fetchPreviewCmd(m.filtered[m.cursor].WindowIndex))
+				cmds = append(cmds, fetchPreviewCmdForSession(m.filtered[m.cursor]))
 			}
 			return m, tea.Batch(cmds...)
 		}
 		return m, doTick()
 
 	case windowKilledMsg:
-		return m, fetchSessionsCmd
+		return m, fetchSessionsCmdWithExternals(m.cfg)
 
 	case ghqDirsMsg:
 		m.repoDirs = []string(msg)
@@ -250,6 +310,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.newSessionCursor = 0
 		} else if m.newSessionCursor >= len(m.filteredDirs) {
 			m.newSessionCursor = len(m.filteredDirs) - 1
+		}
+		return m, nil
+
+	case externalWindowsMsg:
+		m.externalWindows = []tmux.ExternalWindowInfo(msg)
+		filtered := filterExtWindows(m.externalWindows, m.addExtInput.Value())
+		m.filteredExtWindows = excludeRegistered(filtered, m.cfg)
+		if len(m.filteredExtWindows) == 0 {
+			m.addExtCursor = 0
+		} else if m.addExtCursor >= len(m.filteredExtWindows) {
+			m.addExtCursor = len(m.filteredExtWindows) - 1
 		}
 		return m, nil
 
@@ -266,6 +337,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateNewSession(msg)
 		case ModeConfirmKill:
 			return m.updateConfirmKill(msg)
+		case ModeAddExternal:
+			return m.updateAddExternal(msg)
 		}
 	}
 
@@ -278,7 +351,7 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if len(m.filtered) > 0 {
 			m.cursor = (m.cursor - 1 + len(m.filtered)) % len(m.filtered)
 			if m.previewEnabled {
-				return m, fetchPreviewCmd(m.filtered[m.cursor].WindowIndex)
+				return m, fetchPreviewCmdForSession(m.filtered[m.cursor])
 			}
 		}
 
@@ -286,15 +359,20 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if len(m.filtered) > 0 {
 			m.cursor = (m.cursor + 1) % len(m.filtered)
 			if m.previewEnabled {
-				return m, fetchPreviewCmd(m.filtered[m.cursor].WindowIndex)
+				return m, fetchPreviewCmdForSession(m.filtered[m.cursor])
 			}
 		}
 
 	case "enter":
 		if len(m.filtered) > 0 {
-			windowIndex := m.filtered[m.cursor].WindowIndex
+			s := m.filtered[m.cursor]
+			sessionName := tmux.SessionName
+			if s.External && s.SessionName != "" {
+				sessionName = s.SessionName
+			}
+			windowIndex := s.WindowIndex
 			return m, func() tea.Msg {
-				if err := tmux.SwitchWindow(windowIndex); err != nil {
+				if err := tmux.SwitchToWindow(sessionName, windowIndex); err != nil {
 					return errMsg(err)
 				}
 				return tea.QuitMsg{}
@@ -314,22 +392,32 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 
+	case "a":
+		m.mode = ModeAddExternal
+		m.err = nil
+		m.addExtInput.SetValue("")
+		m.addExtCursor = 0
+		cmds := []tea.Cmd{m.addExtInput.Focus(), fetchExternalWindowsCmd}
+		return m, tea.Batch(cmds...)
+
 	case "K":
 		if len(m.filtered) > 0 {
 			s := m.filtered[m.cursor]
 			m.confirmTarget = s.DisplayName()
 			m.confirmWindowIndex = s.WindowIndex
+			m.confirmExternal = s.External
+			m.confirmSessionName = s.SessionName
 			m.err = nil
 			m.mode = ModeConfirmKill
 		}
 
 	case "R":
-		return m, fetchSessionsCmd
+		return m, fetchSessionsCmdWithExternals(m.cfg)
 
 	case "p":
 		m.previewEnabled = !m.previewEnabled
 		if m.previewEnabled && len(m.filtered) > 0 {
-			return m, fetchPreviewCmd(m.filtered[m.cursor].WindowIndex)
+			return m, fetchPreviewCmdForSession(m.filtered[m.cursor])
 		}
 		if !m.previewEnabled {
 			m.previewContent = ""
@@ -350,19 +438,37 @@ func (m Model) updateConfirmKill(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "y":
 		windowIndex := m.confirmWindowIndex
+		isExternal := m.confirmExternal
+		extSessionName := m.confirmSessionName
+		cfg := m.cfg
 		m.confirmTarget = ""
 		m.confirmWindowIndex = ""
+		m.confirmExternal = false
+		m.confirmSessionName = ""
 		m.mode = ModeList
+		if isExternal {
+			// Unregister external session (don't kill the window).
+			return m, func() tea.Msg {
+				if err := cfg.Remove(extSessionName, windowIndex); err != nil {
+					return errMsg(err)
+				}
+				if err := cfg.Save(); err != nil {
+					return errMsg(err)
+				}
+				return windowKilledMsg{}
+			}
+		}
 		return m, func() tea.Msg {
 			if err := tmux.KillWindow(windowIndex); err != nil {
 				return errMsg(err)
 			}
-			// Return a dedicated message, handled by Update to trigger fetch
 			return windowKilledMsg{}
 		}
 	case "n", "esc":
 		m.confirmTarget = ""
 		m.confirmWindowIndex = ""
+		m.confirmExternal = false
+		m.confirmSessionName = ""
 		m.mode = ModeList
 	}
 	return m, nil
@@ -375,9 +481,14 @@ func (m Model) updateFilter(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.filterInput.Blur()
 		m.mode = ModeList
 		if len(m.filtered) > 0 {
-			windowIndex := m.filtered[m.cursor].WindowIndex
+			s := m.filtered[m.cursor]
+			sessionName := tmux.SessionName
+			if s.External && s.SessionName != "" {
+				sessionName = s.SessionName
+			}
+			windowIndex := s.WindowIndex
 			return m, func() tea.Msg {
-				if err := tmux.SwitchWindow(windowIndex); err != nil {
+				if err := tmux.SwitchToWindow(sessionName, windowIndex); err != nil {
 					return errMsg(err)
 				}
 				return tea.QuitMsg{}
@@ -453,6 +564,73 @@ func (m Model) updateNewSession(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
+func (m Model) updateAddExternal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		if len(m.filteredExtWindows) > 0 {
+			ext := m.filteredExtWindows[m.addExtCursor]
+			if err := m.cfg.Add(ext.Session, ext.WindowIndex); err != nil {
+				m.err = err
+				return m, nil
+			}
+			if err := m.cfg.Save(); err != nil {
+				m.err = err
+				return m, nil
+			}
+			m.mode = ModeList
+			m.addExtInput.Blur()
+			return m, fetchSessionsCmdWithExternals(m.cfg)
+		}
+		return m, nil
+
+	case "esc":
+		m.mode = ModeList
+		m.addExtInput.Blur()
+		return m, nil
+
+	case "up", "ctrl+k":
+		if len(m.filteredExtWindows) > 0 {
+			m.addExtCursor = (m.addExtCursor - 1 + len(m.filteredExtWindows)) % len(m.filteredExtWindows)
+		}
+		return m, nil
+
+	case "down", "ctrl+j":
+		if len(m.filteredExtWindows) > 0 {
+			m.addExtCursor = (m.addExtCursor + 1) % len(m.filteredExtWindows)
+		}
+		return m, nil
+
+	default:
+		var cmd tea.Cmd
+		m.addExtInput, cmd = m.addExtInput.Update(msg)
+		// Re-filter; also exclude already-registered windows.
+		allFiltered := filterExtWindows(m.externalWindows, m.addExtInput.Value())
+		m.filteredExtWindows = excludeRegistered(allFiltered, m.cfg)
+		if m.addExtCursor >= len(m.filteredExtWindows) {
+			m.addExtCursor = 0
+		}
+		return m, cmd
+	}
+}
+
+// excludeRegistered removes windows that are already registered in cfg.
+func excludeRegistered(windows []tmux.ExternalWindowInfo, cfg *config.Config) []tmux.ExternalWindowInfo {
+	if cfg == nil || len(cfg.ExternalSessions) == 0 {
+		return windows
+	}
+	registered := make(map[string]bool, len(cfg.ExternalSessions))
+	for _, es := range cfg.ExternalSessions {
+		registered[es.Session+":"+es.Window] = true
+	}
+	var out []tmux.ExternalWindowInfo
+	for _, w := range windows {
+		if !registered[w.Session+":"+w.WindowIndex] {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
 // --- View ---
 
 var (
@@ -506,6 +684,10 @@ func (m Model) View() tea.View {
 
 	if m.mode == ModeNewSession {
 		return newView(m.viewNewSession(&b))
+	}
+
+	if m.mode == ModeAddExternal {
+		return newView(m.viewAddExternal(&b))
 	}
 
 	// Header.
@@ -606,7 +788,7 @@ func (m Model) View() tea.View {
 		if m.previewEnabled {
 			previewLabel = "p:preview(on)"
 		}
-		b.WriteString(styleHelpBar.Render("Enter:attach  n:new  K:kill  R:refresh  " + previewLabel + "  /:filter  q:quit"))
+		b.WriteString(styleHelpBar.Render("Enter:attach  n:new  a:add-ext  K:kill  R:refresh  " + previewLabel + "  /:filter  q:quit"))
 	}
 
 	return newView(b.String())
@@ -656,14 +838,66 @@ func (m Model) viewNewSession(b *strings.Builder) string {
 	return b.String()
 }
 
+func (m Model) viewAddExternal(b *strings.Builder) string {
+	if m.err != nil {
+		b.WriteString(styleError.Render("Error: " + m.err.Error()))
+		b.WriteString("\n\n")
+	}
+	b.WriteString(styleHeader.Render("Add External Session"))
+	b.WriteString("\n\n")
+	b.WriteString(" ")
+	b.WriteString(m.addExtInput.View())
+	b.WriteString("\n\n")
+
+	if len(m.filteredExtWindows) == 0 {
+		b.WriteString(styleHelpBar.Render(" No external windows found."))
+	} else {
+		// Show at most 20 items with viewport offset to keep cursor visible.
+		maxShow := 20
+		offset := 0
+		if m.addExtCursor >= maxShow {
+			offset = m.addExtCursor - maxShow + 1
+		}
+		end := offset + maxShow
+		if end > len(m.filteredExtWindows) {
+			end = len(m.filteredExtWindows)
+		}
+		for i := offset; i < end; i++ {
+			w := m.filteredExtWindows[i]
+			dir := styleDir.Render(shortenDir(w.Dir))
+			row := fmt.Sprintf(" %s:%s  %-20s  %s", w.Session, w.WindowIndex, w.WindowName, dir)
+			if i == m.addExtCursor {
+				b.WriteString(styleSelected.Render(row))
+			} else {
+				b.WriteString(row)
+			}
+			b.WriteString("\n")
+		}
+		if end < len(m.filteredExtWindows) {
+			b.WriteString(styleHelpBar.Render(fmt.Sprintf("\n   ... and %d more", len(m.filteredExtWindows)-end)))
+		}
+	}
+
+	b.WriteString("\n\n")
+	b.WriteString(styleHelpBar.Render("Enter:add  Esc:cancel  ↑/↓:navigate"))
+
+	return b.String()
+}
+
 func (m Model) viewConfirmKill(b *strings.Builder) string {
 	if m.err != nil {
 		b.WriteString(styleError.Render("Error: " + m.err.Error()))
 		b.WriteString("\n\n")
 	}
-	b.WriteString(fmt.Sprintf("Kill session %q? (y/n)", m.confirmTarget))
-	b.WriteString("\n\n")
-	b.WriteString(styleHelpBar.Render("y:kill  n/Esc:cancel"))
+	if m.confirmExternal {
+		b.WriteString(fmt.Sprintf("Unregister external session %q? (y/n)", m.confirmTarget))
+		b.WriteString("\n\n")
+		b.WriteString(styleHelpBar.Render("y:unregister  n/Esc:cancel"))
+	} else {
+		b.WriteString(fmt.Sprintf("Kill session %q? (y/n)", m.confirmTarget))
+		b.WriteString("\n\n")
+		b.WriteString(styleHelpBar.Render("y:kill  n/Esc:cancel"))
+	}
 
 	return b.String()
 }
