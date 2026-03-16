@@ -68,7 +68,11 @@ func (c *Config) Save() error {
 	if err := os.WriteFile(tmp, data, 0644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp) // best-effort cleanup
+		return err
+	}
+	return nil
 }
 
 // Add adds an external session. Returns error if already registered.

@@ -294,13 +294,12 @@ func GenerateWindowName(dir string) string {
 	if !nameSet[base] {
 		return base
 	}
-	for i := 2; i <= 100; i++ {
+	for i := 2; ; i++ {
 		candidate := fmt.Sprintf("%s-%d", base, i)
 		if !nameSet[candidate] {
 			return candidate
 		}
 	}
-	return fmt.Sprintf("%s-%d", base, 101)
 }
 
 // sanitizeWindowName removes characters that could interfere with tmux target parsing.
@@ -500,7 +499,14 @@ func detectStatusWithHooksForSession(content, sessionName, windowIndex string) (
 	}
 
 	// Fall back to pattern matching on the bottom of the pane.
-	return detectStatusFromContent(content)
+	bottom := bottomContent(content, bottomScanLines)
+	if isWaiting(bottom) {
+		return session.StatusWaiting, true
+	}
+	if isIdle(bottom) {
+		return session.StatusIdle, true
+	}
+	return session.StatusUnknown, true
 }
 
 // hasClaudeCode checks whether the pane content looks like Claude Code is running.
