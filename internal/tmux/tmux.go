@@ -103,11 +103,13 @@ func ListWindows() ([]session.Session, error) {
 			continue
 		}
 		summary := getWindowSummary(w.index)
+		branch := getGitBranch(w.dir)
 
 		sessions = append(sessions, session.Session{
 			Name:        w.name,
 			Summary:     summary,
 			Dir:         w.dir,
+			Branch:      branch,
 			Status:      status,
 			WindowIndex: w.index,
 		})
@@ -399,6 +401,16 @@ func isWorking(content string) bool {
 		}
 	}
 	return false
+}
+
+// getGitBranch returns the current git branch for the given directory.
+// Returns empty string if not a git repo or on error.
+func getGitBranch(dir string) string {
+	out, err := exec.Command("git", "-C", dir, "branch", "--show-current").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // getWindowSummary retrieves the @clux-summary user option for a window.

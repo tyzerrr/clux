@@ -16,6 +16,7 @@ type Session struct {
 	Name        string
 	Summary     string // @clux-summary user option; empty if not set
 	Dir         string // pane_current_path
+	Branch      string // git branch name; empty if not a git repo
 	Status      Status
 	WindowIndex string // tmux window index
 }

@@ -523,12 +523,16 @@ func (m Model) View() tea.View {
 	if len(m.filtered) == 0 {
 		b.WriteString("No Claude Code sessions found. Start Claude Code in another tmux session.\n")
 	} else {
-		b.WriteString(styleHelpBar.Render(" Status          Name                            Dir"))
+		b.WriteString(styleHelpBar.Render(" Status          Name                            Branch          Dir"))
 		b.WriteString("\n")
 		for i, s := range m.filtered {
 			statusText := statusStyle(s.Status).Render(fmt.Sprintf("%s %-7s", s.Status.Icon(), s.Status.String()))
+			branch := s.Branch
+			if len(branch) > 15 {
+				branch = branch[:14] + "…"
+			}
 			dir := styleDir.Render(shortenDir(s.Dir))
-			row := fmt.Sprintf(" %s  %-30s  %s", statusText, s.DisplayName(), dir)
+			row := fmt.Sprintf(" %s  %-30s  %-15s %s", statusText, s.DisplayName(), branch, dir)
 			if i == m.cursor {
 				row = styleSelected.Render(row)
 			}
