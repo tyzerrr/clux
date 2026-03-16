@@ -117,19 +117,11 @@ func ListWindows() ([]session.Session, error) {
 }
 
 // CreateWindow creates a new window in the clux session with the given name and directory,
-// then starts Claude Code in it via send-keys so the shell persists after CC exits.
+// running Claude Code directly. The window closes automatically when Claude Code exits.
 func CreateWindow(name, dir string) error {
 	name = sanitizeWindowName(name)
-	out, err := exec.Command("tmux", "new-window", "-t", SessionName, "-n", name, "-c", dir, "-P", "-F", "#{window_index}").Output()
-	if err != nil {
+	if err := exec.Command("tmux", "new-window", "-a", "-t", SessionName, "-n", name, "-c", dir, "claude").Run(); err != nil {
 		return fmt.Errorf("creating window %q: %w", name, err)
-	}
-	windowIndex := strings.TrimSpace(string(out))
-	if !validWindowIndex.MatchString(windowIndex) {
-		return fmt.Errorf("unexpected window index %q from tmux", windowIndex)
-	}
-	if err := exec.Command("tmux", "send-keys", "-t", SessionName+":"+windowIndex, "claude", "Enter").Run(); err != nil {
-		return fmt.Errorf("starting claude in window %q: %w", name, err)
 	}
 	return nil
 }
@@ -200,6 +192,15 @@ func KillWindow(windowIndex string) error {
 		return fmt.Errorf("killing window %q: %w", windowIndex, err)
 	}
 	return nil
+}
+
+// CapturePane captures the visible content of a window's first pane.
+// windowIndex must be a numeric string.
+func CapturePane(windowIndex string) (string, error) {
+	if !validWindowIndex.MatchString(windowIndex) {
+		return "", fmt.Errorf("invalid window index %q", windowIndex)
+	}
+	return capturePaneContent(windowIndex)
 }
 
 // capturePaneContent captures the content of the first pane in the window.

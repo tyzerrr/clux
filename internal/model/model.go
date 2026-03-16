@@ -32,6 +32,7 @@ type (
 	tickMsg         time.Time
 	ghqDirsMsg      []string
 	windowKilledMsg struct{}
+	previewMsg      string // pane content for preview
 )
 
 // Model is the main Bubble Tea model for Clux.
@@ -54,6 +55,10 @@ type Model struct {
 	filteredDirs     []string // filtered dirs
 	newSessionInput  textinput.Model
 	newSessionCursor int
+
+	// Preview mode
+	previewEnabled bool   // toggle state, default false
+	previewContent string // captured pane content for selected session
 }
 
 // New creates and returns an initialized Model.
@@ -98,6 +103,16 @@ func doTick() tea.Cmd {
 	return tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
 		return tickMsg(t)
 	})
+}
+
+func fetchPreviewCmd(windowIndex string) tea.Cmd {
+	return func() tea.Msg {
+		content, err := tmux.CapturePane(windowIndex)
+		if err != nil {
+			return previewMsg("")
+		}
+		return previewMsg(content)
+	}
 }
 
 func fetchGhqDirs() tea.Msg {
@@ -202,6 +217,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if m.cursor >= len(m.filtered) {
 			m.cursor = len(m.filtered) - 1
 		}
+		if m.previewEnabled && len(m.filtered) > 0 {
+			return m, fetchPreviewCmd(m.filtered[m.cursor].WindowIndex)
+		}
+		return m, nil
+
+	case previewMsg:
+		m.previewContent = string(msg)
 		return m, nil
 
 	case errMsg:
@@ -210,7 +232,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tickMsg:
 		if m.mode == ModeList || m.mode == ModeFilter {
-			return m, tea.Batch(fetchSessionsCmd, doTick())
+			cmds := []tea.Cmd{fetchSessionsCmd, doTick()}
+			if m.previewEnabled && len(m.filtered) > 0 {
+				cmds = append(cmds, fetchPreviewCmd(m.filtered[m.cursor].WindowIndex))
+			}
+			return m, tea.Batch(cmds...)
 		}
 		return m, doTick()
 
@@ -251,11 +277,17 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "k", "up":
 		if len(m.filtered) > 0 {
 			m.cursor = (m.cursor - 1 + len(m.filtered)) % len(m.filtered)
+			if m.previewEnabled {
+				return m, fetchPreviewCmd(m.filtered[m.cursor].WindowIndex)
+			}
 		}
 
 	case "j", "down":
 		if len(m.filtered) > 0 {
 			m.cursor = (m.cursor + 1) % len(m.filtered)
+			if m.previewEnabled {
+				return m, fetchPreviewCmd(m.filtered[m.cursor].WindowIndex)
+			}
 		}
 
 	case "enter":
@@ -293,6 +325,15 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case "R":
 		return m, fetchSessionsCmd
+
+	case "p":
+		m.previewEnabled = !m.previewEnabled
+		if m.previewEnabled && len(m.filtered) > 0 {
+			return m, fetchPreviewCmd(m.filtered[m.cursor].WindowIndex)
+		}
+		if !m.previewEnabled {
+			m.previewContent = ""
+		}
 
 	case "/":
 		m.mode = ModeFilter
@@ -420,6 +461,7 @@ var (
 	styleHelpBar  = lipgloss.NewStyle().Faint(true)
 	styleError    = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 	styleDir      = lipgloss.NewStyle().Faint(true)
+	stylePreview  = lipgloss.NewStyle().Faint(true)
 
 	styleWorking = lipgloss.NewStyle().Foreground(lipgloss.Color("2")) // green
 	styleWaiting = lipgloss.NewStyle().Foreground(lipgloss.Color("3")) // yellow
@@ -497,6 +539,62 @@ func (m Model) View() tea.View {
 
 	b.WriteString("\n")
 
+	// Preview area (when enabled and terminal is tall enough).
+	if m.previewEnabled && len(m.filtered) > 0 && m.height >= 15 {
+		// header(2) + column-header(1) + session-rows + blank(1) + helpbar(1) = fixed overhead
+		// Reserve lines for session list rows and help bar.
+		sessionRows := len(m.filtered)
+		// Total fixed overhead: 2 (header) + 1 (col header) + sessionRows + 1 (blank) + 1 (helpbar)
+		overhead := 2 + 1 + sessionRows + 1 + 1
+		available := m.height - overhead
+		// Give roughly half the remaining height to the preview, minimum 5.
+		previewHeight := available / 2
+		if previewHeight < 5 {
+			previewHeight = 5
+		}
+
+		// Build separator line.
+		sepLabel := " Preview "
+		sepWidth := m.width
+		if sepWidth <= 0 {
+			sepWidth = 80
+		}
+		sep := strings.Repeat("─", (sepWidth-len(sepLabel))/2) + sepLabel + strings.Repeat("─", (sepWidth-len(sepLabel)+1)/2)
+		b.WriteString(stylePreview.Render(sep))
+		b.WriteString("\n")
+
+		// Get last N lines from preview content.
+		previewLines := strings.Split(m.previewContent, "\n")
+		// Remove trailing empty lines.
+		for len(previewLines) > 0 && strings.TrimSpace(previewLines[len(previewLines)-1]) == "" {
+			previewLines = previewLines[:len(previewLines)-1]
+		}
+		if len(previewLines) == 0 {
+			b.WriteString(stylePreview.Render("  No preview available"))
+			b.WriteString("\n")
+		} else {
+			// Take last previewHeight lines.
+			start := len(previewLines) - previewHeight
+			if start < 0 {
+				start = 0
+			}
+			displayLines := previewLines[start:]
+			maxWidth := m.width
+			if maxWidth <= 0 {
+				maxWidth = 80
+			}
+			for _, line := range displayLines {
+				// Truncate to terminal width to avoid wrapping.
+				runes := []rune(line)
+				if len(runes) > maxWidth {
+					line = string(runes[:maxWidth])
+				}
+				b.WriteString(stylePreview.Render(line))
+				b.WriteString("\n")
+			}
+		}
+	}
+
 	// Filter input (when in filter mode).
 	if m.mode == ModeFilter {
 		b.WriteString(" / ")
@@ -504,7 +602,11 @@ func (m Model) View() tea.View {
 		b.WriteString("\n\n")
 		b.WriteString(styleHelpBar.Render("Enter:apply  Esc:clear"))
 	} else {
-		b.WriteString(styleHelpBar.Render("Enter:attach  n:new  K:kill  R:refresh  /:filter  q:quit"))
+		previewLabel := "p:preview"
+		if m.previewEnabled {
+			previewLabel = "p:preview(on)"
+		}
+		b.WriteString(styleHelpBar.Render("Enter:attach  n:new  K:kill  R:refresh  " + previewLabel + "  /:filter  q:quit"))
 	}
 
 	return newView(b.String())
