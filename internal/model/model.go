@@ -584,12 +584,8 @@ func (m Model) View() tea.View {
 				maxWidth = 80
 			}
 			for _, line := range displayLines {
-				// Truncate to terminal width to avoid wrapping.
-				runes := []rune(line)
-				if len(runes) > maxWidth {
-					line = string(runes[:maxWidth])
-				}
-				b.WriteString(stylePreview.Render(line))
+				// Output directly to preserve ANSI color sequences.
+				b.WriteString(line)
 				b.WriteString("\n")
 			}
 		}

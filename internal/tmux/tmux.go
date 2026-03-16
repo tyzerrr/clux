@@ -194,13 +194,19 @@ func KillWindow(windowIndex string) error {
 	return nil
 }
 
-// CapturePane captures the visible content of a window's first pane.
+// CapturePane captures the visible content of a window's first pane
+// with ANSI escape sequences preserved for colored output.
 // windowIndex must be a numeric string.
 func CapturePane(windowIndex string) (string, error) {
 	if !validWindowIndex.MatchString(windowIndex) {
 		return "", fmt.Errorf("invalid window index %q", windowIndex)
 	}
-	return capturePaneContent(windowIndex)
+	target := SessionName + ":" + windowIndex + ".0"
+	out, err := exec.Command("tmux", "capture-pane", "-t", target, "-e", "-p").Output()
+	if err != nil {
+		return "", fmt.Errorf("capturing pane for window %q: %w", windowIndex, err)
+	}
+	return string(out), nil
 }
 
 // capturePaneContent captures the content of the first pane in the window.
