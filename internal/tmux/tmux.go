@@ -261,10 +261,14 @@ func ListAllWindows() ([]ExternalWindowInfo, error) {
 
 // CreateWindow creates a new window in the clux session with the given name and directory,
 // running Claude Code directly. The window closes automatically when Claude Code exits.
+// After creation, it switches the client to the clux session to ensure visibility.
 func CreateWindow(name, dir string) error {
 	name = sanitizeWindowName(name)
 	if err := exec.Command("tmux", "new-window", "-a", "-t", SessionName, "-n", name, "-c", dir, "claude").Run(); err != nil {
 		return fmt.Errorf("creating window %q: %w", name, err)
+	}
+	if err := exec.Command("tmux", "switch-client", "-t", SessionName).Run(); err != nil {
+		return fmt.Errorf("switching client to session %q: %w", SessionName, err)
 	}
 	return nil
 }
@@ -319,8 +323,8 @@ func SwitchWindow(windowIndex string) error {
 	return SwitchToWindow(SessionName, windowIndex)
 }
 
-// SwitchToWindow selects a window in the given tmux session by its window index.
-// If the session differs from the current session, it also switches the client to that session.
+// SwitchToWindow selects a window in the given tmux session by its window index,
+// then switches the client to that session to ensure visibility.
 func SwitchToWindow(sessionName, windowIndex string) error {
 	if !validWindowIndex.MatchString(windowIndex) {
 		return fmt.Errorf("invalid window index %q", windowIndex)
@@ -329,11 +333,8 @@ func SwitchToWindow(sessionName, windowIndex string) error {
 	if err := exec.Command("tmux", "select-window", "-t", target).Run(); err != nil {
 		return fmt.Errorf("switching to window %q in session %q: %w", windowIndex, sessionName, err)
 	}
-	// If it's an external session (not the clux session), also switch the client.
-	if sessionName != SessionName {
-		if err := exec.Command("tmux", "switch-client", "-t", sessionName).Run(); err != nil {
-			return fmt.Errorf("switching client to session %q: %w", sessionName, err)
-		}
+	if err := exec.Command("tmux", "switch-client", "-t", target).Run(); err != nil {
+		return fmt.Errorf("switching client to session %q: %w", sessionName, err)
 	}
 	return nil
 }
