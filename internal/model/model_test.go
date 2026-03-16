@@ -101,26 +101,22 @@ func TestFilterDirs_FilterCorrectly(t *testing.T) {
 	}
 }
 
-func TestShortenDir_ReplacesHomeDir(t *testing.T) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Skip("cannot determine home dir")
-	}
-	dir := home + "/projects/myrepo"
+func TestShortenDir_ShowsLastTwoSegments(t *testing.T) {
+	dir := "/home/user/projects/myrepo"
 	result := shortenDir(dir)
-	if !strings.HasPrefix(result, "~") {
-		t.Errorf("expected result to start with ~, got %q", result)
-	}
-	if strings.HasPrefix(result, home) {
-		t.Errorf("expected home dir to be replaced, got %q", result)
+	expected := "projects/myrepo"
+	if result != expected {
+		t.Errorf("expected %q, got %q", expected, result)
 	}
 }
 
-func TestShortenDir_NonHomePath(t *testing.T) {
+func TestShortenDir_ShortPath(t *testing.T) {
 	dir := "/etc/something"
 	result := shortenDir(dir)
-	if result != dir {
-		t.Errorf("expected %q unchanged, got %q", dir, result)
+	// Only 2 segments after splitting on "/" (["", "etc", "something"]) -> last 2 = "etc/something"
+	expected := "etc/something"
+	if result != expected {
+		t.Errorf("expected %q, got %q", expected, result)
 	}
 }
 

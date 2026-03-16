@@ -2,7 +2,6 @@ package model
 
 import (
 	"fmt"
-	"os"
 	"os/exec"
 	"sort"
 	"strings"
@@ -238,6 +237,30 @@ func sortByStatus(sessions []session.Session) {
 	sort.SliceStable(sessions, func(i, j int) bool {
 		return statusPriority(sessions[i].Status) > statusPriority(sessions[j].Status)
 	})
+}
+
+func statusSummary(sessions []session.Session) string {
+	counts := make(map[session.Status]int)
+	for _, s := range sessions {
+		counts[s.Status]++
+	}
+	var parts []string
+	if n := counts[session.StatusWaiting]; n > 0 {
+		parts = append(parts, fmt.Sprintf("%d Waiting", n))
+	}
+	if n := counts[session.StatusWorking]; n > 0 {
+		parts = append(parts, fmt.Sprintf("%d Working", n))
+	}
+	if n := counts[session.StatusIdle]; n > 0 {
+		parts = append(parts, fmt.Sprintf("%d Idle", n))
+	}
+	if n := counts[session.StatusUnknown]; n > 0 {
+		parts = append(parts, fmt.Sprintf("%d Unknown", n))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, ", ")
 }
 
 func statusPriority(s session.Status) int {
@@ -678,7 +701,7 @@ func (m Model) updateNewSessionBranch(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 		// Create worktree and start claude there
 		return m, func() tea.Msg {
 			// Create worktree: gwq add -b <branch>
-			// Use "--" to prevent branch names starting with "-" from being parsed as flags.
+			// exec.Command passes args directly (no shell), so no "--" needed for -b's value.
 			addCmd := exec.Command("gwq", "add", "-b", branch)
 			addCmd.Dir = dir
 			if out, err := addCmd.CombinedOutput(); err != nil {
@@ -805,11 +828,11 @@ var (
 )
 
 func shortenDir(dir string) string {
-	home, err := os.UserHomeDir()
-	if err == nil && strings.HasPrefix(dir, home) {
-		return "~" + dir[len(home):]
+	parts := strings.Split(dir, "/")
+	if len(parts) <= 2 {
+		return dir
 	}
-	return dir
+	return strings.Join(parts[len(parts)-2:], "/")
 }
 
 func statusStyle(s session.Status) lipgloss.Style {
@@ -853,6 +876,9 @@ func (m Model) View() tea.View {
 
 	// Header.
 	header := fmt.Sprintf("Clux — Sessions (%d)", len(m.filtered))
+	if summary := statusSummary(m.filtered); summary != "" {
+		header += " — " + summary
+	}
 	b.WriteString(styleHeader.Render(header))
 	b.WriteString("\n\n")
 
@@ -862,20 +888,33 @@ func (m Model) View() tea.View {
 		b.WriteString("\n\n")
 	}
 
+	// Calculate column widths based on terminal width.
+	nameWidth := 20
+	branchWidth := 15
+	if m.width > 100 {
+		nameWidth = 30
+	} else if m.width > 80 {
+		nameWidth = 25
+	}
+
 	// Session list.
 	if len(m.filtered) == 0 {
 		b.WriteString("No Claude Code sessions found. Start Claude Code in another tmux session.\n")
 	} else {
-		b.WriteString(styleHelpBar.Render(" Status          Name                            Branch          Dir"))
+		b.WriteString(styleHelpBar.Render(fmt.Sprintf(" %-16s %-*s  %-*s %s", "Status", nameWidth, "Name", branchWidth, "Branch", "Dir")))
 		b.WriteString("\n")
 		for i, s := range m.filtered {
 			statusText := statusStyle(s.Status).Render(fmt.Sprintf("%s %-7s", s.Status.Icon(), s.Status.String()))
+			displayName := s.DisplayName()
+			if runes := []rune(displayName); len(runes) > nameWidth {
+				displayName = string(runes[:nameWidth-1]) + "…"
+			}
 			branch := s.Branch
-			if len(branch) > 15 {
-				branch = branch[:14] + "…"
+			if runes := []rune(branch); len(runes) > branchWidth {
+				branch = string(runes[:branchWidth-1]) + "…"
 			}
 			dir := styleDir.Render(shortenDir(s.Dir))
-			row := fmt.Sprintf(" %s  %-30s  %-15s %s", statusText, s.DisplayName(), branch, dir)
+			row := fmt.Sprintf(" %s  %-*s  %-*s %s", statusText, nameWidth, displayName, branchWidth, branch, dir)
 			if i == m.cursor {
 				row = styleSelected.Render(row)
 			}
@@ -901,12 +940,32 @@ func (m Model) View() tea.View {
 		}
 
 		// Build separator line.
-		sepLabel := " Preview "
+		selectedName := m.filtered[m.cursor].DisplayName()
+		sepLabel := " Preview: " + selectedName + " "
 		sepWidth := m.width
 		if sepWidth <= 0 {
 			sepWidth = 80
 		}
-		sep := strings.Repeat("─", (sepWidth-len(sepLabel))/2) + sepLabel + strings.Repeat("─", (sepWidth-len(sepLabel)+1)/2)
+		// Use rune count for width calculations (multi-byte safe).
+		labelLen := len([]rune(sepLabel))
+		if labelLen >= sepWidth {
+			nameRunes := []rune(selectedName)
+			maxNameLen := sepWidth - len([]rune(" Preview:  ")) - 2
+			if maxNameLen > 0 && len(nameRunes) > maxNameLen {
+				selectedName = string(nameRunes[:maxNameLen]) + "…"
+			}
+			sepLabel = " Preview: " + selectedName + " "
+			labelLen = len([]rune(sepLabel))
+		}
+		leftPad := (sepWidth - labelLen) / 2
+		rightPad := sepWidth - labelLen - leftPad
+		if leftPad < 0 {
+			leftPad = 0
+		}
+		if rightPad < 0 {
+			rightPad = 0
+		}
+		sep := strings.Repeat("─", leftPad) + sepLabel + strings.Repeat("─", rightPad)
 		b.WriteString(stylePreview.Render(sep))
 		b.WriteString("\n")
 
