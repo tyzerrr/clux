@@ -161,6 +161,9 @@ func ListExternalWindows(externals []config.ExternalSession) []session.Session {
 // scanWindow checks if a specific session:window exists and returns a Session if it contains Claude Code.
 // Returns nil if the window doesn't exist or doesn't contain Claude Code.
 func scanWindow(sessionName, windowIndex string) *session.Session {
+	if !validWindowIndex.MatchString(windowIndex) {
+		return nil
+	}
 	// Get window metadata via list-windows.
 	out, err := exec.Command("tmux", "list-windows", "-t", sessionName, "-F", "#{window_index}\t#{window_name}\t#{pane_current_path}").Output()
 	if err != nil {

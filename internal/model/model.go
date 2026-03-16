@@ -187,12 +187,15 @@ func applyFilter(sessions []session.Session, query string) []session.Session {
 		}
 	}
 
-	// Match against summaries
+	// Match against summaries (skip empty summaries to avoid false positives)
 	summaries := make([]string, len(sessions))
 	for i, s := range sessions {
 		summaries[i] = s.Summary
 	}
 	for _, m := range fuzzy.Find(query, summaries) {
+		if summaries[m.Index] == "" {
+			continue
+		}
 		if !seen[m.Index] {
 			seen[m.Index] = true
 			result = append(result, sessions[m.Index])
