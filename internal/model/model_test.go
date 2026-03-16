@@ -705,8 +705,8 @@ func TestView_ModeNewSession(t *testing.T) {
 	if !strings.Contains(view, "New Session") {
 		t.Error("expected view to contain 'New Session'")
 	}
-	if !strings.Contains(view, "Enter:create") {
-		t.Error("expected view to contain 'Enter:create'")
+	if !strings.Contains(view, "Enter:select") {
+		t.Error("expected view to contain 'Enter:select'")
 	}
 	if !strings.Contains(view, "beta") {
 		t.Error("expected view to contain 'beta' (the selected item)")
@@ -729,9 +729,13 @@ func TestModeNewSession_EnterWithValidDir(t *testing.T) {
 	m.filteredDirs = []string{os.TempDir()}
 	m.newSessionCursor = 0
 	msg := tea.KeyPressMsg{Code: tea.KeyEnter}
-	_, cmd := m.updateNewSession(msg)
-	if cmd == nil {
-		t.Error("expected non-nil cmd when entering with valid dir")
+	result, _ := m.updateNewSession(msg)
+	rm := result.(Model)
+	if rm.mode != ModeNewSessionBranch {
+		t.Errorf("expected ModeNewSessionBranch, got %v", rm.mode)
+	}
+	if rm.selectedRepoDir != os.TempDir() {
+		t.Errorf("expected selectedRepoDir %q, got %q", os.TempDir(), rm.selectedRepoDir)
 	}
 }
 
@@ -748,6 +752,45 @@ func TestModeNewSession_EnterWithInvalidDir(t *testing.T) {
 	}
 	if cmd != nil {
 		t.Error("expected nil cmd for invalid dir")
+	}
+}
+
+// --- ModeNewSessionBranch tests ---
+
+func TestModeNewSessionBranch_EmptyBranchCreatesWindowDirectly(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeNewSessionBranch
+	m.selectedRepoDir = os.TempDir()
+	m.branchInput.SetValue("")
+	msg := tea.KeyPressMsg{Code: tea.KeyEnter}
+	_, cmd := m.updateNewSessionBranch(msg)
+	if cmd == nil {
+		t.Error("expected non-nil cmd for empty branch (direct window creation)")
+	}
+}
+
+func TestModeNewSessionBranch_EscGoesBackToModeNewSession(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeNewSessionBranch
+	m.selectedRepoDir = os.TempDir()
+	msg := tea.KeyPressMsg{Code: tea.KeyEscape}
+	result, _ := m.updateNewSessionBranch(msg)
+	rm := result.(Model)
+	if rm.mode != ModeNewSession {
+		t.Errorf("expected ModeNewSession, got %v", rm.mode)
+	}
+}
+
+func TestView_ModeNewSessionBranch(t *testing.T) {
+	m := New()
+	m.mode = ModeNewSessionBranch
+	m.selectedRepoDir = "/tmp/test-repo"
+	view := m.View().Content
+	if !strings.Contains(view, "Branch Name") {
+		t.Error("expected view to contain 'Branch Name'")
+	}
+	if !strings.Contains(view, "skip worktree") {
+		t.Error("expected view to contain 'skip worktree'")
 	}
 }
 

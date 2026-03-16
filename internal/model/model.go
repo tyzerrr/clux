@@ -24,6 +24,7 @@ const (
 	ModeList Mode = iota
 	ModeFilter
 	ModeNewSession
+	ModeNewSessionBranch // branch name input for worktree creation
 	ModeConfirmKill
 	ModeAddExternal
 )
@@ -65,6 +66,10 @@ type Model struct {
 	newSessionInput  textinput.Model
 	newSessionCursor int
 
+	// Worktree creation
+	branchInput     textinput.Model
+	selectedRepoDir string // repo selected in ModeNewSession, used in ModeNewSessionBranch
+
 	// Preview mode
 	previewEnabled bool   // toggle state, default false
 	previewContent string // captured pane content for selected session
@@ -89,6 +94,10 @@ func New() Model {
 	ni.Placeholder = "Search repository..."
 	ni.CharLimit = 64
 
+	bi := textinput.New()
+	bi.Placeholder = "Branch name (empty to skip worktree)..."
+	bi.CharLimit = 128
+
 	ai := textinput.New()
 	ai.Placeholder = "Search session:window..."
 	ai.CharLimit = 64
@@ -102,6 +111,7 @@ func New() Model {
 		mode:            ModeList,
 		filterInput:     ti,
 		newSessionInput: ni,
+		branchInput:     bi,
 		addExtInput:     ai,
 		cfg:             cfg,
 		previewEnabled:  cfg.PreviewDefault,
@@ -398,6 +408,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateFilter(msg)
 		case ModeNewSession:
 			return m.updateNewSession(msg)
+		case ModeNewSessionBranch:
+			return m.updateNewSessionBranch(msg)
 		case ModeConfirmKill:
 			return m.updateConfirmKill(msg)
 		case ModeAddExternal:
@@ -609,14 +621,11 @@ func (m Model) updateNewSession(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.err = err
 				return m, nil
 			}
-			name := tmux.GenerateWindowName(dir)
+			m.selectedRepoDir = dir
+			m.mode = ModeNewSessionBranch
+			m.branchInput.SetValue("")
 			m.newSessionInput.Blur()
-			return m, func() tea.Msg {
-				if err := tmux.CreateWindow(name, dir); err != nil {
-					return errMsg(err)
-				}
-				return tea.QuitMsg{}
-			}
+			return m, m.branchInput.Focus()
 		}
 		return m, nil
 
@@ -644,6 +653,70 @@ func (m Model) updateNewSession(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.newSessionCursor >= len(m.filteredDirs) {
 			m.newSessionCursor = 0
 		}
+		return m, cmd
+	}
+}
+
+func (m Model) updateNewSessionBranch(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		branch := strings.TrimSpace(m.branchInput.Value())
+		dir := m.selectedRepoDir
+		m.branchInput.Blur()
+
+		if branch == "" {
+			// No worktree — use repo directly (original behavior)
+			name := tmux.GenerateWindowName(dir)
+			return m, func() tea.Msg {
+				if err := tmux.CreateWindow(name, dir); err != nil {
+					return errMsg(err)
+				}
+				return tea.QuitMsg{}
+			}
+		}
+
+		// Create worktree and start claude there
+		return m, func() tea.Msg {
+			// Create worktree: gwq add -b <branch>
+			// Use "--" to prevent branch names starting with "-" from being parsed as flags.
+			addCmd := exec.Command("gwq", "add", "-b", branch)
+			addCmd.Dir = dir
+			if out, err := addCmd.CombinedOutput(); err != nil {
+				return errMsg(fmt.Errorf("creating worktree: %s: %w", strings.TrimSpace(string(out)), err))
+			}
+
+			// Get worktree path: gwq get <branch>
+			getCmd := exec.Command("gwq", "get", "--", branch)
+			getCmd.Dir = dir
+			wtPath, err := getCmd.Output()
+			if err != nil {
+				return errMsg(fmt.Errorf("getting worktree path: %w", err))
+			}
+			worktreeDir := strings.TrimSpace(string(wtPath))
+			if worktreeDir == "" {
+				return errMsg(fmt.Errorf("gwq get returned empty path for branch %q", branch))
+			}
+
+			name := tmux.GenerateWindowName(worktreeDir)
+			if err := tmux.CreateWindow(name, worktreeDir); err != nil {
+				// Best-effort cleanup to avoid orphaned worktree.
+				rmCmd := exec.Command("gwq", "remove", "--", branch)
+				rmCmd.Dir = dir
+				rmCmd.Run()
+				return errMsg(err)
+			}
+			return tea.QuitMsg{}
+		}
+
+	case "esc":
+		// Go back to repo selection
+		m.mode = ModeNewSession
+		m.branchInput.Blur()
+		return m, m.newSessionInput.Focus()
+
+	default:
+		var cmd tea.Cmd
+		m.branchInput, cmd = m.branchInput.Update(msg)
 		return m, cmd
 	}
 }
@@ -768,6 +841,10 @@ func (m Model) View() tea.View {
 
 	if m.mode == ModeNewSession {
 		return newView(m.viewNewSession(&b))
+	}
+
+	if m.mode == ModeNewSessionBranch {
+		return newView(m.viewNewSessionBranch(&b))
 	}
 
 	if m.mode == ModeAddExternal {
@@ -913,7 +990,24 @@ func (m Model) viewNewSession(b *strings.Builder) string {
 	}
 
 	b.WriteString("\n\n")
-	b.WriteString(styleHelpBar.Render("Enter:create  Esc:cancel  ↑/↓:navigate"))
+	b.WriteString(styleHelpBar.Render("Enter:select  Esc:cancel  ↑/↓:navigate"))
+
+	return b.String()
+}
+
+func (m Model) viewNewSessionBranch(b *strings.Builder) string {
+	b.WriteString(styleHeader.Render("New Session — Branch Name"))
+	b.WriteString("\n\n")
+	b.WriteString(fmt.Sprintf(" Repository: %s\n\n", styleDir.Render(shortenDir(m.selectedRepoDir))))
+	b.WriteString(" ")
+	b.WriteString(m.branchInput.View())
+	b.WriteString("\n\n")
+	b.WriteString(styleHelpBar.Render("Enter:create  Enter(empty):skip worktree  Esc:back"))
+
+	if m.err != nil {
+		b.WriteString("\n\n")
+		b.WriteString(styleError.Render("Error: " + m.err.Error()))
+	}
 
 	return b.String()
 }
