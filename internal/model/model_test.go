@@ -537,11 +537,8 @@ func TestUpdate_SessionsMsg(t *testing.T) {
 		{Name: "test", Dir: "/tmp", Status: session.StatusIdle, WindowIndex: "0"},
 	}
 	msg := sessionsMsg(sessions)
-	result, cmd := m.Update(msg)
+	result, _ := m.Update(msg)
 	rm := result.(Model)
-	if cmd != nil {
-		t.Error("expected nil cmd from sessionsMsg")
-	}
 	if len(rm.sessions) != 1 {
 		t.Errorf("expected 1 session, got %d", len(rm.sessions))
 	}

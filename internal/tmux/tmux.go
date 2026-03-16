@@ -35,6 +35,10 @@ func EnsureSession() error {
 		return nil
 	}
 	if err := exec.Command("tmux", "new-session", "-d", "-s", SessionName).Run(); err != nil {
+		// Another process may have created it concurrently.
+		if exec.Command("tmux", "has-session", "-t", SessionName).Run() == nil {
+			return nil
+		}
 		return fmt.Errorf("creating clux session: %w", err)
 	}
 	return nil
@@ -367,6 +371,9 @@ func CapturePaneForSession(sessionName, windowIndex string) (string, error) {
 
 // capturePaneContentForSession captures the plain (no ANSI) content of the first pane in a window.
 func capturePaneContentForSession(sessionName, windowIndex string) (string, error) {
+	if !validWindowIndex.MatchString(windowIndex) {
+		return "", fmt.Errorf("invalid window index %q", windowIndex)
+	}
 	target := sessionName + ":" + windowIndex + ".0"
 	out, err := exec.Command("tmux", "capture-pane", "-t", target, "-p").Output()
 	if err != nil {
@@ -392,6 +399,9 @@ func bottomContent(content string, n int) string {
 // getClaudeStatusForSession reads the @claude-status tmux user option for a given session:window.
 // Returns the status string ("working", "idle", "waiting") or empty if not set.
 func getClaudeStatusForSession(sessionName, windowIndex string) string {
+	if !validWindowIndex.MatchString(windowIndex) {
+		return ""
+	}
 	target := sessionName + ":" + windowIndex + ".0"
 	out, err := exec.Command("tmux", "display-message", "-t", target, "-p", "#{@claude-status}").Output()
 	if err != nil {
@@ -420,6 +430,9 @@ func parseClaudeStatus(s string) (session.Status, bool) {
 // The pane PID is the shell, its child is Claude Code (node), and grandchildren
 // are tool processes.
 func hasActiveChildrenForSession(sessionName, windowIndex string) bool {
+	if !validWindowIndex.MatchString(windowIndex) {
+		return false
+	}
 	target := sessionName + ":" + windowIndex + ".0"
 	out, err := exec.Command("tmux", "display-message", "-t", target, "-p", "#{pane_pid}").Output()
 	if err != nil {
@@ -448,15 +461,8 @@ func hasActiveChildrenForSession(sessionName, windowIndex string) bool {
 	return false
 }
 
-// detectStatus determines the status of a Claude Code session in a tmux window.
-//
-// It uses a two-tier approach:
-//  1. Hooks-based: reads the @claude-status tmux option set by Claude Code hooks.
-//     This is the most reliable method when configured.
-//  2. Fallback: combines process tree inspection with pane content pattern matching.
-//     Process tree detects active tool execution (Working). Pattern matching
-//     distinguishes Waiting vs Idle from the bottom portion of the pane.
-func detectStatus(content string) (status session.Status, isClaudeCode bool) {
+// detectStatusFromContent determines status from pane content using pattern matching only.
+func detectStatusFromContent(content string) (status session.Status, isClaudeCode bool) {
 	if !hasClaudeCode(content) {
 		return session.StatusUnknown, false
 	}
@@ -494,14 +500,7 @@ func detectStatusWithHooksForSession(content, sessionName, windowIndex string) (
 	}
 
 	// Fall back to pattern matching on the bottom of the pane.
-	bottom := bottomContent(content, bottomScanLines)
-	if isWaiting(bottom) {
-		return session.StatusWaiting, true
-	}
-	if isIdle(bottom) {
-		return session.StatusIdle, true
-	}
-	return session.StatusUnknown, true
+	return detectStatusFromContent(content)
 }
 
 // hasClaudeCode checks whether the pane content looks like Claude Code is running.
@@ -570,6 +569,9 @@ func getGitBranch(dir string) string {
 // getWindowSummaryForSession retrieves the @clux-summary user option for a window in a given session.
 // Returns empty string if not set or on error.
 func getWindowSummaryForSession(sessionName, windowIndex string) string {
+	if !validWindowIndex.MatchString(windowIndex) {
+		return ""
+	}
 	target := sessionName + ":" + windowIndex + ".0"
 	out, err := exec.Command("tmux", "display-message", "-t", target, "-p", "#{@clux-summary}").Output()
 	if err != nil {

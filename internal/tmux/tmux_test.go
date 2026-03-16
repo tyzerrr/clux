@@ -288,7 +288,7 @@ func TestParseClaudeStatus(t *testing.T) {
 	}
 }
 
-// --- detectStatus ---
+// --- detectStatusFromContent ---
 
 func TestDetectStatus(t *testing.T) {
 	tests := []struct {
@@ -361,12 +361,12 @@ func TestDetectStatus(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotStatus, gotIsCC := detectStatus(tt.content)
+			gotStatus, gotIsCC := detectStatusFromContent(tt.content)
 			if gotStatus != tt.wantStatus {
-				t.Errorf("detectStatus() status = %v, want %v", gotStatus, tt.wantStatus)
+				t.Errorf("detectStatusFromContent() status = %v, want %v", gotStatus, tt.wantStatus)
 			}
 			if gotIsCC != tt.wantIsClaudeCode {
-				t.Errorf("detectStatus() isClaudeCode = %v, want %v", gotIsCC, tt.wantIsClaudeCode)
+				t.Errorf("detectStatusFromContent() isClaudeCode = %v, want %v", gotIsCC, tt.wantIsClaudeCode)
 			}
 		})
 	}

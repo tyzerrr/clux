@@ -304,6 +304,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case windowKilledMsg:
 		return m, fetchSessionsCmdWithExternals(m.cfg)
 
+	case sessionUnregistered:
+		return m, fetchSessionsCmdWithExternals(m.cfg)
+
 	case ghqDirsMsg:
 		m.repoDirs = []string(msg)
 		m.filteredDirs = filterDirs(m.repoDirs, m.newSessionInput.Value())
@@ -456,7 +459,7 @@ func (m Model) updateConfirmKill(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				if err := cfg.Save(); err != nil {
 					return errMsg(err)
 				}
-				return windowKilledMsg{}
+				return sessionUnregistered{}
 			}
 		}
 		return m, func() tea.Msg {
@@ -766,10 +769,6 @@ func (m Model) View() tea.View {
 				start = 0
 			}
 			displayLines := previewLines[start:]
-			maxWidth := m.width
-			if maxWidth <= 0 {
-				maxWidth = 80
-			}
 			for _, line := range displayLines {
 				// Output directly to preserve ANSI color sequences.
 				b.WriteString(line)
