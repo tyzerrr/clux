@@ -100,6 +100,7 @@ func New() Model {
 		newSessionInput: ni,
 		addExtInput:     ai,
 		cfg:             cfg,
+		previewEnabled:  cfg.PreviewDefault,
 	}
 }
 

@@ -16,6 +16,7 @@ type ExternalSession struct {
 // Config holds clux persistent configuration.
 type Config struct {
 	ExternalSessions []ExternalSession `json:"external_sessions"`
+	PreviewDefault   bool              `json:"preview_default"`
 }
 
 const configDir = ".config/clux"
