@@ -30,15 +30,15 @@ const (
 
 // Custom message types.
 type (
-	sessionsMsg          []session.Session
-	errMsg               error
-	tickMsg              time.Time
-	ghqDirsMsg           []string
-	windowKilledMsg      struct{}
-	sessionUnregistered  struct{} // external session unregistered from config
-	previewMsg           string   // pane content for preview
-	externalWindowsMsg   []tmux.ExternalWindowInfo
-	externalAddedMsg     struct{} // session registered successfully
+	sessionsMsg         []session.Session
+	errMsg              error
+	tickMsg             time.Time
+	ghqDirsMsg          []string
+	windowKilledMsg     struct{}
+	sessionUnregistered struct{} // external session unregistered from config
+	previewMsg          string   // pane content for preview
+	externalWindowsMsg  []tmux.ExternalWindowInfo
+	externalAddedMsg    struct{} // session registered successfully
 )
 
 // Model is the main Bubble Tea model for Clux.
@@ -373,7 +373,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(cmds...)
 		}
 		return m, nil
-
 
 	case previewMsg:
 		m.previewContent = string(msg)
@@ -927,70 +926,88 @@ func (m Model) View() tea.View {
 
 	// Preview area (when enabled and terminal is tall enough).
 	if m.previewEnabled && len(m.filtered) > 0 && m.height >= 15 {
-		// header(2) + column-header(1) + session-rows + blank(1) + helpbar(1) = fixed overhead
-		// Reserve lines for session list rows and help bar.
+		// Calculate layout.
+		// Top section: header(2) + col-header(1) + sessions + blank(1)
 		sessionRows := len(m.filtered)
-		// Total fixed overhead: 2 (header) + 1 (col header) + sessionRows + 1 (blank) + 1 (helpbar)
-		overhead := 2 + 1 + sessionRows + 1 + 1
-		available := m.height - overhead
-		// Give roughly half the remaining height to the preview, minimum 5.
-		previewHeight := available / 2
-		if previewHeight < 5 {
-			previewHeight = 5
+		topLines := 2 + 1 + sessionRows + 1
+		if m.err != nil {
+			topLines += 2 // error + blank
 		}
-
-		// Build separator line.
-		selectedName := m.filtered[m.cursor].DisplayName()
-		sepLabel := " Preview: " + selectedName + " "
-		sepWidth := m.width
-		if sepWidth <= 0 {
-			sepWidth = 80
-		}
-		// Use rune count for width calculations (multi-byte safe).
-		labelLen := len([]rune(sepLabel))
-		if labelLen >= sepWidth {
-			nameRunes := []rune(selectedName)
-			maxNameLen := sepWidth - len([]rune(" Preview:  ")) - 2
-			if maxNameLen > 0 && len(nameRunes) > maxNameLen {
-				selectedName = string(nameRunes[:maxNameLen]) + "…"
+		// Bottom section needs at least: separator(1) + 1 preview line + helpbar(1) = 3
+		maxPreviewHeight := m.height - topLines - 2 // minus separator, minus helpbar
+		if maxPreviewHeight >= 1 {
+			// Give roughly half the remaining height to preview, minimum 1.
+			available := m.height - topLines - 1 - 1
+			previewHeight := available / 2
+			if previewHeight < 5 {
+				previewHeight = 5
 			}
-			sepLabel = " Preview: " + selectedName + " "
-			labelLen = len([]rune(sepLabel))
-		}
-		leftPad := (sepWidth - labelLen) / 2
-		rightPad := sepWidth - labelLen - leftPad
-		if leftPad < 0 {
-			leftPad = 0
-		}
-		if rightPad < 0 {
-			rightPad = 0
-		}
-		sep := strings.Repeat("─", leftPad) + sepLabel + strings.Repeat("─", rightPad)
-		b.WriteString(stylePreview.Render(sep))
-		b.WriteString("\n")
+			if previewHeight > maxPreviewHeight {
+				previewHeight = maxPreviewHeight
+			}
+			// Insert padding to push preview to bottom.
+			bottomLines := 1 + previewHeight + 1 // separator + preview + helpbar
+			padding := m.height - topLines - bottomLines
+			if padding > 0 {
+				b.WriteString(strings.Repeat("\n", padding))
+			}
 
-		// Get last N lines from preview content.
-		previewLines := strings.Split(m.previewContent, "\n")
-		// Remove trailing empty lines.
-		for len(previewLines) > 0 && strings.TrimSpace(previewLines[len(previewLines)-1]) == "" {
-			previewLines = previewLines[:len(previewLines)-1]
-		}
-		if len(previewLines) == 0 {
-			b.WriteString(stylePreview.Render("  No preview available"))
+			// Build separator line.
+			selectedName := m.filtered[m.cursor].DisplayName()
+			sepLabel := " Preview: " + selectedName + " "
+			sepWidth := m.width
+			if sepWidth <= 0 {
+				sepWidth = 80
+			}
+			// Use rune count for width calculations (multi-byte safe).
+			labelLen := len([]rune(sepLabel))
+			if labelLen >= sepWidth {
+				nameRunes := []rune(selectedName)
+				maxNameLen := sepWidth - len([]rune(" Preview:  ")) - 2
+				if maxNameLen > 0 && len(nameRunes) > maxNameLen {
+					selectedName = string(nameRunes[:maxNameLen]) + "…"
+				}
+				sepLabel = " Preview: " + selectedName + " "
+				labelLen = len([]rune(sepLabel))
+			}
+			leftPad := (sepWidth - labelLen) / 2
+			rightPad := sepWidth - labelLen - leftPad
+			if leftPad < 0 {
+				leftPad = 0
+			}
+			if rightPad < 0 {
+				rightPad = 0
+			}
+			sep := strings.Repeat("─", leftPad) + sepLabel + strings.Repeat("─", rightPad)
+			b.WriteString(stylePreview.Render(sep))
 			b.WriteString("\n")
-		} else {
-			// Take last previewHeight lines.
-			start := len(previewLines) - previewHeight
-			if start < 0 {
-				start = 0
+
+			// Get last N lines from preview content.
+			previewLines := strings.Split(m.previewContent, "\n")
+			// Remove trailing empty lines.
+			for len(previewLines) > 0 && strings.TrimSpace(previewLines[len(previewLines)-1]) == "" {
+				previewLines = previewLines[:len(previewLines)-1]
 			}
-			displayLines := previewLines[start:]
-			for _, line := range displayLines {
-				// Output directly to preserve ANSI color sequences.
-				b.WriteString(line)
+			if len(previewLines) == 0 {
+				b.WriteString(stylePreview.Render("  No preview available"))
 				b.WriteString("\n")
+				for i := 1; i < previewHeight; i++ {
+					b.WriteString("\n")
+				}
+			} else {
+				// Take last previewHeight lines.
+				start := len(previewLines) - previewHeight
+				if start < 0 {
+					start = 0
+				}
+				displayLines := previewLines[start:]
+				for _, line := range displayLines {
+					// Output directly to preserve ANSI color sequences.
+					b.WriteString(line)
+					b.WriteString("\n")
+				}
 			}
-		}
+		} // maxPreviewHeight >= 1
 	}
 
 	// Filter input (when in filter mode).
