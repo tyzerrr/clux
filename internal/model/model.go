@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
@@ -73,6 +74,9 @@ type Model struct {
 	filteredExtWindows []tmux.ExternalWindowInfo // filtered by search
 	addExtInput        textinput.Model
 	addExtCursor       int
+
+	// Status change tracking for bell notification
+	prevStatuses map[string]session.Status
 }
 
 // New creates and returns an initialized Model.
@@ -101,6 +105,7 @@ func New() Model {
 		addExtInput:     ai,
 		cfg:             cfg,
 		previewEnabled:  cfg.PreviewDefault,
+		prevStatuses:    make(map[string]session.Status),
 	}
 }
 
@@ -217,6 +222,32 @@ func applyFilter(sessions []session.Session, query string) []session.Session {
 	return result
 }
 
+// sortByStatus sorts sessions so that those needing attention appear first.
+// Priority order: Waiting (3) > Working (2) > Idle (1) > Unknown (0).
+func sortByStatus(sessions []session.Session) {
+	sort.SliceStable(sessions, func(i, j int) bool {
+		return statusPriority(sessions[i].Status) > statusPriority(sessions[j].Status)
+	})
+}
+
+func statusPriority(s session.Status) int {
+	switch s {
+	case session.StatusWaiting:
+		return 3
+	case session.StatusWorking:
+		return 2
+	case session.StatusIdle:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// ringBell returns a command that prints a terminal bell character.
+func ringBell() tea.Cmd {
+	return tea.Println("\a")
+}
+
 func fetchExternalWindowsCmd() tea.Msg {
 	windows, err := tmux.ListAllWindows()
 	if err != nil {
@@ -274,17 +305,42 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case sessionsMsg:
 		m.sessions = []session.Session(msg)
 		m.err = nil
+
+		// Check for Working→Waiting transitions and update prevStatuses.
+		shouldBell := false
+		for _, s := range m.sessions {
+			key := s.SessionName + ":" + s.WindowIndex
+			if s.SessionName == "" {
+				key = tmux.SessionName + ":" + s.WindowIndex
+			}
+			prev, exists := m.prevStatuses[key]
+			if exists && prev == session.StatusWorking && s.Status == session.StatusWaiting {
+				shouldBell = true
+			}
+			m.prevStatuses[key] = s.Status
+		}
+
 		m.filtered = applyFilter(m.sessions, m.filterInput.Value())
+		sortByStatus(m.filtered)
 		// Clamp cursor.
 		if len(m.filtered) == 0 {
 			m.cursor = 0
 		} else if m.cursor >= len(m.filtered) {
 			m.cursor = len(m.filtered) - 1
 		}
+
+		var cmds []tea.Cmd
+		if shouldBell {
+			cmds = append(cmds, ringBell())
+		}
 		if m.previewEnabled && len(m.filtered) > 0 {
-			return m, fetchPreviewCmdForSession(m.filtered[m.cursor])
+			cmds = append(cmds, fetchPreviewCmdForSession(m.filtered[m.cursor]))
+		}
+		if len(cmds) > 0 {
+			return m, tea.Batch(cmds...)
 		}
 		return m, nil
+
 
 	case previewMsg:
 		m.previewContent = string(msg)
@@ -418,6 +474,25 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.mode = ModeConfirmKill
 		}
 
+	case "y":
+		if len(m.filtered) > 0 {
+			s := m.filtered[m.cursor]
+			if s.Status != session.StatusWaiting {
+				break
+			}
+			sessionName := tmux.SessionName
+			if s.External && s.SessionName != "" {
+				sessionName = s.SessionName
+			}
+			windowIndex := s.WindowIndex
+			return m, func() tea.Msg {
+				if err := tmux.SendKeys(sessionName, windowIndex, "y"); err != nil {
+					return errMsg(err)
+				}
+				return fetchSessionsCmdWithExternals(m.cfg)()
+			}
+		}
+
 	case "R":
 		return m, fetchSessionsCmdWithExternals(m.cfg)
 
@@ -509,6 +584,7 @@ func (m Model) updateFilter(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.filterInput.Blur()
 		m.mode = ModeList
 		m.filtered = m.sessions
+		sortByStatus(m.filtered)
 		m.cursor = 0
 		return m, nil
 
@@ -516,6 +592,7 @@ func (m Model) updateFilter(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.filterInput, cmd = m.filterInput.Update(msg)
 		m.filtered = applyFilter(m.sessions, m.filterInput.Value())
+		sortByStatus(m.filtered)
 		if m.cursor >= len(m.filtered) {
 			m.cursor = 0
 		}
@@ -791,7 +868,7 @@ func (m Model) View() tea.View {
 		if m.previewEnabled {
 			previewLabel = "p:preview(on)"
 		}
-		b.WriteString(styleHelpBar.Render("Enter:attach  n:new  a:add-ext  K:kill  R:refresh  " + previewLabel + "  /:filter  q:quit"))
+		b.WriteString(styleHelpBar.Render("Enter:attach  y:approve  n:new  a:add-ext  K:kill  R:refresh  " + previewLabel + "  /:filter  q:quit"))
 	}
 
 	return newView(b.String())

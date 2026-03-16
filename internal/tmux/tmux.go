@@ -338,6 +338,18 @@ func SwitchToWindow(sessionName, windowIndex string) error {
 	return nil
 }
 
+// SendKeys sends a key sequence to a window's first pane.
+func SendKeys(sessionName, windowIndex, keys string) error {
+	if !validWindowIndex.MatchString(windowIndex) {
+		return fmt.Errorf("invalid window index %q", windowIndex)
+	}
+	target := sessionName + ":" + windowIndex
+	if err := exec.Command("tmux", "send-keys", "-t", target, keys, "Enter").Run(); err != nil {
+		return fmt.Errorf("sending keys to window %q in session %q: %w", windowIndex, sessionName, err)
+	}
+	return nil
+}
+
 // KillWindow kills a window in the clux session by its window index.
 func KillWindow(windowIndex string) error {
 	if !validWindowIndex.MatchString(windowIndex) {
