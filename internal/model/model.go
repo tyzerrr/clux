@@ -444,7 +444,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "k", "up":
+	case "k", "up", "ctrl+p":
 		if len(m.filtered) > 0 {
 			m.cursor = (m.cursor - 1 + len(m.filtered)) % len(m.filtered)
 			if m.previewEnabled {
@@ -452,7 +452,7 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-	case "j", "down":
+	case "j", "down", "ctrl+n":
 		if len(m.filtered) > 0 {
 			m.cursor = (m.cursor + 1) % len(m.filtered)
 			if m.previewEnabled {
@@ -593,23 +593,9 @@ func (m Model) updateConfirmKill(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m Model) updateFilter(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "enter":
-		// Exit filter mode and attach to the selected session directly.
+		// Confirm filter and return to list mode (filter preserved).
 		m.filterInput.Blur()
 		m.mode = ModeList
-		if len(m.filtered) > 0 {
-			s := m.filtered[m.cursor]
-			sessionName := tmux.SessionName
-			if s.External && s.SessionName != "" {
-				sessionName = s.SessionName
-			}
-			windowIndex := s.WindowIndex
-			return m, func() tea.Msg {
-				if err := tmux.SwitchToWindow(sessionName, windowIndex); err != nil {
-					return errMsg(err)
-				}
-				return tea.QuitMsg{}
-			}
-		}
 		return m, nil
 
 	case "esc":
@@ -656,13 +642,13 @@ func (m Model) updateNewSession(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.newSessionInput.Blur()
 		return m, nil
 
-	case "up", "ctrl+k":
+	case "up", "ctrl+k", "ctrl+p":
 		if len(m.filteredDirs) > 0 {
 			m.newSessionCursor = (m.newSessionCursor - 1 + len(m.filteredDirs)) % len(m.filteredDirs)
 		}
 		return m, nil
 
-	case "down", "ctrl+j":
+	case "down", "ctrl+j", "ctrl+n":
 		if len(m.filteredDirs) > 0 {
 			m.newSessionCursor = (m.newSessionCursor + 1) % len(m.filteredDirs)
 		}
@@ -767,13 +753,13 @@ func (m Model) updateAddExternal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.addExtInput.Blur()
 		return m, nil
 
-	case "up", "ctrl+k":
+	case "up", "ctrl+k", "ctrl+p":
 		if len(m.filteredExtWindows) > 0 {
 			m.addExtCursor = (m.addExtCursor - 1 + len(m.filteredExtWindows)) % len(m.filteredExtWindows)
 		}
 		return m, nil
 
-	case "down", "ctrl+j":
+	case "down", "ctrl+j", "ctrl+n":
 		if len(m.filteredExtWindows) > 0 {
 			m.addExtCursor = (m.addExtCursor + 1) % len(m.filteredExtWindows)
 		}
@@ -1021,7 +1007,7 @@ func (m Model) View() tea.View {
 		if m.previewEnabled {
 			previewLabel = "p:preview(on)"
 		}
-		b.WriteString(styleHelpBar.Render("Enter:attach  y:approve  n:new  a:add-ext  K:kill  R:refresh  " + previewLabel + "  /:filter  q:quit"))
+		b.WriteString(styleHelpBar.Render("Enter:attach  y:approve  n:new  a:add-external  K:kill  R:refresh  " + previewLabel + "  /:filter  q:quit"))
 	}
 
 	return newView(b.String())
