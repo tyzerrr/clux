@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/tanaka0325/clux/internal/config"
 	"github.com/tanaka0325/clux/internal/session"
@@ -494,14 +495,43 @@ func detectStatusFromContent(content string) (status session.Status, isClaudeCod
 	return session.StatusUnknown, true
 }
 
+// debugLog appends a log line to /tmp/clux-debug.log when CLUX_DEBUG=1 is set.
+// If the file cannot be opened, the call is silently skipped.
+func debugLog(msg string) {
+	if os.Getenv("CLUX_DEBUG") != "1" {
+		return
+	}
+	f, err := os.OpenFile("/tmp/clux-debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	ts := time.Now().Format("2006-01-02 15:04:05")
+	fmt.Fprintf(f, "%s %s\n", ts, msg)
+}
+
 // detectStatusWithHooksForSession determines status using hooks (@claude-status) first,
 // then falls back to process tree + pane content analysis.
 func detectStatusWithHooksForSession(content, sessionName, windowIndex string) (status session.Status, isClaudeCode bool) {
+	label := fmt.Sprintf("[%s:%s]", sessionName, windowIndex)
+
 	// Tier 1: Check @claude-status hook.
+	var tier1Status session.Status
+	var tier1Valid bool
 	if cs := getClaudeStatusForSession(sessionName, windowIndex); cs != "" {
 		if st, ok := parseClaudeStatus(cs); ok {
-			return st, true
+			tier1Status = st
+			tier1Valid = true
+			debugLog(fmt.Sprintf("%s tier1=%s", label, st))
+			// Idle and waiting from hooks are reliable — return immediately.
+			if st != session.StatusWorking {
+				return st, true
+			}
+			// "working" from hooks can be stale; fall through to Tier 3 for override.
 		}
+	}
+	if !tier1Valid {
+		debugLog(fmt.Sprintf("%s tier1=none", label))
 	}
 
 	// Tier 2: Fallback — require Claude Code presence in pane content.
@@ -511,17 +541,33 @@ func detectStatusWithHooksForSession(content, sessionName, windowIndex string) (
 
 	// Use process tree to detect active tool execution.
 	if hasActiveChildrenForSession(sessionName, windowIndex) {
+		debugLog(fmt.Sprintf("%s tier2=hasChildren -> final=working", label))
 		return session.StatusWorking, true
 	}
+	debugLog(fmt.Sprintf("%s tier2=noChildren", label))
 
-	// Fall back to pattern matching on the bottom of the pane.
+	// Tier 3: Pattern matching on the bottom of the pane.
 	bottom := bottomContent(content, bottomScanLines)
 	if isWaiting(bottom) {
+		debugLog(fmt.Sprintf("%s tier3=waiting -> final=waiting", label))
 		return session.StatusWaiting, true
 	}
 	if isIdle(bottom) {
+		if tier1Valid && tier1Status == session.StatusWorking {
+			debugLog(fmt.Sprintf("%s tier3=idle -> final=idle (tier3 override)", label))
+		} else {
+			debugLog(fmt.Sprintf("%s tier3=idle -> final=idle", label))
+		}
 		return session.StatusIdle, true
 	}
+
+	// Tier 3 found nothing conclusive; use Tier 1 "working" if we have it.
+	if tier1Valid && tier1Status == session.StatusWorking {
+		debugLog(fmt.Sprintf("%s tier3=unknown -> final=working (tier1 fallback)", label))
+		return session.StatusWorking, true
+	}
+
+	debugLog(fmt.Sprintf("%s tier3=unknown -> final=unknown", label))
 	return session.StatusUnknown, true
 }
 
@@ -551,6 +597,10 @@ func isWaiting(content string) bool {
 		"[Y/n]",
 		"[y/n]",
 		"[y/N]",
+		"(y/n)",
+		"(Y/n)",
+		"(y)es / (n)o",
+		"? (yes/no)",
 	}
 	for _, p := range prompts {
 		if strings.Contains(content, p) {
