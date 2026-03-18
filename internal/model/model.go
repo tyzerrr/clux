@@ -26,6 +26,7 @@ const (
 	ModeNewSessionBranch // branch name input for worktree creation
 	ModeConfirmKill
 	ModeAddExternal
+	ModeDashboard
 )
 
 // Custom message types.
@@ -39,6 +40,7 @@ type (
 	previewMsg          string   // pane content for preview
 	externalWindowsMsg  []tmux.ExternalWindowInfo
 	externalAddedMsg    struct{} // session registered successfully
+	dashPreviewsMsg     map[int]string
 )
 
 // Model is the main Bubble Tea model for Clux.
@@ -81,6 +83,10 @@ type Model struct {
 
 	// Status change tracking for bell notification
 	prevStatuses map[string]session.Status
+
+	// Dashboard mode
+	dashCursor   int            // index into m.filtered for focused cell
+	dashPreviews map[int]string // windowIndex -> pane content for each session
 }
 
 // New creates and returns an initialized Model.
@@ -115,6 +121,7 @@ func New() Model {
 		cfg:             cfg,
 		previewEnabled:  cfg.PreviewDefault,
 		prevStatuses:    make(map[string]session.Status),
+		dashPreviews:    make(map[int]string),
 	}
 }
 
@@ -162,6 +169,30 @@ func fetchPreviewCmdForSession(s session.Session) tea.Cmd {
 			return previewMsg("")
 		}
 		return previewMsg(content)
+	}
+}
+
+func fetchDashboardPreviews(sessions []session.Session) tea.Cmd {
+	return func() tea.Msg {
+		result := make(map[int]string)
+		max := len(sessions)
+		if max > 9 {
+			max = 9
+		}
+		for i := 0; i < max; i++ {
+			s := sessions[i]
+			sessionName := tmux.SessionName
+			if s.External && s.SessionName != "" {
+				sessionName = s.SessionName
+			}
+			content, err := tmux.CapturePaneForSession(sessionName, s.WindowIndex)
+			if err != nil {
+				result[i] = ""
+			} else {
+				result[i] = content
+			}
+		}
+		return dashPreviewsMsg(result)
 	}
 }
 
@@ -378,6 +409,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.previewContent = string(msg)
 		return m, nil
 
+	case dashPreviewsMsg:
+		m.dashPreviews = map[int]string(msg)
+		return m, nil
+
 	case errMsg:
 		m.err = error(msg)
 		return m, nil
@@ -388,6 +423,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.previewEnabled && len(m.filtered) > 0 {
 				cmds = append(cmds, fetchPreviewCmdForSession(m.filtered[m.cursor]))
 			}
+			return m, tea.Batch(cmds...)
+		} else if m.mode == ModeDashboard {
+			cmds := []tea.Cmd{fetchSessionsCmdWithExternals(m.cfg), doTick(), fetchDashboardPreviews(m.filtered)}
 			return m, tea.Batch(cmds...)
 		}
 		return m, doTick()
@@ -436,6 +474,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateConfirmKill(msg)
 		case ModeAddExternal:
 			return m.updateAddExternal(msg)
+		case ModeDashboard:
+			return m.updateDashboard(msg)
 		}
 	}
 
@@ -538,6 +578,12 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if !m.previewEnabled {
 			m.previewContent = ""
 		}
+
+	case "d":
+		m.mode = ModeDashboard
+		m.dashCursor = 0
+		m.dashPreviews = make(map[int]string)
+		return m, fetchDashboardPreviews(m.filtered)
 
 	case "/":
 		m.mode = ModeFilter
@@ -778,6 +824,71 @@ func (m Model) updateAddExternal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
+func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	cols := m.dashCols()
+	maxItems := len(m.filtered)
+	if maxItems > 9 {
+		maxItems = 9
+	}
+
+	switch msg.String() {
+	case "esc", "d":
+		m.mode = ModeList
+		return m, nil
+	case "q":
+		return m, tea.Quit
+	case "h", "left":
+		if m.dashCursor%cols > 0 {
+			m.dashCursor--
+		}
+	case "l", "right":
+		if m.dashCursor%cols < cols-1 && m.dashCursor+1 < maxItems {
+			m.dashCursor++
+		}
+	case "k", "up", "ctrl+p":
+		if m.dashCursor-cols >= 0 {
+			m.dashCursor -= cols
+		}
+	case "j", "down", "ctrl+n":
+		if m.dashCursor+cols < maxItems {
+			m.dashCursor += cols
+		}
+	case "enter":
+		if maxItems > 0 && m.dashCursor < len(m.filtered) {
+			s := m.filtered[m.dashCursor]
+			sessionName := tmux.SessionName
+			if s.External && s.SessionName != "" {
+				sessionName = s.SessionName
+			}
+			return m, func() tea.Msg {
+				if err := tmux.SwitchToWindow(sessionName, s.WindowIndex); err != nil {
+					return errMsg(err)
+				}
+				return tea.QuitMsg{}
+			}
+		}
+	case "y":
+		if maxItems > 0 && m.dashCursor < len(m.filtered) {
+			s := m.filtered[m.dashCursor]
+			if s.Status != session.StatusWaiting {
+				break
+			}
+			sessionName := tmux.SessionName
+			if s.External && s.SessionName != "" {
+				sessionName = s.SessionName
+			}
+			windowIndex := s.WindowIndex
+			return m, func() tea.Msg {
+				if err := tmux.SendKeys(sessionName, windowIndex, "y"); err != nil {
+					return errMsg(err)
+				}
+				return fetchSessionsCmdWithExternals(m.cfg)()
+			}
+		}
+	}
+	return m, nil
+}
+
 // excludeRegistered removes windows that are already registered in cfg.
 func excludeRegistered(windows []tmux.ExternalWindowInfo, cfg *config.Config) []tmux.ExternalWindowInfo {
 	if cfg == nil || len(cfg.ExternalSessions) == 0 {
@@ -794,6 +905,17 @@ func excludeRegistered(windows []tmux.ExternalWindowInfo, cfg *config.Config) []
 		}
 	}
 	return out
+}
+
+// dashCols returns the number of columns for the dashboard grid based on terminal width.
+func (m Model) dashCols() int {
+	if m.width >= 180 {
+		return 3
+	}
+	if m.width >= 100 {
+		return 2
+	}
+	return 1
 }
 
 // --- View ---
@@ -857,6 +979,10 @@ func (m Model) View() tea.View {
 
 	if m.mode == ModeAddExternal {
 		return newView(m.viewAddExternal(&b))
+	}
+
+	if m.mode == ModeDashboard {
+		return newView(m.viewDashboard(&b))
 	}
 
 	// Header.
@@ -1007,7 +1133,7 @@ func (m Model) View() tea.View {
 		if m.previewEnabled {
 			previewLabel = "p:preview(on)"
 		}
-		b.WriteString(styleHelpBar.Render("Enter:attach  y:approve  n:new  a:add-external  K:kill  R:refresh  " + previewLabel + "  /:filter  q:quit"))
+		b.WriteString(styleHelpBar.Render("Enter:attach  y:approve  n:new  a:add-external  K:kill  R:refresh  " + previewLabel + "  d:dash  /:filter  q:quit"))
 	}
 
 	return newView(b.String())
@@ -1116,6 +1242,149 @@ func (m Model) viewAddExternal(b *strings.Builder) string {
 
 	b.WriteString("\n\n")
 	b.WriteString(styleHelpBar.Render("Enter:add  Esc:cancel  ↑/↓:navigate"))
+
+	return b.String()
+}
+
+func (m Model) viewDashboard(b *strings.Builder) string {
+	cols := m.dashCols()
+	maxItems := len(m.filtered)
+	if maxItems > 9 {
+		maxItems = 9
+	}
+	rows := (maxItems + cols - 1) / cols
+
+	// Header
+	header := fmt.Sprintf("Clux — Dashboard (%d sessions)", len(m.filtered))
+	if summary := statusSummary(m.filtered); summary != "" {
+		header += " — " + summary
+	}
+	b.WriteString(styleHeader.Render(header))
+	b.WriteString("\n\n")
+
+	if maxItems == 0 {
+		b.WriteString("No sessions to display.\n")
+		b.WriteString("\n")
+		b.WriteString(styleHelpBar.Render("Esc:back  q:quit"))
+		return b.String()
+	}
+
+	// Calculate cell dimensions
+	cellWidth := m.width / cols
+	if cellWidth < 20 {
+		cellWidth = 20
+	}
+	// Reserve lines: header(2) + rows*(cellHeight+1) + helpbar(1)
+	headerLines := 3
+	helpLines := 2
+	availableHeight := m.height - headerLines - helpLines
+	if rows <= 0 {
+		rows = 1
+	}
+	cellHeight := availableHeight / rows
+	if cellHeight < 5 {
+		cellHeight = 5
+	}
+	previewLines := cellHeight - 2 // minus header line and separator
+	if previewLines < 1 {
+		previewLines = 1
+	}
+
+	// Render grid row by row
+	for row := 0; row < rows; row++ {
+		// Build each cell for this row
+		var cellContents []string
+		for col := 0; col < cols; col++ {
+			idx := row*cols + col
+			if idx >= maxItems {
+				// Empty cell
+				cellContents = append(cellContents, strings.Repeat(" ", cellWidth-2))
+				continue
+			}
+			s := m.filtered[idx]
+
+			// Cell header: icon + status + name
+			icon := s.Status.Icon()
+			statusStr := s.Status.String()
+			displayName := s.DisplayName()
+			cellHeaderText := fmt.Sprintf(" %s %s %s", icon, statusStr, displayName)
+			// Truncate if needed
+			cellHeaderRunes := []rune(cellHeaderText)
+			if len(cellHeaderRunes) > cellWidth-2 {
+				cellHeaderText = string(cellHeaderRunes[:cellWidth-3]) + "…"
+			}
+
+			// Get preview content
+			preview := ""
+			if m.dashPreviews != nil {
+				preview = m.dashPreviews[idx]
+			}
+
+			// Get last N lines of preview
+			lines := strings.Split(preview, "\n")
+			// Remove trailing empty lines
+			for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+				lines = lines[:len(lines)-1]
+			}
+			start := len(lines) - previewLines
+			if start < 0 {
+				start = 0
+			}
+			displayPreview := lines[start:]
+
+			// Build cell string
+			var cell strings.Builder
+			cell.WriteString(cellHeaderText)
+			cell.WriteString("\n")
+			cell.WriteString(strings.Repeat("─", cellWidth-2))
+			cell.WriteString("\n")
+			for i := 0; i < previewLines; i++ {
+				if i < len(displayPreview) {
+					line := displayPreview[i]
+					// Truncate line to cell width
+					lineRunes := []rune(line)
+					if len(lineRunes) > cellWidth-2 {
+						line = string(lineRunes[:cellWidth-3]) + "…"
+					}
+					cell.WriteString(line)
+				}
+				if i < previewLines-1 {
+					cell.WriteString("\n")
+				}
+			}
+			cellContents = append(cellContents, cell.String())
+		}
+
+		// Use lipgloss to join cells horizontally
+		// Apply border style to focused cell
+		styledCells := make([]string, len(cellContents))
+		for col, content := range cellContents {
+			idx := row*cols + col
+			style := lipgloss.NewStyle().
+				Width(cellWidth - 2).
+				Height(cellHeight).
+				Padding(0, 1)
+			if idx == m.dashCursor && idx < maxItems {
+				style = style.
+					Border(lipgloss.RoundedBorder()).
+					BorderForeground(lipgloss.Color("39"))
+			} else if idx < maxItems {
+				style = style.
+					Border(lipgloss.RoundedBorder()).
+					BorderForeground(lipgloss.Color("240"))
+			} else {
+				style = style.
+					Border(lipgloss.HiddenBorder())
+			}
+			styledCells[col] = style.Render(content)
+		}
+		b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, styledCells...))
+		b.WriteString("\n")
+	}
+
+	// Help bar
+	b.WriteString("\n")
+	b.WriteString(styleHelpBar.Render("Enter:attach  y:approve  hjkl/arrows:navigate  Esc/d:back  q:quit"))
 
 	return b.String()
 }
