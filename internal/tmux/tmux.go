@@ -579,6 +579,8 @@ func CreateWindow(name, dir string) error {
 		return fmt.Errorf("creating window %q: %w", name, err)
 	}
 	newIndex := strings.TrimSpace(string(out))
+	// Clear any stale @clux-summary on the new pane.
+	_ = exec.Command("tmux", "set-option", "-p", "-t", SessionName+":"+newIndex+".0", "@clux-summary", "").Run()
 	if !validWindowIndex.MatchString(newIndex) {
 		debugLog(fmt.Sprintf("CreateWindow: unexpected window index %q from new-window, falling back to base session", newIndex))
 		if err2 := exec.Command("tmux", "switch-client", "-t", SessionName).Run(); err2 != nil {
@@ -599,6 +601,8 @@ func CreateWindowSilent(name, dir string) (string, error) {
 		return "", fmt.Errorf("creating window %q: %w", name, err)
 	}
 	newIndex := strings.TrimSpace(string(out))
+	// Clear any stale @clux-summary on the new pane.
+	_ = exec.Command("tmux", "set-option", "-p", "-t", SessionName+":"+newIndex+".0", "@clux-summary", "").Run()
 	if !validWindowIndex.MatchString(newIndex) {
 		return "", fmt.Errorf("unexpected window index %q from new-window", newIndex)
 	}
