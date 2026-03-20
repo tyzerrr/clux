@@ -8,7 +8,9 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/tanaka0325/clux/internal/config"
 	"github.com/tanaka0325/clux/internal/session"
+	"github.com/tanaka0325/clux/internal/tmux"
 )
 
 // testModel creates a Model with test sessions set in both sessions and filtered.
@@ -798,5 +800,413 @@ func TestView_ModeConfirmKill_WithError(t *testing.T) {
 	view := m.View().Content
 	if !strings.Contains(view, "Error:") {
 		t.Error("expected view to contain 'Error:'")
+	}
+}
+
+// --- sortByStatus tests ---
+
+func TestSortByStatus(t *testing.T) {
+	sessions := []session.Session{
+		{Name: "idle", Status: session.StatusIdle},
+		{Name: "unknown", Status: session.StatusUnknown},
+		{Name: "waiting", Status: session.StatusWaiting},
+		{Name: "working", Status: session.StatusWorking},
+	}
+	sortByStatus(sessions)
+	expected := []string{"waiting", "working", "idle", "unknown"}
+	for i, name := range expected {
+		if sessions[i].Name != name {
+			t.Errorf("position %d: expected %q, got %q", i, name, sessions[i].Name)
+		}
+	}
+}
+
+func TestSortByStatus_Empty(t *testing.T) {
+	var sessions []session.Session
+	sortByStatus(sessions) // should not panic
+}
+
+func TestSortByStatus_StableOrder(t *testing.T) {
+	sessions := []session.Session{
+		{Name: "a", Status: session.StatusWorking},
+		{Name: "b", Status: session.StatusWorking},
+		{Name: "c", Status: session.StatusWorking},
+	}
+	sortByStatus(sessions)
+	if sessions[0].Name != "a" || sessions[1].Name != "b" || sessions[2].Name != "c" {
+		t.Errorf("stable sort violated: got %s, %s, %s", sessions[0].Name, sessions[1].Name, sessions[2].Name)
+	}
+}
+
+// --- statusPriority tests ---
+
+func TestStatusPriority(t *testing.T) {
+	tests := []struct {
+		status session.Status
+		want   int
+	}{
+		{session.StatusWaiting, 3},
+		{session.StatusWorking, 2},
+		{session.StatusIdle, 1},
+		{session.StatusUnknown, 0},
+	}
+	for _, tt := range tests {
+		got := statusPriority(tt.status)
+		if got != tt.want {
+			t.Errorf("statusPriority(%v) = %d, want %d", tt.status, got, tt.want)
+		}
+	}
+}
+
+// --- statusSummary tests ---
+
+func TestStatusSummary_Mixed(t *testing.T) {
+	sessions := []session.Session{
+		{Status: session.StatusWaiting},
+		{Status: session.StatusWorking},
+		{Status: session.StatusIdle},
+	}
+	got := statusSummary(sessions)
+	if got != "1 Waiting, 1 Working, 1 Idle" {
+		t.Errorf("expected %q, got %q", "1 Waiting, 1 Working, 1 Idle", got)
+	}
+}
+
+func TestStatusSummary_Empty(t *testing.T) {
+	got := statusSummary(nil)
+	if got != "" {
+		t.Errorf("expected empty string, got %q", got)
+	}
+}
+
+func TestStatusSummary_AllSame(t *testing.T) {
+	sessions := []session.Session{
+		{Status: session.StatusWorking},
+		{Status: session.StatusWorking},
+		{Status: session.StatusWorking},
+	}
+	got := statusSummary(sessions)
+	if got != "3 Working" {
+		t.Errorf("expected %q, got %q", "3 Working", got)
+	}
+}
+
+// --- excludeRegistered tests ---
+
+func TestExcludeRegistered_NilConfig(t *testing.T) {
+	windows := []tmux.ExternalWindowInfo{
+		{Session: "s1", WindowIndex: "1"},
+	}
+	result := excludeRegistered(windows, nil)
+	if len(result) != 1 {
+		t.Errorf("expected 1 window, got %d", len(result))
+	}
+}
+
+func TestExcludeRegistered_EmptyConfig(t *testing.T) {
+	windows := []tmux.ExternalWindowInfo{
+		{Session: "s1", WindowIndex: "1"},
+	}
+	result := excludeRegistered(windows, &config.Config{})
+	if len(result) != 1 {
+		t.Errorf("expected 1 window, got %d", len(result))
+	}
+}
+
+func TestExcludeRegistered_FiltersRegistered(t *testing.T) {
+	windows := []tmux.ExternalWindowInfo{
+		{Session: "s1", WindowIndex: "1"},
+		{Session: "s2", WindowIndex: "2"},
+		{Session: "s3", WindowIndex: "3"},
+	}
+	cfg := &config.Config{
+		ExternalSessions: []config.ExternalSession{
+			{Session: "s1", Window: "1"},
+			{Session: "s3", Window: "3"},
+		},
+	}
+	result := excludeRegistered(windows, cfg)
+	if len(result) != 1 {
+		t.Fatalf("expected 1 window, got %d", len(result))
+	}
+	if result[0].Session != "s2" {
+		t.Errorf("expected s2, got %s", result[0].Session)
+	}
+}
+
+// --- filterExtWindows tests ---
+
+func TestFilterExtWindows_EmptyQuery(t *testing.T) {
+	windows := []tmux.ExternalWindowInfo{
+		{Session: "s1", WindowIndex: "1", WindowName: "win1", Dir: "/tmp"},
+		{Session: "s2", WindowIndex: "2", WindowName: "win2", Dir: "/home"},
+	}
+	result := filterExtWindows(windows, "")
+	if len(result) != 2 {
+		t.Errorf("expected 2 windows, got %d", len(result))
+	}
+}
+
+func TestFilterExtWindows_MatchesQuery(t *testing.T) {
+	windows := []tmux.ExternalWindowInfo{
+		{Session: "alpha", WindowIndex: "1", WindowName: "win1", Dir: "/tmp"},
+		{Session: "beta", WindowIndex: "2", WindowName: "win2", Dir: "/home"},
+	}
+	result := filterExtWindows(windows, "alpha")
+	if len(result) == 0 {
+		t.Fatal("expected at least one match")
+	}
+	if result[0].Session != "alpha" {
+		t.Errorf("expected alpha, got %s", result[0].Session)
+	}
+}
+
+// --- dashCols tests ---
+
+func TestDashCols(t *testing.T) {
+	tests := []struct {
+		width int
+		want  int
+	}{
+		{200, 3},
+		{180, 3},
+		{179, 2},
+		{100, 2},
+		{99, 1},
+		{50, 1},
+	}
+	for _, tt := range tests {
+		m := New()
+		m.width = tt.width
+		got := m.dashCols()
+		if got != tt.want {
+			t.Errorf("dashCols() with width=%d: got %d, want %d", tt.width, got, tt.want)
+		}
+	}
+}
+
+// --- applyFilter matching by summary ---
+
+func TestApplyFilter_MatchBySummary(t *testing.T) {
+	result := applyFilter(testSessions, "auth")
+	found := false
+	for _, s := range result {
+		if s.Name == "alpha-session" && s.Summary == "auth refactor" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected applyFilter to match 'alpha-session' by summary 'auth refactor'")
+	}
+}
+
+// --- ModeList key 'p' (preview toggle) ---
+
+func TestModeList_PTogglesPreview(t *testing.T) {
+	m := testModel(testSessions)
+	m.previewEnabled = false
+	msg := tea.KeyPressMsg{Code: 'p', Text: "p"}
+	result, _ := m.updateList(msg)
+	rm := result.(Model)
+	if !rm.previewEnabled {
+		t.Error("expected previewEnabled=true after first p")
+	}
+
+	// Toggle back
+	result2, _ := rm.updateList(msg)
+	rm2 := result2.(Model)
+	if rm2.previewEnabled {
+		t.Error("expected previewEnabled=false after second p")
+	}
+	if rm2.previewContent != "" {
+		t.Error("expected previewContent cleared")
+	}
+}
+
+// --- ModeList key 'd' (dashboard) ---
+
+func TestModeList_DSwitchesToDashboard(t *testing.T) {
+	m := testModel(testSessions)
+	msg := tea.KeyPressMsg{Code: 'd', Text: "d"}
+	result, _ := m.updateList(msg)
+	rm := result.(Model)
+	if rm.mode != ModeDashboard {
+		t.Errorf("expected ModeDashboard, got %v", rm.mode)
+	}
+	if rm.dashCursor != 0 {
+		t.Errorf("expected dashCursor=0, got %d", rm.dashCursor)
+	}
+}
+
+// --- ModeList key 'a' (add external) ---
+
+func TestModeList_ASwitchesToAddExternal(t *testing.T) {
+	m := testModel(testSessions)
+	msg := tea.KeyPressMsg{Code: 'a', Text: "a"}
+	result, _ := m.updateList(msg)
+	rm := result.(Model)
+	if rm.mode != ModeAddExternal {
+		t.Errorf("expected ModeAddExternal, got %v", rm.mode)
+	}
+}
+
+// --- ModeList key 'y' (approve waiting) ---
+
+func TestModeList_YApproveWaiting(t *testing.T) {
+	sessions := []session.Session{
+		{Name: "waiting-session", Status: session.StatusWaiting, WindowIndex: "0"},
+	}
+	m := testModel(sessions)
+	m.cursor = 0
+	msg := tea.KeyPressMsg{Code: 'y', Text: "y"}
+	_, cmd := m.updateList(msg)
+	if cmd == nil {
+		t.Error("expected non-nil cmd when approving waiting session")
+	}
+}
+
+func TestModeList_YOnNonWaitingDoesNothing(t *testing.T) {
+	sessions := []session.Session{
+		{Name: "idle-session", Status: session.StatusIdle, WindowIndex: "0"},
+	}
+	m := testModel(sessions)
+	m.cursor = 0
+	msg := tea.KeyPressMsg{Code: 'y', Text: "y"}
+	_, cmd := m.updateList(msg)
+	if cmd != nil {
+		t.Error("expected nil cmd when y pressed on non-waiting session")
+	}
+}
+
+// --- ModeAddExternal tests ---
+
+func TestModeAddExternal_EscGoesBackToList(t *testing.T) {
+	m := New()
+	m.mode = ModeAddExternal
+	m.cfg = &config.Config{}
+	msg := tea.KeyPressMsg{Code: tea.KeyEscape}
+	result, _ := m.updateAddExternal(msg)
+	rm := result.(Model)
+	if rm.mode != ModeList {
+		t.Errorf("expected ModeList, got %v", rm.mode)
+	}
+}
+
+func TestModeAddExternal_UpDownMovesCursor(t *testing.T) {
+	m := New()
+	m.mode = ModeAddExternal
+	m.cfg = &config.Config{}
+	m.filteredExtWindows = []tmux.ExternalWindowInfo{
+		{Session: "s1", WindowIndex: "1"},
+		{Session: "s2", WindowIndex: "2"},
+		{Session: "s3", WindowIndex: "3"},
+	}
+	m.addExtCursor = 0
+
+	// Down
+	msg := tea.KeyPressMsg{Code: tea.KeyDown}
+	result, _ := m.updateAddExternal(msg)
+	rm := result.(Model)
+	if rm.addExtCursor != 1 {
+		t.Errorf("expected addExtCursor=1, got %d", rm.addExtCursor)
+	}
+
+	// Up
+	msg = tea.KeyPressMsg{Code: tea.KeyUp}
+	result, _ = rm.updateAddExternal(msg)
+	rm = result.(Model)
+	if rm.addExtCursor != 0 {
+		t.Errorf("expected addExtCursor=0, got %d", rm.addExtCursor)
+	}
+
+	// Up wraps
+	msg = tea.KeyPressMsg{Code: tea.KeyUp}
+	result, _ = rm.updateAddExternal(msg)
+	rm = result.(Model)
+	if rm.addExtCursor != 2 {
+		t.Errorf("expected addExtCursor=2 (wrap), got %d", rm.addExtCursor)
+	}
+}
+
+// --- ModeDashboard tests ---
+
+func TestModeDashboard_EscGoesBackToList(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeDashboard
+	msg := tea.KeyPressMsg{Code: tea.KeyEscape}
+	result, _ := m.updateDashboard(msg)
+	rm := result.(Model)
+	if rm.mode != ModeList {
+		t.Errorf("expected ModeList, got %v", rm.mode)
+	}
+}
+
+func TestModeDashboard_DGoesBackToList(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeDashboard
+	msg := tea.KeyPressMsg{Code: 'd', Text: "d"}
+	result, _ := m.updateDashboard(msg)
+	rm := result.(Model)
+	if rm.mode != ModeList {
+		t.Errorf("expected ModeList, got %v", rm.mode)
+	}
+}
+
+func TestModeDashboard_QQuits(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeDashboard
+	msg := tea.KeyPressMsg{Code: 'q', Text: "q"}
+	_, cmd := m.updateDashboard(msg)
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd from q")
+	}
+	result := cmd()
+	if _, ok := result.(tea.QuitMsg); !ok {
+		t.Errorf("expected tea.QuitMsg, got %T", result)
+	}
+}
+
+func TestModeDashboard_Navigation(t *testing.T) {
+	// 6 sessions, width=200 → 3 cols
+	sessions := make([]session.Session, 6)
+	for i := range sessions {
+		sessions[i] = session.Session{Name: fmt.Sprintf("s%d", i), Status: session.StatusIdle, WindowIndex: fmt.Sprintf("%d", i)}
+	}
+	m := testModel(sessions)
+	m.mode = ModeDashboard
+	m.width = 200
+	m.dashCursor = 0
+
+	// Move right
+	msg := tea.KeyPressMsg{Code: 'l', Text: "l"}
+	result, _ := m.updateDashboard(msg)
+	rm := result.(Model)
+	if rm.dashCursor != 1 {
+		t.Errorf("after l: expected dashCursor=1, got %d", rm.dashCursor)
+	}
+
+	// Move down (3 cols → cursor goes from 1 to 4)
+	msg = tea.KeyPressMsg{Code: 'j', Text: "j"}
+	result, _ = rm.updateDashboard(msg)
+	rm = result.(Model)
+	if rm.dashCursor != 4 {
+		t.Errorf("after j: expected dashCursor=4, got %d", rm.dashCursor)
+	}
+
+	// Move left
+	msg = tea.KeyPressMsg{Code: 'h', Text: "h"}
+	result, _ = rm.updateDashboard(msg)
+	rm = result.(Model)
+	if rm.dashCursor != 3 {
+		t.Errorf("after h: expected dashCursor=3, got %d", rm.dashCursor)
+	}
+
+	// Move up (3 → 0)
+	msg = tea.KeyPressMsg{Code: 'k', Text: "k"}
+	result, _ = rm.updateDashboard(msg)
+	rm = result.(Model)
+	if rm.dashCursor != 0 {
+		t.Errorf("after k: expected dashCursor=0, got %d", rm.dashCursor)
 	}
 }
