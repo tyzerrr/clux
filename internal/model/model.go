@@ -2394,17 +2394,25 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 	helpLines := 2
 	borderHeight := 2 // lipgloss RoundedBorder adds top + bottom border lines per row
 	availableHeight := m.height - headerLines - helpLines - (rows * (borderHeight + 1))
-	cellHeight := availableHeight / rows
-	if cellHeight < 5 {
-		cellHeight = 5
-	}
-	previewLines := cellHeight - 2 // minus header line and separator
-	if previewLines < 1 {
-		previewLines = 1
+	baseCellHeight := availableHeight / rows
+	heightRemainder := availableHeight % rows
+	if baseCellHeight < 5 {
+		baseCellHeight = 5
+		heightRemainder = 0
 	}
 
 	// Render grid row by row
 	for row := 0; row < rows; row++ {
+		// Distribute remainder lines to top rows
+		rowCellHeight := baseCellHeight
+		if row < heightRemainder {
+			rowCellHeight++
+		}
+		rowPreviewLines := rowCellHeight - 2 // minus header line and separator
+		if rowPreviewLines < 1 {
+			rowPreviewLines = 1
+		}
+
 		// Build each cell for this row
 		var cellContents []string
 		for col := 0; col < cols; col++ {
@@ -2439,7 +2447,7 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 			for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
 				lines = lines[:len(lines)-1]
 			}
-			start := len(lines) - previewLines
+			start := len(lines) - rowPreviewLines
 			if start < 0 {
 				start = 0
 			}
@@ -2451,7 +2459,7 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 			cell.WriteString("\n")
 			cell.WriteString(strings.Repeat("─", contentWidth))
 			cell.WriteString("\n")
-			for i := 0; i < previewLines; i++ {
+			for i := 0; i < rowPreviewLines; i++ {
 				if i < len(displayPreview) {
 					line := displayPreview[i]
 					// Truncate line to cell width
@@ -2461,7 +2469,7 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 					}
 					cell.WriteString(line)
 				}
-				if i < previewLines-1 {
+				if i < rowPreviewLines-1 {
 					cell.WriteString("\n")
 				}
 			}
@@ -2475,8 +2483,8 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 			localIdx := row*cols + col
 			style := lipgloss.NewStyle().
 				Width(contentWidth).
-				Height(cellHeight).
-				MaxHeight(cellHeight + borderHeight).
+				Height(rowCellHeight).
+				MaxHeight(rowCellHeight + borderHeight).
 				Padding(0, 1)
 			if localIdx == m.dashCursor && localIdx < pageItems {
 				style = style.
