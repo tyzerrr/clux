@@ -2609,3 +2609,22 @@ func TestBuildGroups_WorktreeSessionsGroupTogether(t *testing.T) {
 		t.Errorf("expected 2 sessions in group, got %d", len(groups[0].sessions))
 	}
 }
+
+func TestDoImmediateTick_ReturnsTickMsgImmediately(t *testing.T) {
+	cmd := doImmediateTick()
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd from doImmediateTick")
+	}
+	msg := cmd()
+	if _, ok := msg.(tickMsg); !ok {
+		t.Errorf("expected tickMsg, got %T", msg)
+	}
+}
+
+func TestInit_ReturnsNonNilCmd(t *testing.T) {
+	m := New()
+	cmd := m.Init()
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd from Init")
+	}
+}

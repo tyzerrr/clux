@@ -224,6 +224,12 @@ func doTick() tea.Cmd {
 	})
 }
 
+func doImmediateTick() tea.Cmd {
+	return func() tea.Msg {
+		return tickMsg(time.Now())
+	}
+}
+
 func fetchPreviewCmdForSession(s session.Session) tea.Cmd {
 	return func() tea.Msg {
 		sessionName := tmux.SessionName
@@ -558,7 +564,7 @@ func groupedSessionRows(groups []sessionGroup) int {
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		fetchSessionsCmdWithExternals(m.cfg),
-		doTick(),
+		doImmediateTick(),
 		fetchGhqRoot,
 	)
 }
