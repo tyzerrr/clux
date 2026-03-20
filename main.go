@@ -3,7 +3,9 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
+	"syscall"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/tanaka0325/clux/internal/config"
@@ -27,9 +29,22 @@ func main() {
 		return
 	}
 
-	if err := tmux.CheckTmux(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+	if os.Getenv("TMUX") == "" {
+		self, err := os.Executable()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "clux: could not determine executable path: %v\n", err)
+			os.Exit(1)
+		}
+		tmuxBin, err := exec.LookPath("tmux")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "clux: tmux not found in PATH: %v\n", err)
+			os.Exit(1)
+		}
+		shellCmd := "'" + strings.ReplaceAll(self, "'", `'\''`) + "'"
+		if err := syscall.Exec(tmuxBin, []string{"tmux", "new-session", "-A", "-s", tmux.SessionName, shellCmd}, os.Environ()); err != nil {
+			fmt.Fprintf(os.Stderr, "clux: failed to exec tmux: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	if err := tmux.EnsureSession(); err != nil {
