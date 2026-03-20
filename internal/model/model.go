@@ -1240,19 +1240,20 @@ func (m Model) checkBroadcastTargetsCmd() tea.Cmd {
 				// Clux session: use GetWindowStatus to check status.
 				// Newly-created Claude Code windows may not have loaded yet (hasClaudeCode
 				// returns false), so treat isClaudeCode=false within the first 30 seconds
-				// as "still starting up" rather than stuck.
+				// as "still starting up". After the grace period, treat as ready so the
+				// prompt is sent (Claude Code should have started by then).
 				st, isClaudeCode := tmux.GetWindowStatus(tmux.SessionName, t.windowIndex)
 				if isClaudeCode {
 					t.ready = st == session.StatusIdle
 				} else if time.Since(startTime) < 30*time.Second {
-					// Still booting; leave t.ready = false but don't consider it stuck.
+					// Still booting; leave t.ready = false.
 					t.ready = false
 				} else {
-					// Beyond 30s grace period and still not recognized as Claude Code.
-					t.ready = false
+					// Beyond grace period: assume Claude Code has started and send anyway.
+					t.ready = true
 				}
 			} else {
-				// External session: use ScanWindow which handles the full detection chain.
+				// External session: already running, no startup grace period needed.
 				s := tmux.ScanWindow(sn, t.windowIndex)
 				if s != nil {
 					t.ready = s.Status == session.StatusIdle
