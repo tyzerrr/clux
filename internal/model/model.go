@@ -2155,7 +2155,7 @@ func (m Model) View() tea.View {
 		if m.groupEnabled {
 			groupLabel = "g:group(on)"
 		}
-		b.WriteString(styleHelpBar.Render("Enter:attach  y:approve  n:new  a:add-external  b:broadcast  K:kill  R:refresh  " + previewLabel + "  " + groupLabel + "  d:dash  /:filter  q:quit"))
+		b.WriteString(styleHelpBar.Render("Enter:attach  n:new  a:add-external  b:broadcast  K:kill  " + previewLabel + "  " + groupLabel + "  d:dashboard  /:filter  q:quit"))
 	}
 
 	return newView(b.String())
