@@ -598,10 +598,17 @@ func resetPaneHashes(t *testing.T) {
 	orig := paneContentHashes
 	paneContentHashes = map[string]uint64{}
 	paneContentHashesMu.Unlock()
+	paneDetectCacheMu.Lock()
+	origDetect := paneDetectCache
+	paneDetectCache = map[string]paneDetectResult{}
+	paneDetectCacheMu.Unlock()
 	t.Cleanup(func() {
 		paneContentHashesMu.Lock()
 		paneContentHashes = orig
 		paneContentHashesMu.Unlock()
+		paneDetectCacheMu.Lock()
+		paneDetectCache = origDetect
+		paneDetectCacheMu.Unlock()
 	})
 }
 
@@ -841,5 +848,150 @@ func TestCapturePaneForSessionWithOffset_ZeroOffsetValidation(t *testing.T) {
 		if err.Error() == `invalid window index "0"` || err.Error() == `invalid pane index "0"` {
 			t.Errorf("unexpected validation error with valid indices: %v", err)
 		}
+	}
+}
+
+// --- contentHashUnchanged ---
+
+func TestContentHashUnchanged(t *testing.T) {
+	resetPaneHashes(t)
+
+	key := "test:0.0"
+
+	// No stored hash — returns false
+	if contentHashUnchanged(key, "hello") {
+		t.Error("expected false when no stored hash exists")
+	}
+
+	// Store a hash via contentChanged
+	contentChanged(key, "hello")
+
+	// Same content — returns true
+	if !contentHashUnchanged(key, "hello") {
+		t.Error("expected true for unchanged content")
+	}
+
+	// Different content — returns false
+	if contentHashUnchanged(key, "world") {
+		t.Error("expected false for changed content")
+	}
+
+	// contentHashUnchanged does not update the stored hash,
+	// so checking the original content still matches
+	if !contentHashUnchanged(key, "hello") {
+		t.Error("expected true: contentHashUnchanged should not update stored hash")
+	}
+}
+
+// --- paneDetectCache ---
+
+func TestGetSetCachedResult(t *testing.T) {
+	resetPaneHashes(t)
+
+	key := "test:1.0"
+
+	// No cached result initially
+	_, ok := getCachedResult(key)
+	if ok {
+		t.Error("expected no cached result for new key")
+	}
+
+	// Set and retrieve
+	expected := paneDetectResult{
+		status:       session.StatusWorking,
+		isClaudeCode: true,
+		branch:       "main",
+		summary:      "test summary",
+	}
+	setCachedResult(key, expected)
+
+	got, ok := getCachedResult(key)
+	if !ok {
+		t.Fatal("expected cached result to exist")
+	}
+	if got.status != expected.status {
+		t.Errorf("status = %v, want %v", got.status, expected.status)
+	}
+	if got.isClaudeCode != expected.isClaudeCode {
+		t.Errorf("isClaudeCode = %v, want %v", got.isClaudeCode, expected.isClaudeCode)
+	}
+	if got.branch != expected.branch {
+		t.Errorf("branch = %q, want %q", got.branch, expected.branch)
+	}
+	if got.summary != expected.summary {
+		t.Errorf("summary = %q, want %q", got.summary, expected.summary)
+	}
+}
+
+// --- ClearAllPaneCache ---
+
+func TestClearAllPaneCache(t *testing.T) {
+	resetPaneHashes(t)
+
+	// Populate both caches
+	contentChanged("a:0.0", "content-a")
+	contentChanged("b:1.0", "content-b")
+	setCachedResult("a:0.0", paneDetectResult{status: session.StatusWorking, isClaudeCode: true})
+	setCachedResult("b:1.0", paneDetectResult{status: session.StatusIdle, isClaudeCode: true})
+
+	ClearAllPaneCache()
+
+	// Hash cache should be empty
+	if contentHashUnchanged("a:0.0", "content-a") {
+		t.Error("expected hash cache to be cleared for a:0.0")
+	}
+	if contentHashUnchanged("b:1.0", "content-b") {
+		t.Error("expected hash cache to be cleared for b:1.0")
+	}
+
+	// Detect cache should be empty
+	if _, ok := getCachedResult("a:0.0"); ok {
+		t.Error("expected detect cache to be cleared for a:0.0")
+	}
+	if _, ok := getCachedResult("b:1.0"); ok {
+		t.Error("expected detect cache to be cleared for b:1.0")
+	}
+}
+
+// --- ClearPaneHash clears detect cache ---
+
+func TestClearPaneHash_AlsoClearsDetectCache(t *testing.T) {
+	resetPaneHashes(t)
+
+	contentChanged("sess:0.0", "content")
+	setCachedResult("sess:0.0", paneDetectResult{status: session.StatusIdle, isClaudeCode: true, branch: "main"})
+
+	ClearPaneHash("sess", "0", "0")
+
+	if _, ok := getCachedResult("sess:0.0"); ok {
+		t.Error("expected detect cache to be cleared after ClearPaneHash")
+	}
+}
+
+// --- clearPaneHashByPrefix clears detect cache ---
+
+func TestClearPaneHashByPrefix_AlsoClearsDetectCache(t *testing.T) {
+	resetPaneHashes(t)
+
+	contentChanged("clux:5.0", "content1")
+	contentChanged("clux:5.1", "content2")
+	contentChanged("clux:6.0", "content3")
+	setCachedResult("clux:5.0", paneDetectResult{status: session.StatusWorking, isClaudeCode: true})
+	setCachedResult("clux:5.1", paneDetectResult{status: session.StatusIdle, isClaudeCode: true})
+	setCachedResult("clux:6.0", paneDetectResult{status: session.StatusWaiting, isClaudeCode: true})
+
+	clearPaneHashByPrefix("clux:5.")
+
+	// Entries with prefix "clux:5." should be cleared
+	if _, ok := getCachedResult("clux:5.0"); ok {
+		t.Error("expected clux:5.0 to be cleared")
+	}
+	if _, ok := getCachedResult("clux:5.1"); ok {
+		t.Error("expected clux:5.1 to be cleared")
+	}
+
+	// Entry with different prefix should remain
+	if _, ok := getCachedResult("clux:6.0"); !ok {
+		t.Error("expected clux:6.0 to remain")
 	}
 }

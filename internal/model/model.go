@@ -940,6 +940,7 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "R":
+		tmux.ClearAllPaneCache()
 		return m, fetchSessionsCmdWithExternals(m.cfg)
 
 	case "p":

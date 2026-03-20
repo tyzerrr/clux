@@ -68,6 +68,21 @@ var (
 	paneContentHashesMu sync.Mutex
 )
 
+// paneDetectCache stores the last detected status and branch for each pane,
+// keyed by the same paneKey. When the content hash hasn't changed between
+// ticks, these cached values are reused to skip expensive pgrep/git calls.
+type paneDetectResult struct {
+	status       session.Status
+	isClaudeCode bool
+	branch       string
+	summary      string
+}
+
+var (
+	paneDetectCacheMu sync.Mutex
+	paneDetectCache   = map[string]paneDetectResult{}
+)
+
 // paneKey returns the canonical map key for a pane's content hash.
 func paneKey(sessionName, windowIndex, paneIndex string) string {
 	return sessionName + ":" + windowIndex + "." + paneIndex
@@ -91,23 +106,74 @@ func contentChanged(key string, content string) bool {
 	return prev != hash
 }
 
-// ClearPaneHash removes the stored hash for a pane.
+// ClearPaneHash removes the stored hash and cached detection result for a pane.
 func ClearPaneHash(sessionName, windowIndex, paneIndex string) {
 	key := paneKey(sessionName, windowIndex, paneIndex)
 	paneContentHashesMu.Lock()
-	defer paneContentHashesMu.Unlock()
 	delete(paneContentHashes, key)
+	paneContentHashesMu.Unlock()
+	paneDetectCacheMu.Lock()
+	delete(paneDetectCache, key)
+	paneDetectCacheMu.Unlock()
 }
 
-// clearPaneHashByPrefix removes all stored hashes whose key starts with the given prefix.
+// clearPaneHashByPrefix removes all stored hashes and cached results whose key starts with the given prefix.
 func clearPaneHashByPrefix(prefix string) {
 	paneContentHashesMu.Lock()
-	defer paneContentHashesMu.Unlock()
 	for k := range paneContentHashes {
 		if strings.HasPrefix(k, prefix) {
 			delete(paneContentHashes, k)
 		}
 	}
+	paneContentHashesMu.Unlock()
+	paneDetectCacheMu.Lock()
+	for k := range paneDetectCache {
+		if strings.HasPrefix(k, prefix) {
+			delete(paneDetectCache, k)
+		}
+	}
+	paneDetectCacheMu.Unlock()
+}
+
+// ClearAllPaneCache removes all stored hashes and cached detection results.
+func ClearAllPaneCache() {
+	paneContentHashesMu.Lock()
+	paneContentHashes = map[string]uint64{}
+	paneContentHashesMu.Unlock()
+	paneDetectCacheMu.Lock()
+	paneDetectCache = map[string]paneDetectResult{}
+	paneDetectCacheMu.Unlock()
+}
+
+// contentHashUnchanged checks whether the content hash for the given key
+// matches the stored hash without updating it. Returns true if unchanged.
+// Returns false if content changed or there is no stored hash.
+func contentHashUnchanged(key, content string) bool {
+	h := fnv.New64a()
+	h.Write([]byte(content))
+	hash := h.Sum64()
+	paneContentHashesMu.Lock()
+	defer paneContentHashesMu.Unlock()
+	prev, exists := paneContentHashes[key]
+	if !exists {
+		return false
+	}
+	return prev == hash
+}
+
+// getCachedResult returns the cached detection result for a pane, if any.
+func getCachedResult(key string) (paneDetectResult, bool) {
+	paneDetectCacheMu.Lock()
+	defer paneDetectCacheMu.Unlock()
+	r, ok := paneDetectCache[key]
+	return r, ok
+}
+
+// setCachedResult stores a detection result in the cache.
+func setCachedResult(key string, r paneDetectResult) {
+	paneDetectCacheMu.Lock()
+	defer paneDetectCacheMu.Unlock()
+	paneDetectCache[key] = r
 }
 
 // capturePanesConcurrently captures the plain content of all given panes concurrently.
@@ -175,12 +241,37 @@ func ListWindows() ([]session.Session, error) {
 		if results[i].err != nil {
 			continue
 		}
-		status, isClaudeCode := detectStatusWithHooksForSession(results[i].content, SessionName, w.index, w.paneIndex)
+		content := results[i].content
+		key := paneKey(SessionName, w.index, w.paneIndex)
+
+		// If content hasn't changed and we have a cached result, reuse it.
+		if contentHashUnchanged(key, content) {
+			if cached, ok := getCachedResult(key); ok && cached.isClaudeCode {
+				sessions = append(sessions, session.Session{
+					Name:        w.name,
+					Summary:     cached.summary,
+					Dir:         w.dir,
+					Branch:      cached.branch,
+					Status:      cached.status,
+					WindowIndex: w.index,
+					PaneIndex:   w.paneIndex,
+				})
+				continue
+			}
+		}
+
+		status, isClaudeCode := detectStatusWithHooksForSession(content, SessionName, w.index, w.paneIndex)
+		summary := getWindowSummaryForSession(SessionName, w.index, w.paneIndex)
+		branch := getGitBranch(w.dir)
+		setCachedResult(key, paneDetectResult{
+			status:       status,
+			isClaudeCode: isClaudeCode,
+			branch:       branch,
+			summary:      summary,
+		})
 		if !isClaudeCode {
 			continue
 		}
-		summary := getWindowSummaryForSession(SessionName, w.index, w.paneIndex)
-		branch := getGitBranch(w.dir)
 
 		sessions = append(sessions, session.Session{
 			Name:        w.name,
@@ -271,12 +362,39 @@ func ScanPanes(sessionName, windowIndex string) []session.Session {
 		if captures[i].err != nil {
 			continue
 		}
-		status, isClaudeCode := detectStatusWithHooksForSession(captures[i].content, sessionName, windowIndex, p.paneIndex)
+		content := captures[i].content
+		key := paneKey(sessionName, windowIndex, p.paneIndex)
+
+		// If content hasn't changed and we have a cached result, reuse it.
+		if contentHashUnchanged(key, content) {
+			if cached, ok := getCachedResult(key); ok && cached.isClaudeCode {
+				result = append(result, session.Session{
+					Name:        p.name,
+					Summary:     cached.summary,
+					Dir:         p.dir,
+					Branch:      cached.branch,
+					Status:      cached.status,
+					WindowIndex: windowIndex,
+					PaneIndex:   p.paneIndex,
+					External:    true,
+					SessionName: sessionName,
+				})
+				continue
+			}
+		}
+
+		status, isClaudeCode := detectStatusWithHooksForSession(content, sessionName, windowIndex, p.paneIndex)
+		summary := getWindowSummaryForSession(sessionName, windowIndex, p.paneIndex)
+		branch := getGitBranch(p.dir)
+		setCachedResult(key, paneDetectResult{
+			status:       status,
+			isClaudeCode: isClaudeCode,
+			branch:       branch,
+			summary:      summary,
+		})
 		if !isClaudeCode {
 			continue
 		}
-		summary := getWindowSummaryForSession(sessionName, windowIndex, p.paneIndex)
-		branch := getGitBranch(p.dir)
 		result = append(result, session.Session{
 			Name:        p.name,
 			Summary:     summary,
