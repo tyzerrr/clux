@@ -125,6 +125,7 @@ type Model struct {
 	dashPreviews   map[int]string // windowIndex -> pane content for each session
 	dashPageOffset int            // index of first displayed item in dashboard
 	dashFocused    bool           // true when in single-session focus mode
+	dashboardOnly  bool           // when true, Esc/q quits the app (popup mode)
 
 	// Grouping mode
 	groupEnabled bool   // toggle for grouped display
@@ -189,6 +190,16 @@ func New() Model {
 		dashPreviews:         make(map[int]string),
 		broadcastSelected:    make(map[string]bool),
 	}
+}
+
+// NewDashboard creates a Model that starts directly in dashboard mode.
+// When dashboardOnly is true, Esc/q quits the app instead of returning to list.
+func NewDashboard() Model {
+	m := New()
+	m.mode = ModeDashboard
+	m.dashPreviews = make(map[int]string)
+	m.dashboardOnly = true
+	return m
 }
 
 // --- Accessor methods ---
@@ -1288,10 +1299,21 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.dashFocused = false
 			return m, nil
 		}
+		if m.dashboardOnly {
+			return m, tea.Quit
+		}
 		m.mode = ModeList
 		return m, nil
 	case "q":
 		return m, tea.Quit
+	case "F":
+		if m.dashboardOnly {
+			return m, tea.Quit
+		}
+		go func() {
+			_ = tmux.DisplayPopup("clux", "dashboard")
+		}()
+		return m, nil
 	case "f":
 		if pageItems > 0 {
 			m.dashFocused = !m.dashFocused
@@ -2522,7 +2544,7 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 
 	// Help bar
 	b.WriteString("\n")
-	b.WriteString(styleHelpBar.Render("Enter:attach  y:approve  K:kill  n:new  /:filter  b:broadcast  f:focus  [/]:page  hjkl:navigate  Esc/d:back  q:quit"))
+	b.WriteString(styleHelpBar.Render("Enter:attach  y:approve  K:kill  n:new  /:filter  b:broadcast  f:focus  F:fullscreen  [/]:page  hjkl:navigate  Esc/d:back  q:quit"))
 
 	return b.String()
 }

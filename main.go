@@ -22,8 +22,10 @@ func main() {
 			cmdRemove(os.Args[2:])
 		case "list":
 			cmdList()
+		case "dashboard":
+			cmdDashboard()
 		default:
-			fmt.Fprintf(os.Stderr, "Unknown command: %s\nUsage: clux [add|remove|list]\n", os.Args[1])
+			fmt.Fprintf(os.Stderr, "Unknown command: %s\nUsage: clux [add|remove|list|dashboard]\n", os.Args[1])
 			os.Exit(1)
 		}
 		return
@@ -117,6 +119,18 @@ func cmdRemove(args []string) {
 		os.Exit(1)
 	}
 	fmt.Printf("Unregistered %s:%s\n", sess, win)
+}
+
+func cmdDashboard() {
+	if err := tmux.EnsureSession(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	p := tea.NewProgram(model.NewDashboard())
+	if _, err := p.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 func cmdList() {
