@@ -642,9 +642,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.pendingPrompt != "" && m.pendingPromptTarget != "" {
 			// Check if the deadline has passed.
 			if !m.pendingPromptDeadline.IsZero() && time.Now().After(m.pendingPromptDeadline) {
-				m.pendingPrompt = ""
-				m.pendingPromptTarget = ""
-				m.pendingPromptDeadline = time.Time{}
+				m = m.clearPendingPrompt()
 				m.err = fmt.Errorf("pending prompt timed out: session did not become idle within 120s")
 			} else {
 				targetFound := false
@@ -654,9 +652,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if s.Status == session.StatusIdle {
 							prompt := m.pendingPrompt
 							target := m.pendingPromptTarget
-							m.pendingPrompt = ""
-							m.pendingPromptTarget = ""
-							m.pendingPromptDeadline = time.Time{}
+							m = m.clearPendingPrompt()
 							cmds = append(cmds, func() tea.Msg {
 								_ = tmux.SendKeysLiteral(tmux.SessionName, target, "0", prompt)
 								return fetchSessionsCmdWithExternals(m.cfg)()
@@ -667,9 +663,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				// If target window was not found in sessions, it was killed.
 				if !targetFound {
-					m.pendingPrompt = ""
-					m.pendingPromptTarget = ""
-					m.pendingPromptDeadline = time.Time{}
+					m = m.clearPendingPrompt()
 					m.err = fmt.Errorf("pending prompt cancelled: target window no longer exists")
 				}
 			}
@@ -1092,6 +1086,14 @@ func (m Model) clearConfirm() Model {
 	m.confirmExternal = false
 	m.confirmSessionName = ""
 	m.mode = ModeList
+	return m
+}
+
+// clearPendingPrompt resets all pending-prompt fields.
+func (m Model) clearPendingPrompt() Model {
+	m.pendingPrompt = ""
+	m.pendingPromptTarget = ""
+	m.pendingPromptDeadline = time.Time{}
 	return m
 }
 
@@ -1690,8 +1692,7 @@ func previewHeight(m Model) int {
 	if maxPreviewHeight < 1 {
 		return 0
 	}
-	available := m.height - topLines - 1 - 1
-	h := available / 2
+	h := maxPreviewHeight / 2
 	if h < 5 {
 		h = 5
 	}
@@ -1787,7 +1788,11 @@ func placeOverlay(bg, fg string, bgWidth, bgHeight int) string {
 		if bgIdx >= len(bgLines) {
 			break
 		}
-		padded := fgLine + strings.Repeat(" ", fgWidth-lipgloss.Width(fgLine))
+		pad := fgWidth - lipgloss.Width(fgLine)
+		if pad < 0 {
+			pad = 0
+		}
+		padded := fgLine + strings.Repeat(" ", pad)
 		bgLines[bgIdx] = leftPad + padded
 	}
 
@@ -1796,18 +1801,22 @@ func placeOverlay(bg, fg string, bgWidth, bgHeight int) string {
 
 const overlayBorderPadding = 6 // Border(2) + Padding(1,2)*2 = 6
 
-func clamp(val, min, max int) int {
-	if val < min {
-		return min
-	}
-	if val > max {
-		return max
-	}
-	return val
+func (m Model) overlayWidth(pct, minW, maxW int) int {
+	return min(max(m.width*pct/100, minW), maxW)
 }
 
-func (m Model) overlayDims(widthPct, minW, maxW, heightPct, minH, maxH int) (int, int) {
-	return clamp(m.width*widthPct/100, minW, maxW), clamp(m.height*heightPct/100, minH, maxH)
+func (m Model) overlayHeight(pct, minH, maxH int) int {
+	return min(max(m.height*pct/100, minH), maxH)
+}
+
+// overlayListDims returns the standard overlay dimensions for list-style modals.
+func (m Model) overlayListDims() (int, int) {
+	return m.overlayWidth(60, 60, 100), m.overlayHeight(60, 10, 25)
+}
+
+// overlayListHeight returns the number of visible list items for a given overlay height.
+func overlayListHeight(overlayHeight int) int {
+	return min(max(overlayHeight-10, 3), overlayHeight)
 }
 
 func renderOverlayBox(content string, overlayWidth int) string {
@@ -1828,17 +1837,8 @@ func (m Model) viewWithOverlay(viewFn func(*strings.Builder) string) tea.View {
 	return newView(overlay)
 }
 
-// viewListBase renders the session list view dimmed, used as overlay background.
-func (m Model) viewListBase() string {
-	var b strings.Builder
-
-	header := fmt.Sprintf("Clux — Sessions (%d)", len(m.filtered))
-	if summary := statusSummary(m.filtered); summary != "" {
-		header += " — " + summary
-	}
-	b.WriteString(styleHeader.Render(header))
-	b.WriteString("\n\n")
-
+// columnWidths returns the name and branch column widths based on terminal width.
+func (m Model) columnWidths() (int, int) {
 	nameWidth := 20
 	branchWidth := 15
 	if m.width > 100 {
@@ -1846,13 +1846,15 @@ func (m Model) viewListBase() string {
 	} else if m.width > 80 {
 		nameWidth = 25
 	}
+	return nameWidth, branchWidth
+}
 
-	if len(m.filtered) == 0 {
-		b.WriteString("No Claude Code sessions found.\n")
-	} else if m.groupEnabled {
-		groups := buildGroups(m.filtered, m.ghqRoot)
-		b.WriteString(styleHelpBar.Render(fmt.Sprintf(" %-16s %-*s  %-*s %s", "Status", nameWidth, "Name", branchWidth, "Branch", "Dir")))
-		b.WriteString("\n")
+// renderSessionRows writes session rows (grouped or flat) to the builder.
+// groups must be non-nil when m.groupEnabled is true.
+func (m Model) renderSessionRows(b *strings.Builder, groups []sessionGroup, nameWidth, branchWidth int) {
+	b.WriteString(styleHelpBar.Render(fmt.Sprintf(" %-16s %-*s  %-*s %s", "Status", nameWidth, "Name", branchWidth, "Branch", "Dir")))
+	b.WriteString("\n")
+	if m.groupEnabled {
 		for _, g := range groups {
 			groupHeader := fmt.Sprintf("── %s (%d) ", g.name, len(g.sessions))
 			remaining := m.width - len([]rune(groupHeader))
@@ -1882,8 +1884,6 @@ func (m Model) viewListBase() string {
 			}
 		}
 	} else {
-		b.WriteString(styleHelpBar.Render(fmt.Sprintf(" %-16s %-*s  %-*s %s", "Status", nameWidth, "Name", branchWidth, "Branch", "Dir")))
-		b.WriteString("\n")
 		for i, s := range m.filtered {
 			statusText := statusStyle(s.Status).Render(fmt.Sprintf("%s %-7s", s.Status.Icon(), s.Status.String()))
 			displayName := s.DisplayName()
@@ -1902,6 +1902,30 @@ func (m Model) viewListBase() string {
 			b.WriteString(row)
 			b.WriteString("\n")
 		}
+	}
+}
+
+// viewListBase renders the session list view dimmed, used as overlay background.
+func (m Model) viewListBase() string {
+	var b strings.Builder
+
+	header := fmt.Sprintf("Clux — Sessions (%d)", len(m.filtered))
+	if summary := statusSummary(m.filtered); summary != "" {
+		header += " — " + summary
+	}
+	b.WriteString(styleHeader.Render(header))
+	b.WriteString("\n\n")
+
+	nameWidth, branchWidth := m.columnWidths()
+
+	if len(m.filtered) == 0 {
+		b.WriteString("No Claude Code sessions found.\n")
+	} else {
+		var groups []sessionGroup
+		if m.groupEnabled {
+			groups = buildGroups(m.filtered, m.ghqRoot)
+		}
+		m.renderSessionRows(&b, groups, nameWidth, branchWidth)
 	}
 
 	return styleDimmed.Render(b.String())
@@ -1963,75 +1987,17 @@ func (m Model) View() tea.View {
 		b.WriteString("\n\n")
 	}
 
-	// Calculate column widths based on terminal width.
-	nameWidth := 20
-	branchWidth := 15
-	if m.width > 100 {
-		nameWidth = 30
-	} else if m.width > 80 {
-		nameWidth = 25
-	}
+	nameWidth, branchWidth := m.columnWidths()
 
 	// Session list.
+	var groups []sessionGroup
 	if len(m.filtered) == 0 {
 		b.WriteString("No Claude Code sessions found. Start Claude Code in another tmux session.\n")
-	} else if m.groupEnabled {
-		// Grouped display.
-		groups := buildGroups(m.filtered, m.ghqRoot)
-		b.WriteString(styleHelpBar.Render(fmt.Sprintf(" %-16s %-*s  %-*s %s", "Status", nameWidth, "Name", branchWidth, "Branch", "Dir")))
-		b.WriteString("\n")
-		for _, g := range groups {
-			// Group header.
-			groupHeader := fmt.Sprintf("── %s (%d) ", g.name, len(g.sessions))
-			remaining := m.width - len([]rune(groupHeader))
-			if remaining > 0 {
-				groupHeader += strings.Repeat("─", remaining)
-			}
-			b.WriteString(styleGroupHeader.Render(groupHeader))
-			b.WriteString("\n")
-			// Sessions in group.
-			for _, is := range g.sessions {
-				s := is.session
-				statusText := statusStyle(s.Status).Render(fmt.Sprintf("%s %-7s", s.Status.Icon(), s.Status.String()))
-				displayName := s.DisplayName()
-				if runes := []rune(displayName); len(runes) > nameWidth {
-					displayName = string(runes[:nameWidth-1]) + "…"
-				}
-				branch := s.Branch
-				if runes := []rune(branch); len(runes) > branchWidth {
-					branch = string(runes[:branchWidth-1]) + "…"
-				}
-				dir := styleDir.Render(shortenDir(s.Dir))
-				row := fmt.Sprintf("   %s  %-*s  %-*s %s", statusText, nameWidth, displayName, branchWidth, branch, dir)
-				if is.index == m.cursor {
-					row = styleSelected.Render(row)
-				}
-				b.WriteString(row)
-				b.WriteString("\n")
-			}
-		}
 	} else {
-		// Flat display.
-		b.WriteString(styleHelpBar.Render(fmt.Sprintf(" %-16s %-*s  %-*s %s", "Status", nameWidth, "Name", branchWidth, "Branch", "Dir")))
-		b.WriteString("\n")
-		for i, s := range m.filtered {
-			statusText := statusStyle(s.Status).Render(fmt.Sprintf("%s %-7s", s.Status.Icon(), s.Status.String()))
-			displayName := s.DisplayName()
-			if runes := []rune(displayName); len(runes) > nameWidth {
-				displayName = string(runes[:nameWidth-1]) + "…"
-			}
-			branch := s.Branch
-			if runes := []rune(branch); len(runes) > branchWidth {
-				branch = string(runes[:branchWidth-1]) + "…"
-			}
-			dir := styleDir.Render(shortenDir(s.Dir))
-			row := fmt.Sprintf(" %s  %-*s  %-*s %s", statusText, nameWidth, displayName, branchWidth, branch, dir)
-			if i == m.cursor {
-				row = styleSelected.Render(row)
-			}
-			b.WriteString(row)
-			b.WriteString("\n")
+		if m.groupEnabled {
+			groups = buildGroups(m.filtered, m.ghqRoot)
 		}
+		m.renderSessionRows(&b, groups, nameWidth, branchWidth)
 	}
 
 	b.WriteString("\n")
@@ -2041,8 +2007,7 @@ func (m Model) View() tea.View {
 		// Calculate layout.
 		// Top section: header(2) + col-header(1) + sessions + blank(1)
 		sessionRows := len(m.filtered)
-		if m.groupEnabled {
-			groups := buildGroups(m.filtered, m.ghqRoot)
+		if m.groupEnabled && groups != nil {
 			sessionRows = groupedSessionRows(groups)
 		}
 		topLines := 2 + 1 + sessionRows + 1
@@ -2144,7 +2109,7 @@ func (m Model) View() tea.View {
 }
 
 func (m Model) viewNewSession(b *strings.Builder) string {
-	overlayWidth, overlayHeight := m.overlayDims(60, 60, 100, 60, 10, 25)
+	overlayWidth, overlayHeight := m.overlayListDims()
 
 	if m.err != nil {
 		b.WriteString(styleError.Render("Error: " + m.err.Error()))
@@ -2156,7 +2121,7 @@ func (m Model) viewNewSession(b *strings.Builder) string {
 	b.WriteString(m.newSessionInput.View())
 	b.WriteString("\n\n")
 
-	listHeight := clamp(overlayHeight-10, 3, overlayHeight)
+	listHeight := overlayListHeight(overlayHeight)
 
 	if len(m.filteredDirs) == 0 {
 		b.WriteString(styleHelpBar.Render(" No repositories found."))
@@ -2191,7 +2156,7 @@ func (m Model) viewNewSession(b *strings.Builder) string {
 }
 
 func (m Model) viewNewSessionPrompt(b *strings.Builder) string {
-	overlayWidth, _ := m.overlayDims(50, 60, 80, 0, 0, 0)
+	overlayWidth := m.overlayWidth(50, 60, 80)
 
 	b.WriteString(styleOverlayTitle.Render("New Session — Initial Prompt"))
 	b.WriteString("\n\n")
@@ -2210,7 +2175,7 @@ func (m Model) viewNewSessionPrompt(b *strings.Builder) string {
 }
 
 func (m Model) viewAddExternal(b *strings.Builder) string {
-	overlayWidth, overlayHeight := m.overlayDims(60, 60, 100, 60, 10, 25)
+	overlayWidth, overlayHeight := m.overlayListDims()
 
 	if m.err != nil {
 		b.WriteString(styleError.Render("Error: " + m.err.Error()))
@@ -2222,7 +2187,7 @@ func (m Model) viewAddExternal(b *strings.Builder) string {
 	b.WriteString(m.addExtInput.View())
 	b.WriteString("\n\n")
 
-	listHeight := clamp(overlayHeight-10, 3, overlayHeight)
+	listHeight := overlayListHeight(overlayHeight)
 
 	if len(m.filteredExtWindows) == 0 {
 		b.WriteString(styleHelpBar.Render(" No external windows found."))
@@ -2467,7 +2432,7 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 }
 
 func (m Model) viewBroadcastSelect(b *strings.Builder) string {
-	overlayWidth, overlayHeight := m.overlayDims(60, 60, 100, 60, 10, 25)
+	overlayWidth, overlayHeight := m.overlayListDims()
 
 	if m.err != nil {
 		b.WriteString(styleError.Render("Error: " + m.err.Error()))
@@ -2487,7 +2452,7 @@ func (m Model) viewBroadcastSelect(b *strings.Builder) string {
 	b.WriteString(m.broadcastInput.View())
 	b.WriteString("\n\n")
 
-	listHeight := clamp(overlayHeight-10, 3, overlayHeight)
+	listHeight := overlayListHeight(overlayHeight)
 
 	if len(m.broadcastFiltered) == 0 {
 		b.WriteString(styleHelpBar.Render(" No repositories found."))
@@ -2527,7 +2492,7 @@ func (m Model) viewBroadcastSelect(b *strings.Builder) string {
 }
 
 func (m Model) viewBroadcastPrompt(b *strings.Builder) string {
-	overlayWidth, _ := m.overlayDims(50, 60, 80, 0, 0, 0)
+	overlayWidth := m.overlayWidth(50, 60, 80)
 
 	selectedCount := len(m.broadcastTargets)
 	b.WriteString(styleOverlayTitle.Render(fmt.Sprintf("Broadcast — Enter Prompt (%d repos selected)", selectedCount)))

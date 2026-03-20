@@ -3,6 +3,7 @@ package tmux
 import (
 	"fmt"
 	"hash/fnv"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -88,14 +89,19 @@ func paneKey(sessionName, windowIndex, paneIndex string) string {
 	return sessionName + ":" + windowIndex + "." + paneIndex
 }
 
+// hashContent computes the FNV-1a hash of a string.
+func hashContent(content string) uint64 {
+	h := fnv.New64a()
+	_, _ = io.WriteString(h, content)
+	return h.Sum64()
+}
+
 // contentChanged compares the current content hash with the stored hash.
 // Returns true if content changed since the last call. Updates the stored hash.
 // On the first call for a given key (no previous hash), returns false —
 // we cannot assume Working just because we haven't seen the pane before.
 func contentChanged(key string, content string) bool {
-	h := fnv.New64a()
-	h.Write([]byte(content))
-	hash := h.Sum64()
+	hash := hashContent(content)
 	paneContentHashesMu.Lock()
 	defer paneContentHashesMu.Unlock()
 	prev, exists := paneContentHashes[key]
@@ -149,9 +155,7 @@ func ClearAllPaneCache() {
 // matches the stored hash without updating it. Returns true if unchanged.
 // Returns false if content changed or there is no stored hash.
 func contentHashUnchanged(key, content string) bool {
-	h := fnv.New64a()
-	h.Write([]byte(content))
-	hash := h.Sum64()
+	hash := hashContent(content)
 	paneContentHashesMu.Lock()
 	defer paneContentHashesMu.Unlock()
 	prev, exists := paneContentHashes[key]
