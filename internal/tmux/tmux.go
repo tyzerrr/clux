@@ -45,19 +45,20 @@ func EnsureSession() error {
 	return nil
 }
 
-// windowInfo holds parsed window metadata from list-windows.
+// windowInfo holds parsed window metadata from list-panes.
 type windowInfo struct {
-	index string
-	name  string
-	dir   string
+	index     string
+	paneIndex string
+	name      string
+	dir       string
 }
 
-// ListWindows returns all windows in the clux session that are running Claude Code, with their status.
+// ListWindows returns all panes in the clux session that are running Claude Code, with their status.
 // Pane captures are run concurrently to minimize latency.
 func ListWindows() ([]session.Session, error) {
-	out, err := exec.Command("tmux", "list-windows", "-t", SessionName, "-F", "#{window_index}\t#{window_name}\t#{pane_current_path}").Output()
+	out, err := exec.Command("tmux", "list-panes", "-s", "-t", SessionName, "-F", "#{window_index}\t#{pane_index}\t#{window_name}\t#{pane_current_path}").Output()
 	if err != nil {
-		return nil, fmt.Errorf("listing windows: %w", err)
+		return nil, fmt.Errorf("listing panes: %w", err)
 	}
 
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
@@ -67,15 +68,19 @@ func ListWindows() ([]session.Session, error) {
 		if line == "" {
 			continue
 		}
-		parts := strings.SplitN(line, "\t", 3)
-		if len(parts) < 3 {
+		parts := strings.SplitN(line, "\t", 4)
+		if len(parts) < 4 {
 			continue
 		}
 		idx := parts[0]
 		if !validWindowIndex.MatchString(idx) {
 			continue
 		}
-		windows = append(windows, windowInfo{index: idx, name: parts[1], dir: parts[2]})
+		paneIdx := parts[1]
+		if !validWindowIndex.MatchString(paneIdx) {
+			continue
+		}
+		windows = append(windows, windowInfo{index: idx, paneIndex: paneIdx, name: parts[2], dir: parts[3]})
 	}
 
 	if len(windows) == 0 {
@@ -91,11 +96,11 @@ func ListWindows() ([]session.Session, error) {
 	var wg sync.WaitGroup
 	for i, w := range windows {
 		wg.Add(1)
-		go func(i int, idx string) {
+		go func(i int, idx, paneIdx string) {
 			defer wg.Done()
-			content, err := capturePaneContentForSession(SessionName, idx)
+			content, err := capturePaneContentForSession(SessionName, idx, paneIdx)
 			results[i] = captureResult{content: content, err: err}
-		}(i, w.index)
+		}(i, w.index, w.paneIndex)
 	}
 	wg.Wait()
 
@@ -104,11 +109,11 @@ func ListWindows() ([]session.Session, error) {
 		if results[i].err != nil {
 			continue
 		}
-		status, isClaudeCode := detectStatusWithHooksForSession(results[i].content, SessionName, w.index)
+		status, isClaudeCode := detectStatusWithHooksForSession(results[i].content, SessionName, w.index, w.paneIndex)
 		if !isClaudeCode {
 			continue
 		}
-		summary := getWindowSummaryForSession(SessionName, w.index)
+		summary := getWindowSummaryForSession(SessionName, w.index, w.paneIndex)
 		branch := getGitBranch(w.dir)
 
 		sessions = append(sessions, session.Session{
@@ -118,6 +123,7 @@ func ListWindows() ([]session.Session, error) {
 			Branch:      branch,
 			Status:      status,
 			WindowIndex: w.index,
+			PaneIndex:   w.paneIndex,
 		})
 	}
 
@@ -125,53 +131,47 @@ func ListWindows() ([]session.Session, error) {
 }
 
 // ListExternalWindows returns sessions for each registered external tmux session:window.
-// Windows that no longer exist (stale registrations) are silently skipped.
-// Scans are run concurrently.
+// All panes within each window are scanned; windows that no longer exist (stale registrations)
+// are silently skipped. Scans are run concurrently.
 func ListExternalWindows(externals []config.ExternalSession) []session.Session {
 	if len(externals) == 0 {
 		return nil
 	}
 
-	type result struct {
-		s  *session.Session
-		ok bool
-	}
-	results := make([]result, len(externals))
+	results := make([][]session.Session, len(externals))
 	var wg sync.WaitGroup
 	for i, ext := range externals {
 		wg.Add(1)
 		go func(i int, ext config.ExternalSession) {
 			defer wg.Done()
-			s := ScanWindow(ext.Session, ext.Window)
-			if s != nil {
-				results[i] = result{s: s, ok: true}
-			}
+			results[i] = ScanPanes(ext.Session, ext.Window)
 		}(i, ext)
 	}
 	wg.Wait()
 
 	var sessions []session.Session
-	for _, r := range results {
-		if r.ok {
-			sessions = append(sessions, *r.s)
-		}
+	for _, ss := range results {
+		sessions = append(sessions, ss...)
 	}
 	return sessions
 }
 
-// ScanWindow checks if a specific session:window exists and returns a Session if it contains Claude Code.
-// Returns nil if the window doesn't exist or doesn't contain Claude Code.
-func ScanWindow(sessionName, windowIndex string) *session.Session {
+// ScanPanes checks all panes in a specific session:window and returns Sessions for those containing Claude Code.
+// Returns an empty slice if the window doesn't exist or no panes contain Claude Code.
+func ScanPanes(sessionName, windowIndex string) []session.Session {
+	if sessionName == "" {
+		return nil
+	}
 	if !validWindowIndex.MatchString(windowIndex) {
 		return nil
 	}
-	// Get window metadata via list-windows.
-	out, err := exec.Command("tmux", "list-windows", "-t", sessionName, "-F", "#{window_index}\t#{window_name}\t#{pane_current_path}").Output()
+	// Get pane metadata via list-panes for this window.
+	out, err := exec.Command("tmux", "list-panes", "-t", sessionName+":"+windowIndex, "-F", "#{pane_index}\t#{window_name}\t#{pane_current_path}").Output()
 	if err != nil {
 		return nil
 	}
-	var info *windowInfo
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	var panes []windowInfo
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -181,38 +181,68 @@ func ScanWindow(sessionName, windowIndex string) *session.Session {
 		if len(parts) < 3 {
 			continue
 		}
-		if parts[0] == windowIndex {
-			info = &windowInfo{index: parts[0], name: parts[1], dir: parts[2]}
-			break
+		paneIdx := parts[0]
+		if !validWindowIndex.MatchString(paneIdx) {
+			continue
 		}
+		panes = append(panes, windowInfo{index: windowIndex, paneIndex: paneIdx, name: parts[1], dir: parts[2]})
 	}
-	if info == nil {
+	if len(panes) == 0 {
 		return nil
 	}
 
-	content, err := capturePaneContentForSession(sessionName, windowIndex)
-	if err != nil {
+	// Capture pane content concurrently.
+	type captureResult struct {
+		content string
+		err     error
+	}
+	captures := make([]captureResult, len(panes))
+	var wg sync.WaitGroup
+	for i, p := range panes {
+		wg.Add(1)
+		go func(i int, paneIdx string) {
+			defer wg.Done()
+			content, err := capturePaneContentForSession(sessionName, windowIndex, paneIdx)
+			captures[i] = captureResult{content: content, err: err}
+		}(i, p.paneIndex)
+	}
+	wg.Wait()
+
+	var result []session.Session
+	for i, p := range panes {
+		if captures[i].err != nil {
+			continue
+		}
+		status, isClaudeCode := detectStatusWithHooksForSession(captures[i].content, sessionName, windowIndex, p.paneIndex)
+		if !isClaudeCode {
+			continue
+		}
+		summary := getWindowSummaryForSession(sessionName, windowIndex, p.paneIndex)
+		branch := getGitBranch(p.dir)
+		result = append(result, session.Session{
+			Name:        p.name,
+			Summary:     summary,
+			Dir:         p.dir,
+			Branch:      branch,
+			Status:      status,
+			WindowIndex: windowIndex,
+			PaneIndex:   p.paneIndex,
+			External:    true,
+			SessionName: sessionName,
+		})
+	}
+	return result
+}
+
+// ScanWindow checks if a specific session:window exists and returns a Session if it contains Claude Code.
+// It scans all panes and returns the first Claude Code pane found.
+// Returns nil if the window doesn't exist or no panes contain Claude Code.
+func ScanWindow(sessionName, windowIndex string) *session.Session {
+	results := ScanPanes(sessionName, windowIndex)
+	if len(results) == 0 {
 		return nil
 	}
-
-	status, isClaudeCode := detectStatusWithHooksForSession(content, sessionName, windowIndex)
-	if !isClaudeCode {
-		return nil
-	}
-
-	summary := getWindowSummaryForSession(sessionName, windowIndex)
-	branch := getGitBranch(info.dir)
-
-	return &session.Session{
-		Name:        info.name,
-		Summary:     summary,
-		Dir:         info.dir,
-		Branch:      branch,
-		Status:      status,
-		WindowIndex: windowIndex,
-		External:    true,
-		SessionName: sessionName,
-	}
+	return &results[0]
 }
 
 // ExternalWindowInfo holds metadata for a window in any tmux session.
@@ -276,8 +306,8 @@ func currentClientSession() string {
 	return strings.TrimSpace(string(out))
 }
 
-// switchClientGrouped switches the current tmux client to display the given window in the
-// base clux session, using grouped sessions so multiple clients can independently track
+// switchClientGrouped switches the current tmux client to display the given window (and pane)
+// in the base clux session, using grouped sessions so multiple clients can independently track
 // different windows.
 //
 // If the client is in the base clux session, it switches directly. If the client is in a
@@ -285,7 +315,7 @@ func currentClientSession() string {
 // For clients outside the clux session group, a new grouped session is created with
 // destroy-unattached so it is cleaned up automatically. All failure paths fall back to the
 // base clux session.
-func switchClientGrouped(windowIndex string) error {
+func switchClientGrouped(windowIndex, paneIndex string) error {
 	// Verify the window exists via display-message (has-session only checks sessions).
 	baseTarget := SessionName + ":" + windowIndex
 	out, err := exec.Command("tmux", "display-message", "-t", baseTarget, "-p", "#{window_index}").Output()
@@ -307,6 +337,8 @@ func switchClientGrouped(windowIndex string) error {
 		if err := exec.Command("tmux", "select-window", "-t", baseTarget).Run(); err != nil {
 			return fmt.Errorf("selecting window %q: %w", windowIndex, err)
 		}
+		paneTarget := SessionName + ":" + windowIndex + "." + paneIndex
+		_ = exec.Command("tmux", "select-pane", "-t", paneTarget).Run()
 		if err := exec.Command("tmux", "switch-client", "-t", baseTarget).Run(); err != nil {
 			return fmt.Errorf("switching client to %q: %w", baseTarget, err)
 		}
@@ -328,6 +360,8 @@ func switchClientGrouped(windowIndex string) error {
 		_ = exec.Command("tmux", "kill-session", "-t", newSession).Run()
 		return switchToBase(baseTarget, windowIndex)
 	}
+	paneTarget := newSession + ":" + windowIndex + "." + paneIndex
+	_ = exec.Command("tmux", "select-pane", "-t", paneTarget).Run()
 	if err := exec.Command("tmux", "switch-client", "-t", target).Run(); err != nil {
 		_ = exec.Command("tmux", "kill-session", "-t", newSession).Run()
 		return switchToBase(baseTarget, windowIndex)
@@ -367,7 +401,7 @@ func CreateWindow(name, dir string) error {
 		}
 		return nil
 	}
-	return switchClientGrouped(newIndex)
+	return switchClientGrouped(newIndex, "0")
 }
 
 // CreateWindowSilent creates a new window in the clux session with the given name and directory,
@@ -386,14 +420,14 @@ func CreateWindowSilent(name, dir string) (string, error) {
 	return newIndex, nil
 }
 
-// GetWindowStatus captures the pane content for a given session:window and returns its status.
-// Returns (status, true) if the window contains Claude Code, or (StatusUnknown, false) otherwise.
-func GetWindowStatus(sessionName, windowIndex string) (session.Status, bool) {
-	content, err := capturePaneContentForSession(sessionName, windowIndex)
+// GetWindowStatus captures the pane content for a given session:window.pane and returns its status.
+// Returns (status, true) if the pane contains Claude Code, or (StatusUnknown, false) otherwise.
+func GetWindowStatus(sessionName, windowIndex, paneIndex string) (session.Status, bool) {
+	content, err := capturePaneContentForSession(sessionName, windowIndex, paneIndex)
 	if err != nil {
 		return session.StatusUnknown, false
 	}
-	status, isClaudeCode := detectStatusWithHooksForSession(content, sessionName, windowIndex)
+	status, isClaudeCode := detectStatusWithHooksForSession(content, sessionName, windowIndex, paneIndex)
 	return status, isClaudeCode
 }
 
@@ -442,61 +476,72 @@ func sanitizeWindowName(name string) string {
 	return s
 }
 
-// SwitchWindow selects a window in the clux session by its window index.
-func SwitchWindow(windowIndex string) error {
-	return SwitchToWindow(SessionName, windowIndex)
+// SwitchWindow selects a window in the clux session by its window index and pane index.
+func SwitchWindow(windowIndex, paneIndex string) error {
+	return SwitchToWindow(SessionName, windowIndex, paneIndex)
 }
 
-// SwitchToWindow selects a window in the given tmux session by its window index,
+// SwitchToWindow selects a window (and pane) in the given tmux session by its window index,
 // then switches the client to that session to ensure visibility.
 // For the base clux session, a grouped session is used so multiple clients can
 // independently view different windows. For external sessions the switch is direct.
-func SwitchToWindow(sessionName, windowIndex string) error {
+func SwitchToWindow(sessionName, windowIndex, paneIndex string) error {
 	if !validWindowIndex.MatchString(windowIndex) {
 		return fmt.Errorf("invalid window index %q", windowIndex)
 	}
+	if !validWindowIndex.MatchString(paneIndex) {
+		return fmt.Errorf("invalid pane index %q", paneIndex)
+	}
 	// For the base clux session use grouped-session switching.
 	if sessionName == SessionName {
-		return switchClientGrouped(windowIndex)
+		return switchClientGrouped(windowIndex, paneIndex)
 	}
 	// For external sessions, switch directly.
 	target := sessionName + ":" + windowIndex
 	if err := exec.Command("tmux", "select-window", "-t", target).Run(); err != nil {
 		return fmt.Errorf("switching to window %q in session %q: %w", windowIndex, sessionName, err)
 	}
+	paneTarget := sessionName + ":" + windowIndex + "." + paneIndex
+	_ = exec.Command("tmux", "select-pane", "-t", paneTarget).Run()
 	if err := exec.Command("tmux", "switch-client", "-t", target).Run(); err != nil {
 		return fmt.Errorf("switching client to session %q: %w", sessionName, err)
 	}
 	return nil
 }
 
-// SendKeys sends a key sequence to a window's first pane.
-func SendKeys(sessionName, windowIndex, keys string) error {
+// SendKeys sends a key sequence to a specific pane in a window.
+func SendKeys(sessionName, windowIndex, paneIndex, keys string) error {
 	if !validWindowIndex.MatchString(windowIndex) {
 		return fmt.Errorf("invalid window index %q", windowIndex)
 	}
-	target := sessionName + ":" + windowIndex
+	if !validWindowIndex.MatchString(paneIndex) {
+		return fmt.Errorf("invalid pane index %q", paneIndex)
+	}
+	target := sessionName + ":" + windowIndex + "." + paneIndex
 	if err := exec.Command("tmux", "send-keys", "-t", target, keys, "Enter").Run(); err != nil {
-		return fmt.Errorf("sending keys to window %q in session %q: %w", windowIndex, sessionName, err)
+		return fmt.Errorf("sending keys to window %q pane %q in session %q: %w", windowIndex, paneIndex, sessionName, err)
 	}
 	return nil
 }
 
-// SendKeysLiteral sends text literally (no key name interpretation) to a window's first pane,
+// SendKeysLiteral sends text literally (no key name interpretation) to a specific pane in a window,
 // then sends Enter as a separate key press. This is safe for arbitrary prompt text that may
 // contain characters tmux would otherwise interpret as key names (e.g., "Up", "C-c").
-func SendKeysLiteral(sessionName, windowIndex, text string) error {
+func SendKeysLiteral(sessionName, windowIndex, paneIndex, text string) error {
 	if !validWindowIndex.MatchString(windowIndex) {
 		return fmt.Errorf("invalid window index %q", windowIndex)
 	}
-	target := sessionName + ":" + windowIndex
+	if !validWindowIndex.MatchString(paneIndex) {
+		return fmt.Errorf("invalid pane index %q", paneIndex)
+	}
+	target := sessionName + ":" + windowIndex + "." + paneIndex
 	// -l sends the text literally, preventing tmux from interpreting key names.
 	if err := exec.Command("tmux", "send-keys", "-l", "-t", target, text).Run(); err != nil {
-		return fmt.Errorf("sending literal keys to window %q in session %q: %w", windowIndex, sessionName, err)
+		return fmt.Errorf("sending literal keys to window %q pane %q in session %q: %w", windowIndex, paneIndex, sessionName, err)
 	}
 	// Send Enter separately so it is interpreted as the actual Enter key.
 	if err := exec.Command("tmux", "send-keys", "-t", target, "Enter").Run(); err != nil {
-		return fmt.Errorf("sending Enter to window %q in session %q: %w", windowIndex, sessionName, err)
+		return fmt.Errorf("sending Enter to window %q pane %q in session %q: %w", windowIndex, paneIndex, sessionName, err)
 	}
 	return nil
 }
@@ -512,37 +557,48 @@ func KillWindow(windowIndex string) error {
 	return nil
 }
 
-// CapturePane captures the visible content of a window's first pane in the clux session
-// with ANSI escape sequences preserved for colored output.
-// windowIndex must be a numeric string.
-func CapturePane(windowIndex string) (string, error) {
-	return CapturePaneForSession(SessionName, windowIndex)
+// validatePaneTarget returns an error if either index is not a valid numeric string.
+func validatePaneTarget(windowIndex, paneIndex string) error {
+	if !validWindowIndex.MatchString(windowIndex) {
+		return fmt.Errorf("invalid window index %q", windowIndex)
+	}
+	if !validWindowIndex.MatchString(paneIndex) {
+		return fmt.Errorf("invalid pane index %q", paneIndex)
+	}
+	return nil
 }
 
-// CapturePaneForSession captures the visible content of a window's first pane
+// CapturePane captures the visible content of a specific pane in the clux session
+// with ANSI escape sequences preserved for colored output.
+// windowIndex and paneIndex must be numeric strings.
+func CapturePane(windowIndex, paneIndex string) (string, error) {
+	return CapturePaneForSession(SessionName, windowIndex, paneIndex)
+}
+
+// CapturePaneForSession captures the visible content of a specific pane
 // in the specified tmux session, with ANSI escape sequences preserved.
-// windowIndex must be a numeric string.
-func CapturePaneForSession(sessionName, windowIndex string) (string, error) {
-	if !validWindowIndex.MatchString(windowIndex) {
-		return "", fmt.Errorf("invalid window index %q", windowIndex)
+// windowIndex and paneIndex must be numeric strings.
+func CapturePaneForSession(sessionName, windowIndex, paneIndex string) (string, error) {
+	if err := validatePaneTarget(windowIndex, paneIndex); err != nil {
+		return "", err
 	}
-	target := sessionName + ":" + windowIndex + ".0"
+	target := sessionName + ":" + windowIndex + "." + paneIndex
 	out, err := exec.Command("tmux", "capture-pane", "-t", target, "-e", "-p").Output()
 	if err != nil {
-		return "", fmt.Errorf("capturing pane for window %q in session %q: %w", windowIndex, sessionName, err)
+		return "", fmt.Errorf("capturing pane for window %q pane %q in session %q: %w", windowIndex, paneIndex, sessionName, err)
 	}
 	return string(out), nil
 }
 
-// capturePaneContentForSession captures the plain (no ANSI) content of the first pane in a window.
-func capturePaneContentForSession(sessionName, windowIndex string) (string, error) {
-	if !validWindowIndex.MatchString(windowIndex) {
-		return "", fmt.Errorf("invalid window index %q", windowIndex)
+// capturePaneContentForSession captures the plain (no ANSI) content of a specific pane in a window.
+func capturePaneContentForSession(sessionName, windowIndex, paneIndex string) (string, error) {
+	if err := validatePaneTarget(windowIndex, paneIndex); err != nil {
+		return "", err
 	}
-	target := sessionName + ":" + windowIndex + ".0"
+	target := sessionName + ":" + windowIndex + "." + paneIndex
 	out, err := exec.Command("tmux", "capture-pane", "-t", target, "-p").Output()
 	if err != nil {
-		return "", fmt.Errorf("capturing pane for window %q in session %q: %w", windowIndex, sessionName, err)
+		return "", fmt.Errorf("capturing pane for window %q pane %q in session %q: %w", windowIndex, paneIndex, sessionName, err)
 	}
 	return string(out), nil
 }
@@ -561,18 +617,24 @@ func bottomContent(content string, n int) string {
 	return strings.Join(lines[len(lines)-n:], "\n")
 }
 
-// getClaudeStatusForSession reads the @claude-status tmux user option for a given session:window.
-// Returns the status string ("working", "idle", "waiting") or empty if not set.
-func getClaudeStatusForSession(sessionName, windowIndex string) string {
-	if !validWindowIndex.MatchString(windowIndex) {
+// tmuxDisplayOption reads a tmux user option for a given session:window.pane via display-message.
+// Returns the trimmed value, or empty string on error or invalid indices.
+func tmuxDisplayOption(sessionName, windowIndex, paneIndex, format string) string {
+	if !validWindowIndex.MatchString(windowIndex) || !validWindowIndex.MatchString(paneIndex) {
 		return ""
 	}
-	target := sessionName + ":" + windowIndex + ".0"
-	out, err := exec.Command("tmux", "display-message", "-t", target, "-p", "#{@claude-status}").Output()
+	target := sessionName + ":" + windowIndex + "." + paneIndex
+	out, err := exec.Command("tmux", "display-message", "-t", target, "-p", format).Output()
 	if err != nil {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// getClaudeStatusForSession reads the @claude-status tmux user option for a given session:window.pane.
+// Returns the status string ("working", "idle", "waiting") or empty if not set.
+func getClaudeStatusForSession(sessionName, windowIndex, paneIndex string) string {
+	return tmuxDisplayOption(sessionName, windowIndex, paneIndex, "#{@claude-status}")
 }
 
 // parseClaudeStatus converts a @claude-status string to a session.Status.
@@ -594,16 +656,8 @@ func parseClaudeStatus(s string) (session.Status, bool) {
 // indicating that Claude Code is actively executing a tool (e.g., bash command).
 // The pane PID is the shell, its child is Claude Code (node), and grandchildren
 // are tool processes.
-func hasActiveChildrenForSession(sessionName, windowIndex string) bool {
-	if !validWindowIndex.MatchString(windowIndex) {
-		return false
-	}
-	target := sessionName + ":" + windowIndex + ".0"
-	out, err := exec.Command("tmux", "display-message", "-t", target, "-p", "#{pane_pid}").Output()
-	if err != nil {
-		return false
-	}
-	panePID := strings.TrimSpace(string(out))
+func hasActiveChildrenForSession(sessionName, windowIndex, paneIndex string) bool {
+	panePID := tmuxDisplayOption(sessionName, windowIndex, paneIndex, "#{pane_pid}")
 	if panePID == "" {
 		return false
 	}
@@ -661,13 +715,13 @@ func debugLog(msg string) {
 
 // detectStatusWithHooksForSession determines status using hooks (@claude-status) first,
 // then falls back to process tree + pane content analysis.
-func detectStatusWithHooksForSession(content, sessionName, windowIndex string) (status session.Status, isClaudeCode bool) {
-	label := fmt.Sprintf("[%s:%s]", sessionName, windowIndex)
+func detectStatusWithHooksForSession(content, sessionName, windowIndex, paneIndex string) (status session.Status, isClaudeCode bool) {
+	label := fmt.Sprintf("[%s:%s.%s]", sessionName, windowIndex, paneIndex)
 
 	// Tier 1: Check @claude-status hook.
 	var tier1Status session.Status
 	var tier1Valid bool
-	if cs := getClaudeStatusForSession(sessionName, windowIndex); cs != "" {
+	if cs := getClaudeStatusForSession(sessionName, windowIndex, paneIndex); cs != "" {
 		if st, ok := parseClaudeStatus(cs); ok {
 			tier1Status = st
 			tier1Valid = true
@@ -689,7 +743,7 @@ func detectStatusWithHooksForSession(content, sessionName, windowIndex string) (
 	}
 
 	// Use process tree to detect active tool execution.
-	if hasActiveChildrenForSession(sessionName, windowIndex) {
+	if hasActiveChildrenForSession(sessionName, windowIndex, paneIndex) {
 		debugLog(fmt.Sprintf("%s tier2=hasChildren -> final=working", label))
 		return session.StatusWorking, true
 	}
@@ -789,16 +843,8 @@ func getGitBranch(dir string) string {
 
 // getWindowSummaryForSession retrieves the @clux-summary user option for a window in a given session.
 // Returns empty string if not set or on error.
-func getWindowSummaryForSession(sessionName, windowIndex string) string {
-	if !validWindowIndex.MatchString(windowIndex) {
-		return ""
-	}
-	target := sessionName + ":" + windowIndex + ".0"
-	out, err := exec.Command("tmux", "display-message", "-t", target, "-p", "#{@clux-summary}").Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
+func getWindowSummaryForSession(sessionName, windowIndex, paneIndex string) string {
+	return tmuxDisplayOption(sessionName, windowIndex, paneIndex, "#{@clux-summary}")
 }
 
 // isIdle returns true when the pane is at the Claude Code input prompt.

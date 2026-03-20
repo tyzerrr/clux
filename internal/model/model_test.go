@@ -22,9 +22,9 @@ func testModel(sessions []session.Session) Model {
 }
 
 var testSessions = []session.Session{
-	{Name: "alpha-session", Summary: "auth refactor", Dir: "/home/user/projects/alpha", Status: session.StatusWorking, WindowIndex: "0"},
-	{Name: "beta-session", Dir: "/home/user/projects/beta", Status: session.StatusIdle, WindowIndex: "1"},
-	{Name: "gamma-session", Summary: "fix bug #42", Dir: "/home/user/projects/gamma", Status: session.StatusWaiting, WindowIndex: "2"},
+	{Name: "alpha-session", Summary: "auth refactor", Dir: "/home/user/projects/alpha", Status: session.StatusWorking, WindowIndex: "0", PaneIndex: "0"},
+	{Name: "beta-session", Dir: "/home/user/projects/beta", Status: session.StatusIdle, WindowIndex: "1", PaneIndex: "0"},
+	{Name: "gamma-session", Summary: "fix bug #42", Dir: "/home/user/projects/gamma", Status: session.StatusWaiting, WindowIndex: "2", PaneIndex: "0"},
 }
 
 // --- Helper function tests ---
@@ -803,6 +803,63 @@ func TestView_ModeConfirmKill_WithError(t *testing.T) {
 	}
 }
 
+func TestResolvePaneIndex(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"", "0"},
+		{"0", "0"},
+		{"1", "1"},
+		{"42", "42"},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("input=%q", tt.input), func(t *testing.T) {
+			got := resolvePaneIndex(tt.input)
+			if got != tt.want {
+				t.Errorf("resolvePaneIndex(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPrevStatuses_KeyIncludesPaneIndex(t *testing.T) {
+	m := testModel([]session.Session{
+		{Name: "s1", WindowIndex: "0", PaneIndex: "0", Status: session.StatusWorking},
+		{Name: "s2", WindowIndex: "0", PaneIndex: "1", Status: session.StatusIdle},
+	})
+
+	// Trigger sessionsMsg to populate prevStatuses.
+	result, _ := m.Update(sessionsMsg(m.sessions))
+	rm := result.(Model)
+
+	// Verify that different panes of the same window get distinct keys.
+	key0 := "clux:0.0"
+	key1 := "clux:0.1"
+	if _, ok := rm.prevStatuses[key0]; !ok {
+		t.Errorf("expected prevStatuses to contain key %q", key0)
+	}
+	if _, ok := rm.prevStatuses[key1]; !ok {
+		t.Errorf("expected prevStatuses to contain key %q", key1)
+	}
+}
+
+func TestModeList_ShiftKSetsConfirmPaneIndex(t *testing.T) {
+	sessions := []session.Session{
+		{Name: "test", WindowIndex: "3", PaneIndex: "2", Status: session.StatusIdle},
+	}
+	m := testModel(sessions)
+	m.mode = ModeList
+	msg := tea.KeyPressMsg{Code: 'K', Text: "K", ShiftedCode: 'K', Mod: tea.ModShift}
+	result, _ := m.updateList(msg)
+	updated := result.(Model)
+	if updated.confirmWindowIndex != "3" {
+		t.Errorf("confirmWindowIndex = %q, want %q", updated.confirmWindowIndex, "3")
+	}
+	if updated.confirmPaneIndex != "2" {
+		t.Errorf("confirmPaneIndex = %q, want %q", updated.confirmPaneIndex, "2")
+	}
+}
 // --- sortByStatus tests ---
 
 func TestSortByStatus(t *testing.T) {

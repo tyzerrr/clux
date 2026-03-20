@@ -19,6 +19,7 @@ type Session struct {
 	Branch      string // git branch name; empty if not a git repo
 	Status      Status
 	WindowIndex string // tmux window index
+	PaneIndex   string // tmux pane index within the window
 	External    bool   // true if registered from outside clux session
 	SessionName string // tmux session name (for external sessions; empty means clux session)
 }

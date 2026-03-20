@@ -61,6 +61,7 @@ type broadcastTargetsResolvedMsg struct {
 type broadcastTarget struct {
 	dir         string
 	windowIndex string
+	paneIndex   string // tmux pane index within the window
 	sessionName string // tmux session name; empty means clux session
 	ready       bool   // true once the session reaches Idle status
 }
@@ -80,6 +81,7 @@ type Model struct {
 	// Confirm kill mode
 	confirmTarget      string // window name for display
 	confirmWindowIndex string // window index for tmux command
+	confirmPaneIndex   string // pane index for tmux command
 	confirmExternal    bool   // true if confirming unregister (not kill)
 	confirmSessionName string // tmux session name for external sessions
 
@@ -209,7 +211,8 @@ func fetchPreviewCmdForSession(s session.Session) tea.Cmd {
 		if s.External && s.SessionName != "" {
 			sessionName = s.SessionName
 		}
-		content, err := tmux.CapturePaneForSession(sessionName, s.WindowIndex)
+		paneIndex := resolvePaneIndex(s.PaneIndex)
+		content, err := tmux.CapturePaneForSession(sessionName, s.WindowIndex, paneIndex)
 		if err != nil {
 			return previewMsg("")
 		}
@@ -230,7 +233,8 @@ func fetchDashboardPreviews(sessions []session.Session) tea.Cmd {
 			if s.External && s.SessionName != "" {
 				sessionName = s.SessionName
 			}
-			content, err := tmux.CapturePaneForSession(sessionName, s.WindowIndex)
+			paneIndex := resolvePaneIndex(s.PaneIndex)
+			content, err := tmux.CapturePaneForSession(sessionName, s.WindowIndex, paneIndex)
 			if err != nil {
 				result[i] = ""
 			} else {
@@ -241,34 +245,32 @@ func fetchDashboardPreviews(sessions []session.Session) tea.Cmd {
 	}
 }
 
-func fetchGhqDirs() tea.Msg {
+func listGhqDirs() ([]string, error) {
 	out, err := exec.Command("ghq", "list", "-p").Output()
 	if err != nil {
-		return errMsg(fmt.Errorf("ghq list: %w", err))
+		return nil, fmt.Errorf("ghq list: %w", err)
 	}
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 	var dirs []string
-	for _, l := range lines {
-		l = strings.TrimSpace(l)
-		if l != "" {
+	for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if l = strings.TrimSpace(l); l != "" {
 			dirs = append(dirs, l)
 		}
+	}
+	return dirs, nil
+}
+
+func fetchGhqDirs() tea.Msg {
+	dirs, err := listGhqDirs()
+	if err != nil {
+		return errMsg(err)
 	}
 	return ghqDirsMsg(dirs)
 }
 
 func fetchBroadcastGhqDirs() tea.Msg {
-	out, err := exec.Command("ghq", "list", "-p").Output()
+	dirs, err := listGhqDirs()
 	if err != nil {
-		return errMsg(fmt.Errorf("ghq list: %w", err))
-	}
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	var dirs []string
-	for _, l := range lines {
-		l = strings.TrimSpace(l)
-		if l != "" {
-			dirs = append(dirs, l)
-		}
+		return errMsg(err)
 	}
 	return broadcastGhqDirsMsg(dirs)
 }
@@ -434,10 +436,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Check for Working→Waiting transitions and update prevStatuses.
 		shouldBell := false
 		for _, s := range m.sessions {
-			key := s.SessionName + ":" + s.WindowIndex
-			if s.SessionName == "" {
-				key = tmux.SessionName + ":" + s.WindowIndex
+			paneIdx := resolvePaneIndex(s.PaneIndex)
+			sessionName := s.SessionName
+			if sessionName == "" {
+				sessionName = tmux.SessionName
 			}
+			key := sessionName + ":" + s.WindowIndex + "." + paneIdx
 			prev, exists := m.prevStatuses[key]
 			if exists && prev == session.StatusWorking && s.Status == session.StatusWaiting {
 				shouldBell = true
@@ -529,7 +533,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if t.sessionName != "" {
 					sn = t.sessionName
 				}
-				_ = tmux.SendKeysLiteral(sn, t.windowIndex, prompt)
+				_ = tmux.SendKeysLiteral(sn, t.windowIndex, resolvePaneIndex(t.paneIndex), prompt)
 			}
 			return fetchSessionsCmdWithExternals(cfg)()
 		}
@@ -676,8 +680,9 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				sessionName = s.SessionName
 			}
 			windowIndex := s.WindowIndex
+			paneIndex := resolvePaneIndex(s.PaneIndex)
 			return m, func() tea.Msg {
-				if err := tmux.SwitchToWindow(sessionName, windowIndex); err != nil {
+				if err := tmux.SwitchToWindow(sessionName, windowIndex, paneIndex); err != nil {
 					return errMsg(err)
 				}
 				return tea.QuitMsg{}
@@ -710,6 +715,7 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			s := m.filtered[m.cursor]
 			m.confirmTarget = s.DisplayName()
 			m.confirmWindowIndex = s.WindowIndex
+			m.confirmPaneIndex = resolvePaneIndex(s.PaneIndex)
 			m.confirmExternal = s.External
 			m.confirmSessionName = s.SessionName
 			m.err = nil
@@ -727,8 +733,9 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				sessionName = s.SessionName
 			}
 			windowIndex := s.WindowIndex
+			paneIndex := resolvePaneIndex(s.PaneIndex)
 			return m, func() tea.Msg {
-				if err := tmux.SendKeys(sessionName, windowIndex, "y"); err != nil {
+				if err := tmux.SendKeys(sessionName, windowIndex, paneIndex, "y"); err != nil {
 					return errMsg(err)
 				}
 				return fetchSessionsCmdWithExternals(m.cfg)()
@@ -785,11 +792,7 @@ func (m Model) updateConfirmKill(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		isExternal := m.confirmExternal
 		extSessionName := m.confirmSessionName
 		cfg := m.cfg
-		m.confirmTarget = ""
-		m.confirmWindowIndex = ""
-		m.confirmExternal = false
-		m.confirmSessionName = ""
-		m.mode = ModeList
+		m = m.clearConfirm()
 		if isExternal {
 			// Unregister external session (don't kill the window).
 			return m, func() tea.Msg {
@@ -809,13 +812,20 @@ func (m Model) updateConfirmKill(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return windowKilledMsg{}
 		}
 	case "n", "esc":
-		m.confirmTarget = ""
-		m.confirmWindowIndex = ""
-		m.confirmExternal = false
-		m.confirmSessionName = ""
-		m.mode = ModeList
+		m = m.clearConfirm()
 	}
 	return m, nil
+}
+
+// clearConfirm resets all confirm-kill fields and returns to ModeList.
+func (m Model) clearConfirm() Model {
+	m.confirmTarget = ""
+	m.confirmWindowIndex = ""
+	m.confirmPaneIndex = ""
+	m.confirmExternal = false
+	m.confirmSessionName = ""
+	m.mode = ModeList
+	return m
 }
 
 func (m Model) updateFilter(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -1042,8 +1052,9 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if s.External && s.SessionName != "" {
 				sessionName = s.SessionName
 			}
+			paneIndex := resolvePaneIndex(s.PaneIndex)
 			return m, func() tea.Msg {
-				if err := tmux.SwitchToWindow(sessionName, s.WindowIndex); err != nil {
+				if err := tmux.SwitchToWindow(sessionName, s.WindowIndex, paneIndex); err != nil {
 					return errMsg(err)
 				}
 				return tea.QuitMsg{}
@@ -1060,8 +1071,9 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				sessionName = s.SessionName
 			}
 			windowIndex := s.WindowIndex
+			paneIndex := resolvePaneIndex(s.PaneIndex)
 			return m, func() tea.Msg {
-				if err := tmux.SendKeys(sessionName, windowIndex, "y"); err != nil {
+				if err := tmux.SendKeys(sessionName, windowIndex, paneIndex, "y"); err != nil {
 					return errMsg(err)
 				}
 				return fetchSessionsCmdWithExternals(m.cfg)()
@@ -1167,6 +1179,7 @@ func (m Model) updateBroadcastPrompt(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				resolved = append(resolved, broadcastTarget{
 					dir:         t.dir,
 					windowIndex: newIdx,
+					paneIndex:   "0",
 					sessionName: "",
 					ready:       false,
 				})
@@ -1220,21 +1233,16 @@ func (m Model) checkBroadcastTargetsCmd() tea.Cmd {
 				// Claude Code should have started by then; if not, SendKeys is a no-op.
 				t.ready = true
 			} else {
+				paneIdx := resolvePaneIndex(t.paneIndex)
 				sn := t.sessionName
 				if sn == "" {
-					st, isClaudeCode := tmux.GetWindowStatus(tmux.SessionName, t.windowIndex)
-					if isClaudeCode {
-						t.ready = st == session.StatusIdle
-					} else {
-						t.ready = false
-					}
+					sn = tmux.SessionName
+				}
+				st, isClaudeCode := tmux.GetWindowStatus(sn, t.windowIndex, paneIdx)
+				if isClaudeCode {
+					t.ready = st == session.StatusIdle
 				} else {
-					s := tmux.ScanWindow(sn, t.windowIndex)
-					if s != nil {
-						t.ready = s.Status == session.StatusIdle
-					} else {
-						t.ready = false
-					}
+					t.ready = false
 				}
 			}
 			updated[i] = t
@@ -1248,6 +1256,14 @@ func (m Model) checkBroadcastTargetsCmd() tea.Cmd {
 		// Return updated targets as a special message.
 		return broadcastTargetsUpdatedMsg(updated)
 	}
+}
+
+// resolvePaneIndex returns p if non-empty, otherwise "0".
+func resolvePaneIndex(p string) string {
+	if p == "" {
+		return "0"
+	}
+	return p
 }
 
 // excludeRegistered removes windows that are already registered in cfg.

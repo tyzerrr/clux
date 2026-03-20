@@ -375,7 +375,7 @@ func TestDetectStatus(t *testing.T) {
 // --- SwitchWindow/KillWindow invalid index tests ---
 
 func TestSwitchWindow_InvalidIndex(t *testing.T) {
-	err := SwitchWindow("abc")
+	err := SwitchWindow("abc", "0")
 	if err == nil {
 		t.Error("expected error for invalid window index")
 	}
@@ -385,5 +385,26 @@ func TestKillWindow_InvalidIndex(t *testing.T) {
 	err := KillWindow("")
 	if err == nil {
 		t.Error("expected error for invalid window index")
+	}
+}
+
+func TestSwitchWindow_InvalidPaneIndex(t *testing.T) {
+	err := SwitchWindow("0", "abc")
+	if err == nil {
+		t.Error("expected error for invalid pane index")
+	}
+}
+
+func TestScanPanes_EmptySessionName(t *testing.T) {
+	result := ScanPanes("", "0")
+	if result != nil {
+		t.Error("expected nil for empty session name")
+	}
+}
+
+func TestScanPanes_InvalidWindowIndex(t *testing.T) {
+	result := ScanPanes("test-session", "abc")
+	if result != nil {
+		t.Error("expected nil for invalid window index")
 	}
 }
