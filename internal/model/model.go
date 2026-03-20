@@ -2375,17 +2375,28 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 	}
 
 	// Calculate cell dimensions
-	cellWidth := m.width / cols
-	if cellWidth < 20 {
-		cellWidth = 20
-	}
-	// contentWidth is the usable text area inside each cell, after subtracting
-	// the border (2 chars) and padding (2 chars) added by lipgloss.
+	// Distribute horizontal remainder across left columns.
 	borderWidth := 2  // RoundedBorder left + right
 	paddingWidth := 2 // Padding(0, 1) left + right
-	contentWidth := cellWidth - borderWidth - paddingWidth
-	if contentWidth < 16 {
-		contentWidth = 16
+	cellChrome := borderWidth + paddingWidth
+	baseCellWidth := m.width / cols
+	widthRemainder := m.width % cols
+	if baseCellWidth < 20 {
+		baseCellWidth = 20
+		widthRemainder = 0
+	}
+	// colContentWidths[col] is the usable text area for each column.
+	colContentWidths := make([]int, cols)
+	for c := 0; c < cols; c++ {
+		w := baseCellWidth
+		if c < widthRemainder {
+			w++
+		}
+		cw := w - cellChrome
+		if cw < 16 {
+			cw = 16
+		}
+		colContentWidths[c] = cw
 	}
 	// availableHeight excludes header, helpbar, border lines (2 per row), and
 	// the trailing newline after each grid row (1 per row).
@@ -2416,10 +2427,11 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 		// Build each cell for this row
 		var cellContents []string
 		for col := 0; col < cols; col++ {
+			cw := colContentWidths[col]
 			localIdx := row*cols + col
 			if localIdx >= pageItems {
 				// Empty cell
-				cellContents = append(cellContents, strings.Repeat(" ", contentWidth))
+				cellContents = append(cellContents, strings.Repeat(" ", cw))
 				continue
 			}
 			s := m.filtered[m.dashPageOffset+localIdx]
@@ -2431,8 +2443,8 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 			cellHeaderText := fmt.Sprintf(" %s %s %s", icon, statusStr, displayName)
 			// Truncate if needed
 			cellHeaderRunes := []rune(cellHeaderText)
-			if len(cellHeaderRunes) > contentWidth {
-				cellHeaderText = string(cellHeaderRunes[:contentWidth-1]) + "…"
+			if len(cellHeaderRunes) > cw {
+				cellHeaderText = string(cellHeaderRunes[:cw-1]) + "…"
 			}
 
 			// Get preview content
@@ -2457,15 +2469,15 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 			var cell strings.Builder
 			cell.WriteString(cellHeaderText)
 			cell.WriteString("\n")
-			cell.WriteString(strings.Repeat("─", contentWidth))
+			cell.WriteString(strings.Repeat("─", cw))
 			cell.WriteString("\n")
 			for i := 0; i < rowPreviewLines; i++ {
 				if i < len(displayPreview) {
 					line := displayPreview[i]
 					// Truncate line to cell width
 					lineRunes := []rune(line)
-					if len(lineRunes) > contentWidth {
-						line = string(lineRunes[:contentWidth-1]) + "…"
+					if len(lineRunes) > cw {
+						line = string(lineRunes[:cw-1]) + "…"
 					}
 					cell.WriteString(line)
 				}
@@ -2480,9 +2492,10 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 		// Apply border style to focused cell
 		styledCells := make([]string, len(cellContents))
 		for col, content := range cellContents {
+			cw := colContentWidths[col]
 			localIdx := row*cols + col
 			style := lipgloss.NewStyle().
-				Width(contentWidth).
+				Width(cw).
 				Height(rowCellHeight).
 				MaxHeight(rowCellHeight + borderHeight).
 				Padding(0, 1)
