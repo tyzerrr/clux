@@ -125,6 +125,7 @@ type Model struct {
 	dashPreviews   map[int]string // windowIndex -> pane content for each session
 	dashPageOffset int            // index of first displayed item in dashboard
 	dashFocused    bool           // true when in single-session focus mode
+	dashFullscreen bool           // true = fullscreen dashboard, false = overlay on list
 
 	// Grouping mode
 	groupEnabled bool   // toggle for grouped display
@@ -613,7 +614,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		if m.mode == ModeDashboard {
-			maxVisible := m.dashMaxVisible()
+			maxVisible := m.dashEffectiveMaxVisible()
 			// Snap page offset to a valid page boundary.
 			if maxVisible > 0 {
 				m.dashPageOffset = (m.dashPageOffset / maxVisible) * maxVisible
@@ -708,7 +709,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(cmds...)
 		} else if m.mode == ModeDashboard {
 			pageItems := len(m.filtered) - m.dashPageOffset
-			maxVisible := m.dashMaxVisible()
+			maxVisible := m.dashEffectiveMaxVisible()
 			if pageItems > maxVisible {
 				pageItems = maxVisible
 			}
@@ -1020,7 +1021,7 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.dashFocused = false
 		m.previewScrollOffset = 0
 		m.dashPreviews = make(map[int]string)
-		maxVisible := m.dashMaxVisible()
+		maxVisible := m.dashEffectiveMaxVisible()
 		pageItems := len(m.filtered)
 		if pageItems > maxVisible {
 			pageItems = maxVisible
@@ -1272,8 +1273,8 @@ func (m Model) updateAddExternal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	cols := m.dashCols()
-	maxVisible := m.dashMaxVisible()
+	cols := m.dashEffectiveCols()
+	maxVisible := m.dashEffectiveMaxVisible()
 	pageItems := len(m.filtered) - m.dashPageOffset
 	if pageItems > maxVisible {
 		pageItems = maxVisible
@@ -1296,6 +1297,29 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if pageItems > 0 {
 			m.dashFocused = !m.dashFocused
 		}
+	case "F":
+		m.dashFullscreen = !m.dashFullscreen
+		// Recalculate page since available size changes
+		newMax := m.dashEffectiveMaxVisible()
+		// Snap page offset to new page boundary
+		if newMax > 0 {
+			m.dashPageOffset = (m.dashPageOffset / newMax) * newMax
+		}
+		if m.dashPageOffset >= len(m.filtered) {
+			m.dashPageOffset = 0
+		}
+		if m.dashCursor >= newMax {
+			m.dashCursor = newMax - 1
+			if m.dashCursor < 0 {
+				m.dashCursor = 0
+			}
+		}
+		pageEnd := m.dashPageOffset + newMax
+		if pageEnd > len(m.filtered) {
+			pageEnd = len(m.filtered)
+		}
+		pageSessions := m.filtered[m.dashPageOffset:pageEnd]
+		return m, fetchDashboardPreviews(pageSessions)
 	case "]":
 		// Next page
 		if m.dashFocused {
@@ -1305,7 +1329,7 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if nextOffset < len(m.filtered) {
 			m.dashPageOffset = nextOffset
 			m.dashCursor = 0
-			pageSessions := m.filtered[m.dashPageOffset : m.dashPageOffset+min(m.dashMaxVisible(), len(m.filtered)-m.dashPageOffset)]
+			pageSessions := m.filtered[m.dashPageOffset : m.dashPageOffset+min(maxVisible, len(m.filtered)-m.dashPageOffset)]
 			return m, fetchDashboardPreviews(pageSessions)
 		}
 	case "[":
@@ -1320,7 +1344,7 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if prevOffset != m.dashPageOffset {
 			m.dashPageOffset = prevOffset
 			m.dashCursor = 0
-			pageSessions := m.filtered[m.dashPageOffset : m.dashPageOffset+min(m.dashMaxVisible(), len(m.filtered)-m.dashPageOffset)]
+			pageSessions := m.filtered[m.dashPageOffset : m.dashPageOffset+min(maxVisible, len(m.filtered)-m.dashPageOffset)]
 			return m, fetchDashboardPreviews(pageSessions)
 		}
 	case "h", "left":
@@ -1351,7 +1375,7 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			m.dashPageOffset = prevOffset
 			m.dashCursor = 0
-			pageSessions := m.filtered[m.dashPageOffset : m.dashPageOffset+min(m.dashMaxVisible(), len(m.filtered)-m.dashPageOffset)]
+			pageSessions := m.filtered[m.dashPageOffset : m.dashPageOffset+min(maxVisible, len(m.filtered)-m.dashPageOffset)]
 			return m, fetchDashboardPreviews(pageSessions)
 		}
 	case "j", "down", "ctrl+n":
@@ -1364,7 +1388,7 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			// Go to next page
 			m.dashPageOffset += maxVisible
 			m.dashCursor = 0
-			pageSessions := m.filtered[m.dashPageOffset : m.dashPageOffset+min(m.dashMaxVisible(), len(m.filtered)-m.dashPageOffset)]
+			pageSessions := m.filtered[m.dashPageOffset : m.dashPageOffset+min(maxVisible, len(m.filtered)-m.dashPageOffset)]
 			return m, fetchDashboardPreviews(pageSessions)
 		}
 	case "enter":
@@ -1649,18 +1673,18 @@ func excludeRegistered(windows []tmux.ExternalWindowInfo, cfg *config.Config) []
 	return out
 }
 
-// dashCols returns the number of columns for the dashboard grid based on terminal width and session count.
-func (m Model) dashCols() int {
+// dashColsForWidth returns the number of columns for the dashboard grid based on the given width and session count.
+func (m Model) dashColsForWidth(width int) int {
 	n := len(m.filtered)
 	if n == 0 {
 		return 1
 	}
 	maxColsByWidth := 1
-	if m.width >= 180 {
+	if width >= 180 {
 		maxColsByWidth = 4
-	} else if m.width >= 120 {
+	} else if width >= 120 {
 		maxColsByWidth = 3
-	} else if m.width >= 80 {
+	} else if width >= 80 {
 		maxColsByWidth = 2
 	}
 	if n < maxColsByWidth {
@@ -1669,14 +1693,19 @@ func (m Model) dashCols() int {
 	return maxColsByWidth
 }
 
-// dashMaxVisible returns the maximum number of dashboard cells visible at once.
-func (m Model) dashMaxVisible() int {
-	cols := m.dashCols()
+// dashCols returns the number of columns for the dashboard grid based on terminal width and session count.
+func (m Model) dashCols() int {
+	return m.dashColsForWidth(m.width)
+}
+
+// dashMaxVisibleForSize returns the maximum number of dashboard cells visible for the given dimensions.
+func (m Model) dashMaxVisibleForSize(width, height int) int {
+	cols := m.dashColsForWidth(width)
 	headerLines := 3
 	helpLines := 2
 	borderHeight := 2                      // lipgloss RoundedBorder adds top + bottom border lines per row
 	minCellHeight := 7 + borderHeight + 1  // minimum usable cell height including border and trailing newline
-	available := m.height - headerLines - helpLines
+	available := height - headerLines - helpLines
 	if available < minCellHeight {
 		return cols // at least one row
 	}
@@ -1685,6 +1714,50 @@ func (m Model) dashMaxVisible() int {
 		maxRows = 1
 	}
 	return cols * maxRows
+}
+
+// dashMaxVisible returns the maximum number of dashboard cells visible at once.
+func (m Model) dashMaxVisible() int {
+	return m.dashMaxVisibleForSize(m.width, m.height)
+}
+
+// dashEffectiveSize returns the effective content width and height for the dashboard area
+// depending on whether it is in fullscreen or overlay mode.
+// In overlay mode, the overlay border (1 char each side) is subtracted.
+func (m Model) dashEffectiveSize() (int, int) {
+	if m.dashFullscreen {
+		return m.width, m.height
+	}
+	w := m.width * 90 / 100
+	h := m.height * 90 / 100
+	if w < 60 {
+		w = 60
+	}
+	if h < 20 {
+		h = 20
+	}
+	// Subtract overlay border (RoundedBorder: 1 char each side)
+	w -= 2
+	h -= 2
+	if w < 20 {
+		w = 20
+	}
+	if h < 5 {
+		h = 5
+	}
+	return w, h
+}
+
+// dashEffectiveMaxVisible returns dashMaxVisible using the effective dashboard area.
+func (m Model) dashEffectiveMaxVisible() int {
+	w, h := m.dashEffectiveSize()
+	return m.dashMaxVisibleForSize(w, h)
+}
+
+// dashEffectiveCols returns dashCols using the effective dashboard width.
+func (m Model) dashEffectiveCols() int {
+	w, _ := m.dashEffectiveSize()
+	return m.dashColsForWidth(w)
 }
 
 // previewHeight returns the number of lines available for preview content.
@@ -2011,7 +2084,18 @@ func (m Model) View() tea.View {
 	}
 
 	if m.mode == ModeDashboard {
-		return newView(m.viewDashboard(&b))
+		if m.dashFullscreen {
+			return newView(m.viewDashboard(&b, m.width, m.height))
+		}
+		// Overlay mode: render dashboard on top of list
+		contentW, contentH := m.dashEffectiveSize()
+		overlay := m.viewDashboard(&b, contentW, contentH)
+		bordered := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("39")).
+			Render(overlay)
+		base := m.viewListBase()
+		return newView(placeOverlay(base, bordered, m.width, m.height))
 	}
 
 	if m.mode == ModeBroadcastSelect {
@@ -2286,9 +2370,9 @@ func (m Model) viewAddExternal(b *strings.Builder) (string, *overlayCursor) {
 	return renderOverlayBox(b.String(), overlayWidth), cur
 }
 
-func (m Model) viewDashboard(b *strings.Builder) string {
-	cols := m.dashCols()
-	maxVisible := m.dashMaxVisible()
+func (m Model) viewDashboard(b *strings.Builder, areaWidth, areaHeight int) string {
+	cols := m.dashColsForWidth(areaWidth)
+	maxVisible := m.dashMaxVisibleForSize(areaWidth, areaHeight)
 	pageItems := len(m.filtered) - m.dashPageOffset
 	if pageItems > maxVisible {
 		pageItems = maxVisible
@@ -2314,13 +2398,13 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 		}
 		b.WriteString(styleHeader.Render(header))
 		b.WriteString("\n")
-		b.WriteString(strings.Repeat("─", m.width))
+		b.WriteString(strings.Repeat("─", areaWidth))
 		b.WriteString("\n")
 
 		// Preview content filling remaining height
 		headerLines := 2 // header + separator
 		helpLines := 1
-		availableLines := m.height - headerLines - helpLines
+		availableLines := areaHeight - headerLines - helpLines
 		if availableLines < 1 {
 			availableLines = 1
 		}
@@ -2379,8 +2463,8 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 	borderWidth := 2  // RoundedBorder left + right
 	paddingWidth := 2 // Padding(0, 1) left + right
 	cellChrome := borderWidth + paddingWidth
-	baseCellWidth := m.width / cols
-	widthRemainder := m.width % cols
+	baseCellWidth := areaWidth / cols
+	widthRemainder := areaWidth % cols
 	if baseCellWidth < 20 {
 		baseCellWidth = 20
 		widthRemainder = 0
@@ -2407,7 +2491,7 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 	headerLines := 3
 	helpLines := 2
 	borderHeight := 2 // lipgloss RoundedBorder adds top + bottom border lines per row
-	availableHeight := m.height - headerLines - helpLines - (rows * (borderHeight + 1))
+	availableHeight := areaHeight - headerLines - helpLines - (rows * (borderHeight + 1))
 	baseCellHeight := availableHeight / rows
 	heightRemainder := availableHeight % rows
 	if baseCellHeight < 5 {
@@ -2522,7 +2606,7 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 
 	// Help bar
 	b.WriteString("\n")
-	b.WriteString(styleHelpBar.Render("Enter:attach  y:approve  K:kill  n:new  /:filter  b:broadcast  f:focus  [/]:page  hjkl:navigate  Esc/d:back  q:quit"))
+	b.WriteString(styleHelpBar.Render("Enter:attach  y:approve  K:kill  n:new  /:filter  b:broadcast  f:focus  F:fullscreen  [/]:page  hjkl:navigate  Esc/d:back  q:quit"))
 
 	return b.String()
 }

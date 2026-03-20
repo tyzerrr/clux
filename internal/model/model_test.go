@@ -2352,6 +2352,7 @@ func TestDashboard_Pagination_NextPage(t *testing.T) {
 	}
 	m := testModel(sessions)
 	m.mode = ModeDashboard
+	m.dashFullscreen = true
 	m.width = 80  // 1 col
 	m.height = 20 // limited height forces pagination
 	m.dashPageOffset = 0
@@ -2378,6 +2379,7 @@ func TestDashboard_Pagination_PrevPage(t *testing.T) {
 	}
 	m := testModel(sessions)
 	m.mode = ModeDashboard
+	m.dashFullscreen = true
 	m.width = 80
 	m.height = 20
 	maxVisible := m.dashMaxVisible()
@@ -2418,7 +2420,7 @@ func TestDashboard_ViewFocusMode(t *testing.T) {
 	m.dashCursor = 0
 	m.dashPreviews = map[int]string{0: "preview content here"}
 
-	view := m.viewDashboard(&strings.Builder{})
+	view := m.viewDashboard(&strings.Builder{}, m.width, m.height)
 	// The focused session is filtered[dashPageOffset + dashCursor] = filtered[0]
 	// DisplayName() returns Summary if non-empty, else Name
 	focusedSession := m.filtered[0]
@@ -2443,11 +2445,85 @@ func TestDashboard_ViewShowsPageIndicator(t *testing.T) {
 	m.dashPageOffset = 0
 
 	var b strings.Builder
-	view := m.viewDashboard(&b)
+	view := m.viewDashboard(&b, m.width, m.height)
 	if m.dashMaxVisible() < 20 {
 		if !strings.Contains(view, "Page") {
 			t.Error("expected 'Page' indicator in dashboard header when multiple pages exist")
 		}
+	}
+}
+
+func TestDashboard_FullscreenToggle(t *testing.T) {
+	sessions := make([]session.Session, 5)
+	for i := range sessions {
+		sessions[i] = session.Session{Name: fmt.Sprintf("s%d", i), Status: session.StatusIdle, WindowIndex: fmt.Sprintf("%d", i)}
+	}
+	m := testModel(sessions)
+	m.mode = ModeDashboard
+	m.width = 200
+	m.height = 60
+
+	// Default is overlay (not fullscreen)
+	if m.dashFullscreen {
+		t.Error("expected dashFullscreen to be false by default")
+	}
+
+	// Toggle to fullscreen
+	result, _ := m.Update(tea.KeyPressMsg{Code: 'F', Text: "F"})
+	rm := result.(Model)
+	if !rm.dashFullscreen {
+		t.Error("expected dashFullscreen to be true after F toggle")
+	}
+
+	// Toggle back to overlay
+	result, _ = rm.Update(tea.KeyPressMsg{Code: 'F', Text: "F"})
+	rm = result.(Model)
+	if rm.dashFullscreen {
+		t.Error("expected dashFullscreen to be false after second F toggle")
+	}
+}
+
+func TestDashboard_EffectiveSize(t *testing.T) {
+	sessions := make([]session.Session, 5)
+	for i := range sessions {
+		sessions[i] = session.Session{Name: fmt.Sprintf("s%d", i), Status: session.StatusIdle, WindowIndex: fmt.Sprintf("%d", i)}
+	}
+	m := testModel(sessions)
+	m.width = 200
+	m.height = 60
+
+	// Overlay mode: 90% of terminal minus overlay border (2)
+	m.dashFullscreen = false
+	w, h := m.dashEffectiveSize()
+	if w != 178 || h != 52 {
+		t.Errorf("overlay: expected 178x52, got %dx%d", w, h)
+	}
+
+	// Fullscreen mode: full terminal
+	m.dashFullscreen = true
+	w, h = m.dashEffectiveSize()
+	if w != 200 || h != 60 {
+		t.Errorf("fullscreen: expected 200x60, got %dx%d", w, h)
+	}
+}
+
+func TestDashboard_OverlayHasFewerCols(t *testing.T) {
+	sessions := make([]session.Session, 10)
+	for i := range sessions {
+		sessions[i] = session.Session{Name: fmt.Sprintf("s%d", i), Status: session.StatusIdle, WindowIndex: fmt.Sprintf("%d", i)}
+	}
+	m := testModel(sessions)
+	m.width = 130 // fullscreen: 3 cols (>=120), overlay 90%=117: 2 cols (>=80 <120)
+	m.height = 50
+
+	m.dashFullscreen = true
+	fsCols := m.dashEffectiveCols()
+
+	m.dashFullscreen = false
+	overlCols := m.dashEffectiveCols()
+
+	if fsCols <= overlCols {
+		t.Errorf("expected fullscreen cols (%d) > overlay cols (%d)", fsCols, overlCols)
 	}
 }
 
