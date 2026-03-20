@@ -1146,51 +1146,30 @@ func (m Model) updateBroadcastPrompt(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.broadcastPromptInput.Blur()
 		m.broadcastPrompt = prompt
 
-		// Resolve targets: match existing sessions by Dir, create new windows for unmatched.
+		// Always create new windows for each target dir.
 		targets := m.broadcastTargets
-		sessions := m.sessions
 		return m, func() tea.Msg {
 			resolved := make([]broadcastTarget, 0, len(targets))
 			var dirErrors []string
 			for _, t := range targets {
-				// Find an existing session with matching Dir.
-				found := false
-				for _, s := range sessions {
-					if s.Dir == t.dir {
-						sn := ""
-						if s.External && s.SessionName != "" {
-							sn = s.SessionName
-						}
-						resolved = append(resolved, broadcastTarget{
-							dir:         t.dir,
-							windowIndex: s.WindowIndex,
-							sessionName: sn,
-							ready:       s.Status == session.StatusIdle,
-						})
-						found = true
-						break
-					}
+				// Validate the directory before attempting to create a window.
+				if err := tmux.ValidateDir(t.dir); err != nil {
+					dirErrors = append(dirErrors, fmt.Sprintf("%s: %v", t.dir, err))
+					continue
 				}
-				if !found {
-					// Validate the directory before attempting to create a window.
-					if err := tmux.ValidateDir(t.dir); err != nil {
-						dirErrors = append(dirErrors, fmt.Sprintf("%s: %v", t.dir, err))
-						continue
-					}
-					// Create a new window for this dir without switching the client.
-					name := tmux.GenerateWindowName(t.dir)
-					newIdx, err := tmux.CreateWindowSilent(name, t.dir)
-					if err != nil {
-						dirErrors = append(dirErrors, fmt.Sprintf("%s: %v", t.dir, err))
-						continue
-					}
-					resolved = append(resolved, broadcastTarget{
-						dir:         t.dir,
-						windowIndex: newIdx,
-						sessionName: "",
-						ready:       false,
-					})
+				// Always create a new window for this dir without switching the client.
+				name := tmux.GenerateWindowName(t.dir)
+				newIdx, err := tmux.CreateWindowSilent(name, t.dir)
+				if err != nil {
+					dirErrors = append(dirErrors, fmt.Sprintf("%s: %v", t.dir, err))
+					continue
 				}
+				resolved = append(resolved, broadcastTarget{
+					dir:         t.dir,
+					windowIndex: newIdx,
+					sessionName: "",
+					ready:       false,
+				})
 			}
 			return broadcastTargetsResolvedMsg{targets: resolved, errors: dirErrors}
 		}
