@@ -260,18 +260,106 @@ func ListAllWindows() ([]ExternalWindowInfo, error) {
 	return windows, nil
 }
 
-// CreateWindow creates a new window in the clux session with the given name and directory,
-// running Claude Code directly. The window closes automatically when Claude Code exits.
-// After creation, it switches the client to the clux session to ensure visibility.
-func CreateWindow(name, dir string) error {
-	name = sanitizeWindowName(name)
-	if err := exec.Command("tmux", "new-window", "-a", "-t", SessionName, "-n", name, "-c", dir, "claude").Run(); err != nil {
-		return fmt.Errorf("creating window %q: %w", name, err)
+// groupedSessionName returns a unique name for a short-lived grouped session.
+// The name is based on the current time in nanoseconds.
+func groupedSessionName() string {
+	return fmt.Sprintf("clux-%d", time.Now().UnixNano())
+}
+
+// currentClientSession returns the tmux session name that the current client is attached to.
+// Returns empty string on error (e.g., not inside tmux).
+func currentClientSession() string {
+	out, err := exec.Command("tmux", "display-message", "-p", "#{client_session}").Output()
+	if err != nil {
+		return ""
 	}
-	if err := exec.Command("tmux", "switch-client", "-t", SessionName).Run(); err != nil {
-		return fmt.Errorf("switching client to session %q: %w", SessionName, err)
+	return strings.TrimSpace(string(out))
+}
+
+// switchClientGrouped switches the current tmux client to display the given window in the
+// base clux session, using grouped sessions so multiple clients can independently track
+// different windows.
+//
+// If the current client is already attached to a session whose name starts with "clux"
+// (i.e., the base session or a grouped session), it reuses that session directly by calling
+// select-window + switch-client on it. Otherwise it creates a new grouped session linked to
+// SessionName, marks it destroy-unattached so it is cleaned up automatically, and switches
+// the client to that grouped session.
+func switchClientGrouped(windowIndex string) error {
+	clientSession := currentClientSession()
+
+	// If already in a clux session (base or grouped), reuse it.
+	if clientSession == SessionName || strings.HasPrefix(clientSession, SessionName+"-") {
+		target := clientSession + ":" + windowIndex
+		if err := exec.Command("tmux", "select-window", "-t", target).Run(); err != nil {
+			return fmt.Errorf("selecting window %q in session %q: %w", windowIndex, clientSession, err)
+		}
+		if err := exec.Command("tmux", "switch-client", "-t", target).Run(); err != nil {
+			return fmt.Errorf("switching client to %q: %w", target, err)
+		}
+		return nil
+	}
+
+	// Create a new grouped session linked to the base clux session.
+	newSession := groupedSessionName()
+	if err := exec.Command("tmux", "new-session", "-d", "-t", SessionName, "-s", newSession).Run(); err != nil {
+		// Fall back to base session if grouped session creation fails.
+		target := SessionName + ":" + windowIndex
+		if err2 := exec.Command("tmux", "select-window", "-t", target).Run(); err2 != nil {
+			return fmt.Errorf("selecting window %q: %w", windowIndex, err2)
+		}
+		if err2 := exec.Command("tmux", "switch-client", "-t", target).Run(); err2 != nil {
+			return fmt.Errorf("switching client to session %q: %w", SessionName, err2)
+		}
+		return nil
+	}
+
+	// Auto-destroy the grouped session when the client detaches.
+	if err := exec.Command("tmux", "set-option", "-t", newSession, "destroy-unattached", "on").Run(); err != nil {
+		debugLog(fmt.Sprintf("set destroy-unattached failed for %s: %v", newSession, err))
+		_ = exec.Command("tmux", "kill-session", "-t", newSession).Run()
+		// Fall back to base session.
+		target := SessionName + ":" + windowIndex
+		if err2 := exec.Command("tmux", "select-window", "-t", target).Run(); err2 != nil {
+			return fmt.Errorf("selecting window %q: %w", windowIndex, err2)
+		}
+		if err2 := exec.Command("tmux", "switch-client", "-t", target).Run(); err2 != nil {
+			return fmt.Errorf("switching client to session %q: %w", SessionName, err2)
+		}
+		return nil
+	}
+
+	target := newSession + ":" + windowIndex
+	if err := exec.Command("tmux", "select-window", "-t", target).Run(); err != nil {
+		_ = exec.Command("tmux", "kill-session", "-t", newSession).Run()
+		return fmt.Errorf("selecting window %q in grouped session %q: %w", windowIndex, newSession, err)
+	}
+	if err := exec.Command("tmux", "switch-client", "-t", target).Run(); err != nil {
+		_ = exec.Command("tmux", "kill-session", "-t", newSession).Run()
+		return fmt.Errorf("switching client to grouped session %q: %w", newSession, err)
 	}
 	return nil
+}
+
+// CreateWindow creates a new window in the clux session with the given name and directory,
+// running Claude Code directly. The window closes automatically when Claude Code exits.
+// After creation, it switches the client to a grouped session so multiple clients can
+// independently view different windows.
+func CreateWindow(name, dir string) error {
+	name = sanitizeWindowName(name)
+	out, err := exec.Command("tmux", "new-window", "-a", "-t", SessionName, "-n", name, "-c", dir, "-P", "-F", "#{window_index}", "claude").Output()
+	if err != nil {
+		return fmt.Errorf("creating window %q: %w", name, err)
+	}
+	newIndex := strings.TrimSpace(string(out))
+	if !validWindowIndex.MatchString(newIndex) {
+		debugLog(fmt.Sprintf("CreateWindow: unexpected window index %q from new-window, falling back to base session", newIndex))
+		if err2 := exec.Command("tmux", "switch-client", "-t", SessionName).Run(); err2 != nil {
+			return fmt.Errorf("switching client to session %q: %w", SessionName, err2)
+		}
+		return nil
+	}
+	return switchClientGrouped(newIndex)
 }
 
 // ValidateDir checks that the given path exists and is a directory.
@@ -326,10 +414,17 @@ func SwitchWindow(windowIndex string) error {
 
 // SwitchToWindow selects a window in the given tmux session by its window index,
 // then switches the client to that session to ensure visibility.
+// For the base clux session, a grouped session is used so multiple clients can
+// independently view different windows. For external sessions the switch is direct.
 func SwitchToWindow(sessionName, windowIndex string) error {
 	if !validWindowIndex.MatchString(windowIndex) {
 		return fmt.Errorf("invalid window index %q", windowIndex)
 	}
+	// For the base clux session use grouped-session switching.
+	if sessionName == SessionName {
+		return switchClientGrouped(windowIndex)
+	}
+	// For external sessions, switch directly.
 	target := sessionName + ":" + windowIndex
 	if err := exec.Command("tmux", "select-window", "-t", target).Run(); err != nil {
 		return fmt.Errorf("switching to window %q in session %q: %w", windowIndex, sessionName, err)
