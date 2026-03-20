@@ -10,6 +10,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/rivo/uniseg"
 	"github.com/sahilm/fuzzy"
 	"github.com/tanaka0325/clux/internal/config"
 	"github.com/tanaka0325/clux/internal/session"
@@ -1835,12 +1836,55 @@ func renderOverlayBox(content string, overlayWidth int) string {
 	return styleOverlayBorder.Width(innerWidth).Render(content)
 }
 
-func (m Model) viewWithOverlay(viewFn func(*strings.Builder) string) tea.View {
+// overlayCursor represents the cursor position within overlay content (before border/padding).
+type overlayCursor struct {
+	x, y int
+}
+
+// textInputCursorX returns the display X position of the cursor within a textinput,
+// accounting for the prompt width and double-width (CJK) characters.
+func textInputCursorX(ti textinput.Model) int {
+	val := []rune(ti.Value())
+	pos := ti.Position()
+	if pos > len(val) {
+		pos = len(val)
+	}
+	promptWidth := lipgloss.Width(ti.Prompt)
+	return promptWidth + uniseg.StringWidth(string(val[:pos]))
+}
+
+func (m Model) viewWithOverlay(viewFn func(*strings.Builder) (string, *overlayCursor)) tea.View {
 	var b strings.Builder
-	overlay := viewFn(&b)
+	overlay, cur := viewFn(&b)
 	if m.width > 0 && m.height > 0 {
 		base := m.viewListBase()
-		return newView(placeOverlay(base, overlay, m.width, m.height))
+		v := newView(placeOverlay(base, overlay, m.width, m.height))
+		if cur != nil {
+			// Calculate absolute screen position of the cursor.
+			// The overlay is centered on the background.
+			fgLines := strings.Split(overlay, "\n")
+			fgWidth := 0
+			for _, line := range fgLines {
+				if w := lipgloss.Width(line); w > fgWidth {
+					fgWidth = w
+				}
+			}
+			startX := (m.width - fgWidth) / 2
+			if startX < 0 {
+				startX = 0
+			}
+			bgLines := m.height
+			startY := (bgLines - len(fgLines)) / 2
+			if startY < 0 {
+				startY = 0
+			}
+			// Border adds 1 on each side, padding adds 1 top/bottom and 2 left/right.
+			// Content offset from overlay top-left: X = 1(border) + 2(padding) = 3, Y = 1(border) + 1(padding) = 2
+			absX := startX + 3 + cur.x
+			absY := startY + 2 + cur.y
+			v.Cursor = tea.NewCursor(absX, absY)
+		}
+		return v
 	}
 	return newView(overlay)
 }
@@ -2116,15 +2160,18 @@ func (m Model) View() tea.View {
 	return newView(b.String())
 }
 
-func (m Model) viewNewSession(b *strings.Builder) string {
+func (m Model) viewNewSession(b *strings.Builder) (string, *overlayCursor) {
 	overlayWidth, overlayHeight := m.overlayListDims()
 
+	cursorY := 0
 	if m.err != nil {
 		b.WriteString(styleError.Render("Error: " + m.err.Error()))
 		b.WriteString("\n")
+		cursorY += 2 // error line + \n
 	}
 	b.WriteString(styleOverlayTitle.Render("New Session — Select Repository"))
 	b.WriteString("\n\n")
+	cursorY += 2 // title + blank line from \n\n
 	b.WriteString(" ")
 	b.WriteString(m.newSessionInput.View())
 	b.WriteString("\n\n")
@@ -2160,10 +2207,11 @@ func (m Model) viewNewSession(b *strings.Builder) string {
 	b.WriteString("\n\n")
 	b.WriteString(styleHelpBar.Render("Enter:select  Esc:cancel  ↑/↓:navigate"))
 
-	return renderOverlayBox(b.String(), overlayWidth)
+	cur := &overlayCursor{x: 1 + textInputCursorX(m.newSessionInput), y: cursorY}
+	return renderOverlayBox(b.String(), overlayWidth), cur
 }
 
-func (m Model) viewNewSessionPrompt(b *strings.Builder) string {
+func (m Model) viewNewSessionPrompt(b *strings.Builder) (string, *overlayCursor) {
 	overlayWidth := m.overlayWidth(50, 60, 80)
 
 	b.WriteString(styleOverlayTitle.Render("New Session — Initial Prompt"))
@@ -2179,18 +2227,23 @@ func (m Model) viewNewSessionPrompt(b *strings.Builder) string {
 		b.WriteString(styleError.Render("Error: " + m.err.Error()))
 	}
 
-	return renderOverlayBox(b.String(), overlayWidth)
+	// Line 0: title, line 1: blank (\n\n), line 2: " Repository: ...", line 3: blank (\n\n), line 4: " " + input
+	cur := &overlayCursor{x: 1 + textInputCursorX(m.newSessionPromptInput), y: 4}
+	return renderOverlayBox(b.String(), overlayWidth), cur
 }
 
-func (m Model) viewAddExternal(b *strings.Builder) string {
+func (m Model) viewAddExternal(b *strings.Builder) (string, *overlayCursor) {
 	overlayWidth, overlayHeight := m.overlayListDims()
 
+	cursorY := 0
 	if m.err != nil {
 		b.WriteString(styleError.Render("Error: " + m.err.Error()))
 		b.WriteString("\n")
+		cursorY += 2 // error line + \n
 	}
 	b.WriteString(styleOverlayTitle.Render("Add External Session"))
 	b.WriteString("\n\n")
+	cursorY += 2 // title + blank line from \n\n
 	b.WriteString(" ")
 	b.WriteString(m.addExtInput.View())
 	b.WriteString("\n\n")
@@ -2228,7 +2281,8 @@ func (m Model) viewAddExternal(b *strings.Builder) string {
 	b.WriteString("\n\n")
 	b.WriteString(styleHelpBar.Render("Enter:add  Esc:cancel  ↑/↓:navigate"))
 
-	return renderOverlayBox(b.String(), overlayWidth)
+	cur := &overlayCursor{x: 1 + textInputCursorX(m.addExtInput), y: cursorY}
+	return renderOverlayBox(b.String(), overlayWidth), cur
 }
 
 func (m Model) viewDashboard(b *strings.Builder) string {
@@ -2439,12 +2493,14 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 	return b.String()
 }
 
-func (m Model) viewBroadcastSelect(b *strings.Builder) string {
+func (m Model) viewBroadcastSelect(b *strings.Builder) (string, *overlayCursor) {
 	overlayWidth, overlayHeight := m.overlayListDims()
 
+	cursorY := 0
 	if m.err != nil {
 		b.WriteString(styleError.Render("Error: " + m.err.Error()))
 		b.WriteString("\n")
+		cursorY += 2 // error line + \n
 	}
 
 	selectedCount := 0
@@ -2456,6 +2512,7 @@ func (m Model) viewBroadcastSelect(b *strings.Builder) string {
 
 	b.WriteString(styleOverlayTitle.Render(fmt.Sprintf("Broadcast — Select Repositories (%d selected)", selectedCount)))
 	b.WriteString("\n\n")
+	cursorY += 2 // title + blank line from \n\n
 	b.WriteString(" ")
 	b.WriteString(m.broadcastInput.View())
 	b.WriteString("\n\n")
@@ -2496,20 +2553,25 @@ func (m Model) viewBroadcastSelect(b *strings.Builder) string {
 	b.WriteString("\n\n")
 	b.WriteString(styleHelpBar.Render("Space:toggle  Enter:confirm  Esc:cancel  ↑/↓:navigate"))
 
-	return renderOverlayBox(b.String(), overlayWidth)
+	cur := &overlayCursor{x: 1 + textInputCursorX(m.broadcastInput), y: cursorY}
+	return renderOverlayBox(b.String(), overlayWidth), cur
 }
 
-func (m Model) viewBroadcastPrompt(b *strings.Builder) string {
+func (m Model) viewBroadcastPrompt(b *strings.Builder) (string, *overlayCursor) {
 	overlayWidth := m.overlayWidth(50, 60, 80)
 
 	selectedCount := len(m.broadcastTargets)
 	b.WriteString(styleOverlayTitle.Render(fmt.Sprintf("Broadcast — Enter Prompt (%d repos selected)", selectedCount)))
 	b.WriteString("\n\n")
 
+	// Line 0: title, line 1: blank (\n\n)
+	cursorY := 2
 	for _, t := range m.broadcastTargets {
 		b.WriteString(fmt.Sprintf("  • %s\n", styleDir.Render(shortenDir(t.dir))))
+		cursorY++ // one line per target
 	}
 	b.WriteString("\n")
+	cursorY++ // blank line from \n
 
 	b.WriteString(" ")
 	b.WriteString(m.broadcastPromptInput.View())
@@ -2522,7 +2584,8 @@ func (m Model) viewBroadcastPrompt(b *strings.Builder) string {
 
 	b.WriteString(styleHelpBar.Render("Enter:send  Esc:back"))
 
-	return renderOverlayBox(b.String(), overlayWidth)
+	cur := &overlayCursor{x: 1 + textInputCursorX(m.broadcastPromptInput), y: cursorY}
+	return renderOverlayBox(b.String(), overlayWidth), cur
 }
 
 func (m Model) viewBroadcastWait(b *strings.Builder) string {
