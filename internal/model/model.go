@@ -2167,17 +2167,14 @@ func (m Model) View() tea.View {
 		b.WriteString(" / ")
 		b.WriteString(m.filterInput.View())
 		b.WriteString("\n\n")
-		b.WriteString(styleHelpBar.Render("Enter:apply  Esc:clear"))
+		b.WriteString(styleHelpBar.Render("↵:apply  Esc:clear"))
 	} else {
 		previewLabel := "p:preview"
 		if m.previewEnabled {
-			previewLabel = "p:preview(on)  Ctrl+U/D:scroll"
+			previewLabel = "p:preview  Ctrl+U/D:scroll"
 		}
 		groupLabel := "g:group"
-		if m.groupEnabled {
-			groupLabel = "g:group(on)"
-		}
-		b.WriteString(styleHelpBar.Render("Enter:attach  n:new  a:add-external  b:broadcast  K:kill  " + previewLabel + "  " + groupLabel + "  d:dashboard  /:filter  q:quit"))
+		b.WriteString(styleHelpBar.Render("↵:attach  n:new  a:add-external  b:broadcast  K:kill  " + previewLabel + "  " + groupLabel + "  d:dashboard  /:filter  q:quit"))
 	}
 
 	return newView(b.String())
@@ -2228,7 +2225,7 @@ func (m Model) viewNewSession(b *strings.Builder) (string, *overlayCursor) {
 	}
 
 	b.WriteString("\n\n")
-	b.WriteString(styleHelpBar.Render("Enter:select  Esc:cancel  ↑/↓:navigate"))
+	b.WriteString(styleHelpBar.Render("↵:select  Esc:cancel  ↑/↓:navigate"))
 
 	cur := &overlayCursor{x: 1 + textInputCursorX(m.newSessionInput), y: cursorY}
 	return renderOverlayBox(b.String(), overlayWidth), cur
@@ -2243,7 +2240,7 @@ func (m Model) viewNewSessionPrompt(b *strings.Builder) (string, *overlayCursor)
 	b.WriteString(" ")
 	b.WriteString(m.newSessionPromptInput.View())
 	b.WriteString("\n\n")
-	b.WriteString(styleHelpBar.Render("Enter:create  Enter(empty):skip prompt  Esc:cancel"))
+	b.WriteString(styleHelpBar.Render("↵:create  ↵(empty):skip prompt  Esc:cancel"))
 
 	if m.err != nil {
 		b.WriteString("\n\n")
@@ -2302,7 +2299,7 @@ func (m Model) viewAddExternal(b *strings.Builder) (string, *overlayCursor) {
 	}
 
 	b.WriteString("\n\n")
-	b.WriteString(styleHelpBar.Render("Enter:add  Esc:cancel  ↑/↓:navigate"))
+	b.WriteString(styleHelpBar.Render("↵:add  Esc:cancel  ↑/↓:navigate"))
 
 	cur := &overlayCursor{x: 1 + textInputCursorX(m.addExtInput), y: cursorY}
 	return renderOverlayBox(b.String(), overlayWidth), cur
@@ -2544,7 +2541,7 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 
 	// Help bar
 	b.WriteString("\n")
-	b.WriteString(styleHelpBar.Render("Enter:attach  y:approve  K:kill  n:new  /:filter  b:broadcast  f:focus  F:fullscreen  [/]:page  hjkl:navigate  Esc/d:back  q:quit"))
+	b.WriteString(styleHelpBar.Render("↵:attach  K:kill  n:new  /:filter  b:broadcast  f:focus  F:fullscreen  [/]:page  hjkl:navigate  Esc/d:back  q:quit"))
 
 	return b.String()
 }
@@ -2607,7 +2604,7 @@ func (m Model) viewBroadcastSelect(b *strings.Builder) (string, *overlayCursor) 
 	}
 
 	b.WriteString("\n\n")
-	b.WriteString(styleHelpBar.Render("Space:toggle  Enter:confirm  Esc:cancel  ↑/↓:navigate"))
+	b.WriteString(styleHelpBar.Render("Space:toggle  ↵:confirm  Esc:cancel  ↑/↓:navigate"))
 
 	cur := &overlayCursor{x: 1 + textInputCursorX(m.broadcastInput), y: cursorY}
 	return renderOverlayBox(b.String(), overlayWidth), cur
@@ -2638,7 +2635,7 @@ func (m Model) viewBroadcastPrompt(b *strings.Builder) (string, *overlayCursor) 
 		b.WriteString("\n\n")
 	}
 
-	b.WriteString(styleHelpBar.Render("Enter:send  Esc:back"))
+	b.WriteString(styleHelpBar.Render("↵:send  Esc:back"))
 
 	cur := &overlayCursor{x: 1 + textInputCursorX(m.broadcastPromptInput), y: cursorY}
 	return renderOverlayBox(b.String(), overlayWidth), cur

@@ -553,8 +553,8 @@ func TestView_ModeFilter(t *testing.T) {
 	m.mode = ModeFilter
 	_ = m.filterInput.Focus()
 	view := m.View().Content
-	if !strings.Contains(view, "Enter:apply") {
-		t.Error("expected view to contain 'Enter:apply'")
+	if !strings.Contains(view, "↵:apply") {
+		t.Error("expected view to contain '↵:apply'")
 	}
 	if !strings.Contains(view, "Esc:clear") {
 		t.Error("expected view to contain 'Esc:clear'")
@@ -737,8 +737,8 @@ func TestView_ModeNewSession(t *testing.T) {
 	if !strings.Contains(view, "New Session") {
 		t.Error("expected view to contain 'New Session'")
 	}
-	if !strings.Contains(view, "Enter:select") {
-		t.Error("expected view to contain 'Enter:select'")
+	if !strings.Contains(view, "↵:select") {
+		t.Error("expected view to contain '↵:select'")
 	}
 	if !strings.Contains(view, "beta") {
 		t.Error("expected view to contain 'beta' (the selected item)")
@@ -2655,12 +2655,12 @@ func TestViewGroupedHelpBar(t *testing.T) {
 		t.Error("expected 'g:group' in help bar when grouping is off")
 	}
 
-	// Grouped mode: help bar should show "g:group(on)".
+	// Grouped mode: help bar should still show "g:group" (no state indicator).
 	m.groupEnabled = true
 	view = m.View()
 	viewStr = fmt.Sprint(view)
-	if !strings.Contains(viewStr, "g:group(on)") {
-		t.Error("expected 'g:group(on)' in help bar when grouping is on")
+	if !strings.Contains(viewStr, "g:group") {
+		t.Error("expected 'g:group' in help bar when grouping is on")
 	}
 }
 
