@@ -1113,26 +1113,6 @@ func (m Model) updateBroadcastSelect(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case "a":
-		// Toggle all visible: if all visible are selected, deselect them; otherwise select all visible.
-		allSelected := true
-		for _, dir := range m.broadcastFiltered {
-			if !m.broadcastSelected[dir] {
-				allSelected = false
-				break
-			}
-		}
-		if allSelected {
-			for _, dir := range m.broadcastFiltered {
-				delete(m.broadcastSelected, dir)
-			}
-		} else {
-			for _, dir := range m.broadcastFiltered {
-				m.broadcastSelected[dir] = true
-			}
-		}
-		return m, nil
-
 	case "up", "ctrl+k", "ctrl+p":
 		if len(m.broadcastFiltered) > 0 {
 			m.broadcastCursor = (m.broadcastCursor - 1 + len(m.broadcastFiltered)) % len(m.broadcastFiltered)
@@ -1857,7 +1837,7 @@ func (m Model) viewBroadcastSelect(b *strings.Builder) string {
 	}
 
 	b.WriteString("\n\n")
-	b.WriteString(styleHelpBar.Render("Space:toggle  a:toggle-all  Enter:confirm  Esc:cancel  ↑/↓:navigate"))
+	b.WriteString(styleHelpBar.Render("Space:toggle  Enter:confirm  Esc:cancel  ↑/↓:navigate"))
 
 	return b.String()
 }
