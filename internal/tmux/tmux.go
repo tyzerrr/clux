@@ -280,31 +280,35 @@ func currentClientSession() string {
 // base clux session, using grouped sessions so multiple clients can independently track
 // different windows.
 //
-// If the current client is already attached to a session whose name starts with "clux"
-// (i.e., the base session or a grouped session), it reuses that session directly by calling
-// select-window + switch-client on it. Otherwise it creates a new grouped session linked to
-// SessionName, marks it destroy-unattached so it is cleaned up automatically, and switches
-// the client to that grouped session.
+// If the client is in the base clux session, it switches directly. If the client is in a
+// stale grouped session (clux-*), the old session is killed and a fresh one is created.
+// For clients outside the clux session group, a new grouped session is created with
+// destroy-unattached so it is cleaned up automatically. All failure paths fall back to the
+// base clux session.
 func switchClientGrouped(windowIndex string) error {
+	// Verify the window exists via display-message (has-session only checks sessions).
+	baseTarget := SessionName + ":" + windowIndex
+	out, err := exec.Command("tmux", "display-message", "-t", baseTarget, "-p", "#{window_index}").Output()
+	if err != nil || strings.TrimSpace(string(out)) != windowIndex {
+		return fmt.Errorf("window %q does not exist in session %q", windowIndex, SessionName)
+	}
+
 	clientSession := currentClientSession()
 
-	// If already in a clux session (base or grouped), reuse it.
-	if clientSession == SessionName || strings.HasPrefix(clientSession, SessionName+"-") {
-		target := clientSession + ":" + windowIndex
-		if err := exec.Command("tmux", "select-window", "-t", target).Run(); err != nil {
-			// The grouped session may be stale; fall back to base session.
-			debugLog(fmt.Sprintf("select-window failed in %q, falling back to base session: %v", clientSession, err))
-			baseTarget := SessionName + ":" + windowIndex
-			if err2 := exec.Command("tmux", "select-window", "-t", baseTarget).Run(); err2 != nil {
-				return fmt.Errorf("selecting window %q: %w", windowIndex, err2)
-			}
-			if err2 := exec.Command("tmux", "switch-client", "-t", baseTarget).Run(); err2 != nil {
-				return fmt.Errorf("switching client to session %q: %w", SessionName, err2)
-			}
-			return nil
+	// If already in a clux grouped session, kill it — it may be stale.
+	// We always create a fresh grouped session for reliability.
+	if strings.HasPrefix(clientSession, SessionName+"-") {
+		debugLog(fmt.Sprintf("killing stale grouped session %q", clientSession))
+		_ = exec.Command("tmux", "kill-session", "-t", clientSession).Run()
+	}
+
+	// If the client is in the base clux session, use it directly.
+	if clientSession == SessionName {
+		if err := exec.Command("tmux", "select-window", "-t", baseTarget).Run(); err != nil {
+			return fmt.Errorf("selecting window %q: %w", windowIndex, err)
 		}
-		if err := exec.Command("tmux", "switch-client", "-t", target).Run(); err != nil {
-			return fmt.Errorf("switching client to %q: %w", target, err)
+		if err := exec.Command("tmux", "switch-client", "-t", baseTarget).Run(); err != nil {
+			return fmt.Errorf("switching client to %q: %w", baseTarget, err)
 		}
 		return nil
 	}
@@ -312,40 +316,35 @@ func switchClientGrouped(windowIndex string) error {
 	// Create a new grouped session linked to the base clux session.
 	newSession := groupedSessionName()
 	if err := exec.Command("tmux", "new-session", "-d", "-t", SessionName, "-s", newSession).Run(); err != nil {
-		// Fall back to base session if grouped session creation fails.
-		target := SessionName + ":" + windowIndex
-		if err2 := exec.Command("tmux", "select-window", "-t", target).Run(); err2 != nil {
-			return fmt.Errorf("selecting window %q: %w", windowIndex, err2)
-		}
-		if err2 := exec.Command("tmux", "switch-client", "-t", target).Run(); err2 != nil {
-			return fmt.Errorf("switching client to session %q: %w", SessionName, err2)
-		}
-		return nil
+		// Fall back to base session.
+		return switchToBase(baseTarget, windowIndex)
 	}
 
 	// Auto-destroy the grouped session when the client detaches.
-	if err := exec.Command("tmux", "set-option", "-t", newSession, "destroy-unattached", "on").Run(); err != nil {
-		debugLog(fmt.Sprintf("set destroy-unattached failed for %s: %v", newSession, err))
-		_ = exec.Command("tmux", "kill-session", "-t", newSession).Run()
-		// Fall back to base session.
-		target := SessionName + ":" + windowIndex
-		if err2 := exec.Command("tmux", "select-window", "-t", target).Run(); err2 != nil {
-			return fmt.Errorf("selecting window %q: %w", windowIndex, err2)
-		}
-		if err2 := exec.Command("tmux", "switch-client", "-t", target).Run(); err2 != nil {
-			return fmt.Errorf("switching client to session %q: %w", SessionName, err2)
-		}
-		return nil
-	}
+	_ = exec.Command("tmux", "set-option", "-t", newSession, "destroy-unattached", "on").Run()
 
 	target := newSession + ":" + windowIndex
 	if err := exec.Command("tmux", "select-window", "-t", target).Run(); err != nil {
 		_ = exec.Command("tmux", "kill-session", "-t", newSession).Run()
-		return fmt.Errorf("selecting window %q in grouped session %q: %w", windowIndex, newSession, err)
+		return switchToBase(baseTarget, windowIndex)
 	}
 	if err := exec.Command("tmux", "switch-client", "-t", target).Run(); err != nil {
 		_ = exec.Command("tmux", "kill-session", "-t", newSession).Run()
-		return fmt.Errorf("switching client to grouped session %q: %w", newSession, err)
+		return switchToBase(baseTarget, windowIndex)
+	}
+	return nil
+}
+
+// switchToBase attempts to switch the client to a window in the base clux session.
+func switchToBase(baseTarget, windowIndex string) error {
+	if err := exec.Command("tmux", "select-window", "-t", baseTarget).Run(); err != nil {
+		// Last resort: try to at least attach the client to the base session.
+		_ = exec.Command("tmux", "switch-client", "-t", SessionName).Run()
+		return fmt.Errorf("selecting window %q: %w", windowIndex, err)
+	}
+	if err := exec.Command("tmux", "switch-client", "-t", baseTarget).Run(); err != nil {
+		_ = exec.Command("tmux", "switch-client", "-t", SessionName).Run()
+		return fmt.Errorf("switching client to session %q: %w", SessionName, err)
 	}
 	return nil
 }

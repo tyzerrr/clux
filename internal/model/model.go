@@ -1232,33 +1232,30 @@ func (m Model) checkBroadcastTargetsCmd() tea.Cmd {
 			return broadcastTimeoutMsg{}
 		}
 
+		graceExceeded := time.Since(startTime) >= 30*time.Second
 		allReady := true
 		updated := make([]broadcastTarget, len(targets))
 		for i, t := range targets {
-			sn := t.sessionName
-			if sn == "" {
-				// Clux session: use GetWindowStatus to check status.
-				// Newly-created Claude Code windows may not have loaded yet (hasClaudeCode
-				// returns false), so treat isClaudeCode=false within the first 30 seconds
-				// as "still starting up". After the grace period, treat as ready so the
-				// prompt is sent (Claude Code should have started by then).
-				st, isClaudeCode := tmux.GetWindowStatus(tmux.SessionName, t.windowIndex)
-				if isClaudeCode {
-					t.ready = st == session.StatusIdle
-				} else if time.Since(startTime) < 30*time.Second {
-					// Still booting; leave t.ready = false.
-					t.ready = false
-				} else {
-					// Beyond grace period: assume Claude Code has started and send anyway.
-					t.ready = true
-				}
+			if graceExceeded {
+				// After 30s, force-ready all targets regardless of status.
+				// Claude Code should have started by then; if not, SendKeys is a no-op.
+				t.ready = true
 			} else {
-				// External session: already running, no startup grace period needed.
-				s := tmux.ScanWindow(sn, t.windowIndex)
-				if s != nil {
-					t.ready = s.Status == session.StatusIdle
+				sn := t.sessionName
+				if sn == "" {
+					st, isClaudeCode := tmux.GetWindowStatus(tmux.SessionName, t.windowIndex)
+					if isClaudeCode {
+						t.ready = st == session.StatusIdle
+					} else {
+						t.ready = false
+					}
 				} else {
-					t.ready = false
+					s := tmux.ScanWindow(sn, t.windowIndex)
+					if s != nil {
+						t.ready = s.Status == session.StatusIdle
+					} else {
+						t.ready = false
+					}
 				}
 			}
 			updated[i] = t
