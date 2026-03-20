@@ -477,6 +477,43 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case ModeDashboard:
 			return m.updateDashboard(msg)
 		}
+
+	case tea.PasteMsg:
+		switch m.mode {
+		case ModeFilter:
+			var cmd tea.Cmd
+			m.filterInput, cmd = m.filterInput.Update(msg)
+			m.filtered = applyFilter(m.sessions, m.filterInput.Value())
+			sortByStatus(m.filtered)
+			if m.cursor >= len(m.filtered) {
+				m.cursor = 0
+			}
+			return m, cmd
+
+		case ModeNewSession:
+			var cmd tea.Cmd
+			m.newSessionInput, cmd = m.newSessionInput.Update(msg)
+			m.filteredDirs = filterDirs(m.repoDirs, m.newSessionInput.Value())
+			if m.newSessionCursor >= len(m.filteredDirs) {
+				m.newSessionCursor = 0
+			}
+			return m, cmd
+
+		case ModeNewSessionBranch:
+			var cmd tea.Cmd
+			m.branchInput, cmd = m.branchInput.Update(msg)
+			return m, cmd
+
+		case ModeAddExternal:
+			var cmd tea.Cmd
+			m.addExtInput, cmd = m.addExtInput.Update(msg)
+			allFiltered := filterExtWindows(m.externalWindows, m.addExtInput.Value())
+			m.filteredExtWindows = excludeRegistered(allFiltered, m.cfg)
+			if m.addExtCursor >= len(m.filteredExtWindows) {
+				m.addExtCursor = 0
+			}
+			return m, cmd
+		}
 	}
 
 	return m, nil
