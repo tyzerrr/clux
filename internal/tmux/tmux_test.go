@@ -995,3 +995,22 @@ func TestClearPaneHashByPrefix_AlsoClearsDetectCache(t *testing.T) {
 		t.Error("expected clux:6.0 to remain")
 	}
 }
+
+func TestWindowExists_InvalidIndex(t *testing.T) {
+	tests := []struct {
+		name  string
+		index string
+	}{
+		{"empty", ""},
+		{"letters", "abc"},
+		{"special chars", "1;rm"},
+		{"negative", "-1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if WindowExists(tt.index) {
+				t.Errorf("WindowExists(%q) = true, want false", tt.index)
+			}
+		})
+	}
+}

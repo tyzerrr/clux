@@ -667,8 +667,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 					}
 				}
-				// If target window was not found in sessions, it was killed.
-				if !targetFound {
+				// If target window was not found in sessions, check if the tmux
+				// window still exists (it may not be recognized as Claude Code yet
+				// during startup).
+				if !targetFound && !tmux.WindowExistsFn(m.pendingPromptTarget) {
 					m = m.clearPendingPrompt()
 					m.err = fmt.Errorf("pending prompt cancelled: target window no longer exists")
 				}

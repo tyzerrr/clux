@@ -730,6 +730,15 @@ func SendKeysLiteral(sessionName, windowIndex, paneIndex, text string) error {
 	return nil
 }
 
+// WindowExists checks whether a window with the given index exists in the clux session.
+func WindowExists(windowIndex string) bool {
+	if !validWindowIndex.MatchString(windowIndex) {
+		return false
+	}
+	target := SessionName + ":" + windowIndex
+	return exec.Command("tmux", "has-session", "-t", target).Run() == nil
+}
+
 // KillWindow kills a window in the clux session by its window index.
 func KillWindow(windowIndex string) error {
 	if !validWindowIndex.MatchString(windowIndex) {
@@ -860,6 +869,9 @@ var (
 	getClaudeStatusFn   = getClaudeStatusForSession
 	hasActiveChildrenFn = hasActiveChildrenForSession
 	contentChangedFn    = contentChanged
+	// WindowExistsFn is the function used to check window existence.
+	// Exported so that other packages (e.g., model) can override it in tests.
+	WindowExistsFn = WindowExists
 )
 
 // parseClaudeStatus converts a @claude-status string to a session.Status.

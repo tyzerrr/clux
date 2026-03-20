@@ -1014,6 +1014,40 @@ func TestUpdate_SessionsMsg_PendingPromptWaitsWhileWorking(t *testing.T) {
 	}
 }
 
+func TestUpdate_SessionsMsg_PendingPromptWaitsForStartup(t *testing.T) {
+	// Override WindowExistsFn to simulate a window that exists in tmux
+	// but is not yet recognized as Claude Code (startup phase).
+	orig := tmux.WindowExistsFn
+	tmux.WindowExistsFn = func(windowIndex string) bool {
+		return windowIndex == "5"
+	}
+	t.Cleanup(func() { tmux.WindowExistsFn = orig })
+
+	m := New()
+	m.pendingPrompt = "test prompt"
+	m.pendingPromptTarget = "5"
+	m.pendingPromptDeadline = time.Now().Add(120 * time.Second)
+
+	// Sessions list does NOT contain window index "5" (not recognized yet).
+	sessions := []session.Session{
+		{Name: "other", Dir: "/tmp", Status: session.StatusIdle, WindowIndex: "1"},
+	}
+	msg := sessionsMsg(sessions)
+	result, _ := m.Update(msg)
+	rm := result.(Model)
+
+	// Pending prompt should still be set (window exists, just not recognized).
+	if rm.pendingPrompt != "test prompt" {
+		t.Errorf("expected pendingPrompt still set, got %q", rm.pendingPrompt)
+	}
+	if rm.pendingPromptTarget != "5" {
+		t.Errorf("expected pendingPromptTarget still set, got %q", rm.pendingPromptTarget)
+	}
+	if rm.err != nil {
+		t.Errorf("expected no error during startup wait, got %v", rm.err)
+	}
+}
+
 func TestView_ModeConfirmKill_WithError(t *testing.T) {
 	m := New()
 	m.mode = ModeConfirmKill
