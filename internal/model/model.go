@@ -1725,6 +1725,13 @@ var (
 	styleWaiting = lipgloss.NewStyle().Foreground(lipgloss.Color("3")) // yellow
 	styleIdle    = lipgloss.NewStyle().Foreground(lipgloss.Color("8")) // gray
 	styleUnknown = lipgloss.NewStyle().Foreground(lipgloss.Color("5")) // magenta
+
+	styleOverlayBorder = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("6")). // cyan
+				Padding(1, 2)
+	styleOverlayTitle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6"))
+	styleDimmed       = lipgloss.NewStyle().Faint(true)
 )
 
 func shortenDir(dir string) string {
@@ -1748,6 +1755,158 @@ func statusStyle(s session.Status) lipgloss.Style {
 	}
 }
 
+// placeOverlay composites the foreground string on top of the background string,
+// centered horizontally and vertically. Both strings may contain ANSI sequences.
+func placeOverlay(bg, fg string, bgWidth, bgHeight int) string {
+	bgLines := strings.Split(bg, "\n")
+	fgLines := strings.Split(fg, "\n")
+
+	for len(bgLines) < bgHeight {
+		bgLines = append(bgLines, "")
+	}
+
+	fgWidth := 0
+	for _, line := range fgLines {
+		if w := lipgloss.Width(line); w > fgWidth {
+			fgWidth = w
+		}
+	}
+
+	startX := (bgWidth - fgWidth) / 2
+	if startX < 0 {
+		startX = 0
+	}
+	startY := (len(bgLines) - len(fgLines)) / 2
+	if startY < 0 {
+		startY = 0
+	}
+
+	leftPad := strings.Repeat(" ", startX)
+	for i, fgLine := range fgLines {
+		bgIdx := startY + i
+		if bgIdx >= len(bgLines) {
+			break
+		}
+		padded := fgLine + strings.Repeat(" ", fgWidth-lipgloss.Width(fgLine))
+		bgLines[bgIdx] = leftPad + padded
+	}
+
+	return strings.Join(bgLines, "\n")
+}
+
+const overlayBorderPadding = 6 // Border(2) + Padding(1,2)*2 = 6
+
+func clamp(val, min, max int) int {
+	if val < min {
+		return min
+	}
+	if val > max {
+		return max
+	}
+	return val
+}
+
+func (m Model) overlayDims(widthPct, minW, maxW, heightPct, minH, maxH int) (int, int) {
+	return clamp(m.width*widthPct/100, minW, maxW), clamp(m.height*heightPct/100, minH, maxH)
+}
+
+func renderOverlayBox(content string, overlayWidth int) string {
+	innerWidth := overlayWidth - overlayBorderPadding
+	if innerWidth < 20 {
+		innerWidth = 20
+	}
+	return styleOverlayBorder.Width(innerWidth).Render(content)
+}
+
+func (m Model) viewWithOverlay(viewFn func(*strings.Builder) string) tea.View {
+	var b strings.Builder
+	overlay := viewFn(&b)
+	if m.width > 0 && m.height > 0 {
+		base := m.viewListBase()
+		return newView(placeOverlay(base, overlay, m.width, m.height))
+	}
+	return newView(overlay)
+}
+
+// viewListBase renders the session list view dimmed, used as overlay background.
+func (m Model) viewListBase() string {
+	var b strings.Builder
+
+	header := fmt.Sprintf("Clux — Sessions (%d)", len(m.filtered))
+	if summary := statusSummary(m.filtered); summary != "" {
+		header += " — " + summary
+	}
+	b.WriteString(styleHeader.Render(header))
+	b.WriteString("\n\n")
+
+	nameWidth := 20
+	branchWidth := 15
+	if m.width > 100 {
+		nameWidth = 30
+	} else if m.width > 80 {
+		nameWidth = 25
+	}
+
+	if len(m.filtered) == 0 {
+		b.WriteString("No Claude Code sessions found.\n")
+	} else if m.groupEnabled {
+		groups := buildGroups(m.filtered, m.ghqRoot)
+		b.WriteString(styleHelpBar.Render(fmt.Sprintf(" %-16s %-*s  %-*s %s", "Status", nameWidth, "Name", branchWidth, "Branch", "Dir")))
+		b.WriteString("\n")
+		for _, g := range groups {
+			groupHeader := fmt.Sprintf("── %s (%d) ", g.name, len(g.sessions))
+			remaining := m.width - len([]rune(groupHeader))
+			if remaining > 0 {
+				groupHeader += strings.Repeat("─", remaining)
+			}
+			b.WriteString(styleGroupHeader.Render(groupHeader))
+			b.WriteString("\n")
+			for _, is := range g.sessions {
+				s := is.session
+				statusText := statusStyle(s.Status).Render(fmt.Sprintf("%s %-7s", s.Status.Icon(), s.Status.String()))
+				displayName := s.DisplayName()
+				if runes := []rune(displayName); len(runes) > nameWidth {
+					displayName = string(runes[:nameWidth-1]) + "…"
+				}
+				branch := s.Branch
+				if runes := []rune(branch); len(runes) > branchWidth {
+					branch = string(runes[:branchWidth-1]) + "…"
+				}
+				dir := styleDir.Render(shortenDir(s.Dir))
+				row := fmt.Sprintf("   %s  %-*s  %-*s %s", statusText, nameWidth, displayName, branchWidth, branch, dir)
+				if is.index == m.cursor {
+					row = styleSelected.Render(row)
+				}
+				b.WriteString(row)
+				b.WriteString("\n")
+			}
+		}
+	} else {
+		b.WriteString(styleHelpBar.Render(fmt.Sprintf(" %-16s %-*s  %-*s %s", "Status", nameWidth, "Name", branchWidth, "Branch", "Dir")))
+		b.WriteString("\n")
+		for i, s := range m.filtered {
+			statusText := statusStyle(s.Status).Render(fmt.Sprintf("%s %-7s", s.Status.Icon(), s.Status.String()))
+			displayName := s.DisplayName()
+			if runes := []rune(displayName); len(runes) > nameWidth {
+				displayName = string(runes[:nameWidth-1]) + "…"
+			}
+			branch := s.Branch
+			if runes := []rune(branch); len(runes) > branchWidth {
+				branch = string(runes[:branchWidth-1]) + "…"
+			}
+			dir := styleDir.Render(shortenDir(s.Dir))
+			row := fmt.Sprintf(" %s  %-*s  %-*s %s", statusText, nameWidth, displayName, branchWidth, branch, dir)
+			if i == m.cursor {
+				row = styleSelected.Render(row)
+			}
+			b.WriteString(row)
+			b.WriteString("\n")
+		}
+	}
+
+	return styleDimmed.Render(b.String())
+}
+
 // newView creates a tea.View with AltScreen enabled.
 func newView(s string) tea.View {
 	v := tea.NewView(s)
@@ -1763,15 +1922,15 @@ func (m Model) View() tea.View {
 	}
 
 	if m.mode == ModeNewSession {
-		return newView(m.viewNewSession(&b))
+		return m.viewWithOverlay(m.viewNewSession)
 	}
 
 	if m.mode == ModeNewSessionPrompt {
-		return newView(m.viewNewSessionPrompt(&b))
+		return m.viewWithOverlay(m.viewNewSessionPrompt)
 	}
 
 	if m.mode == ModeAddExternal {
-		return newView(m.viewAddExternal(&b))
+		return m.viewWithOverlay(m.viewAddExternal)
 	}
 
 	if m.mode == ModeDashboard {
@@ -1779,11 +1938,11 @@ func (m Model) View() tea.View {
 	}
 
 	if m.mode == ModeBroadcastSelect {
-		return newView(m.viewBroadcastSelect(&b))
+		return m.viewWithOverlay(m.viewBroadcastSelect)
 	}
 
 	if m.mode == ModeBroadcastPrompt {
-		return newView(m.viewBroadcastPrompt(&b))
+		return m.viewWithOverlay(m.viewBroadcastPrompt)
 	}
 
 	if m.mode == ModeBroadcastWait {
@@ -1985,21 +2144,24 @@ func (m Model) View() tea.View {
 }
 
 func (m Model) viewNewSession(b *strings.Builder) string {
+	overlayWidth, overlayHeight := m.overlayDims(60, 60, 100, 60, 10, 25)
+
 	if m.err != nil {
 		b.WriteString(styleError.Render("Error: " + m.err.Error()))
-		b.WriteString("\n\n")
+		b.WriteString("\n")
 	}
-	b.WriteString(styleHeader.Render("New Session — Select Repository"))
+	b.WriteString(styleOverlayTitle.Render("New Session — Select Repository"))
 	b.WriteString("\n\n")
 	b.WriteString(" ")
 	b.WriteString(m.newSessionInput.View())
 	b.WriteString("\n\n")
 
+	listHeight := clamp(overlayHeight-10, 3, overlayHeight)
+
 	if len(m.filteredDirs) == 0 {
 		b.WriteString(styleHelpBar.Render(" No repositories found."))
 	} else {
-		// Show at most 20 items with viewport offset to keep cursor visible.
-		maxShow := 20
+		maxShow := listHeight
 		offset := 0
 		if m.newSessionCursor >= maxShow {
 			offset = m.newSessionCursor - maxShow + 1
@@ -2018,18 +2180,20 @@ func (m Model) viewNewSession(b *strings.Builder) string {
 			b.WriteString("\n")
 		}
 		if end < len(m.filteredDirs) {
-			b.WriteString(styleHelpBar.Render(fmt.Sprintf("\n   ... and %d more", len(m.filteredDirs)-end)))
+			b.WriteString(styleHelpBar.Render(fmt.Sprintf("   ... and %d more", len(m.filteredDirs)-end)))
 		}
 	}
 
 	b.WriteString("\n\n")
 	b.WriteString(styleHelpBar.Render("Enter:select  Esc:cancel  ↑/↓:navigate"))
 
-	return b.String()
+	return renderOverlayBox(b.String(), overlayWidth)
 }
 
 func (m Model) viewNewSessionPrompt(b *strings.Builder) string {
-	b.WriteString(styleHeader.Render("New Session — Initial Prompt"))
+	overlayWidth, _ := m.overlayDims(50, 60, 80, 0, 0, 0)
+
+	b.WriteString(styleOverlayTitle.Render("New Session — Initial Prompt"))
 	b.WriteString("\n\n")
 	b.WriteString(fmt.Sprintf(" Repository: %s\n\n", styleDir.Render(shortenDir(m.selectedRepoDir))))
 	b.WriteString(" ")
@@ -2042,25 +2206,28 @@ func (m Model) viewNewSessionPrompt(b *strings.Builder) string {
 		b.WriteString(styleError.Render("Error: " + m.err.Error()))
 	}
 
-	return b.String()
+	return renderOverlayBox(b.String(), overlayWidth)
 }
 
 func (m Model) viewAddExternal(b *strings.Builder) string {
+	overlayWidth, overlayHeight := m.overlayDims(60, 60, 100, 60, 10, 25)
+
 	if m.err != nil {
 		b.WriteString(styleError.Render("Error: " + m.err.Error()))
-		b.WriteString("\n\n")
+		b.WriteString("\n")
 	}
-	b.WriteString(styleHeader.Render("Add External Session"))
+	b.WriteString(styleOverlayTitle.Render("Add External Session"))
 	b.WriteString("\n\n")
 	b.WriteString(" ")
 	b.WriteString(m.addExtInput.View())
 	b.WriteString("\n\n")
 
+	listHeight := clamp(overlayHeight-10, 3, overlayHeight)
+
 	if len(m.filteredExtWindows) == 0 {
 		b.WriteString(styleHelpBar.Render(" No external windows found."))
 	} else {
-		// Show at most 20 items with viewport offset to keep cursor visible.
-		maxShow := 20
+		maxShow := listHeight
 		offset := 0
 		if m.addExtCursor >= maxShow {
 			offset = m.addExtCursor - maxShow + 1
@@ -2081,14 +2248,14 @@ func (m Model) viewAddExternal(b *strings.Builder) string {
 			b.WriteString("\n")
 		}
 		if end < len(m.filteredExtWindows) {
-			b.WriteString(styleHelpBar.Render(fmt.Sprintf("\n   ... and %d more", len(m.filteredExtWindows)-end)))
+			b.WriteString(styleHelpBar.Render(fmt.Sprintf("   ... and %d more", len(m.filteredExtWindows)-end)))
 		}
 	}
 
 	b.WriteString("\n\n")
 	b.WriteString(styleHelpBar.Render("Enter:add  Esc:cancel  ↑/↓:navigate"))
 
-	return b.String()
+	return renderOverlayBox(b.String(), overlayWidth)
 }
 
 func (m Model) viewDashboard(b *strings.Builder) string {
@@ -2300,12 +2467,13 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 }
 
 func (m Model) viewBroadcastSelect(b *strings.Builder) string {
+	overlayWidth, overlayHeight := m.overlayDims(60, 60, 100, 60, 10, 25)
+
 	if m.err != nil {
 		b.WriteString(styleError.Render("Error: " + m.err.Error()))
-		b.WriteString("\n\n")
+		b.WriteString("\n")
 	}
 
-	// Count selected items.
 	selectedCount := 0
 	for _, sel := range m.broadcastSelected {
 		if sel {
@@ -2313,16 +2481,18 @@ func (m Model) viewBroadcastSelect(b *strings.Builder) string {
 		}
 	}
 
-	b.WriteString(styleHeader.Render(fmt.Sprintf("Broadcast — Select Repositories (%d selected)", selectedCount)))
+	b.WriteString(styleOverlayTitle.Render(fmt.Sprintf("Broadcast — Select Repositories (%d selected)", selectedCount)))
 	b.WriteString("\n\n")
 	b.WriteString(" ")
 	b.WriteString(m.broadcastInput.View())
 	b.WriteString("\n\n")
 
+	listHeight := clamp(overlayHeight-10, 3, overlayHeight)
+
 	if len(m.broadcastFiltered) == 0 {
 		b.WriteString(styleHelpBar.Render(" No repositories found."))
 	} else {
-		maxShow := 20
+		maxShow := listHeight
 		offset := 0
 		if m.broadcastCursor >= maxShow {
 			offset = m.broadcastCursor - maxShow + 1
@@ -2346,22 +2516,23 @@ func (m Model) viewBroadcastSelect(b *strings.Builder) string {
 			b.WriteString("\n")
 		}
 		if end < len(m.broadcastFiltered) {
-			b.WriteString(styleHelpBar.Render(fmt.Sprintf("\n   ... and %d more", len(m.broadcastFiltered)-end)))
+			b.WriteString(styleHelpBar.Render(fmt.Sprintf("   ... and %d more", len(m.broadcastFiltered)-end)))
 		}
 	}
 
 	b.WriteString("\n\n")
 	b.WriteString(styleHelpBar.Render("Space:toggle  Enter:confirm  Esc:cancel  ↑/↓:navigate"))
 
-	return b.String()
+	return renderOverlayBox(b.String(), overlayWidth)
 }
 
 func (m Model) viewBroadcastPrompt(b *strings.Builder) string {
+	overlayWidth, _ := m.overlayDims(50, 60, 80, 0, 0, 0)
+
 	selectedCount := len(m.broadcastTargets)
-	b.WriteString(styleHeader.Render(fmt.Sprintf("Broadcast — Enter Prompt (%d repos selected)", selectedCount)))
+	b.WriteString(styleOverlayTitle.Render(fmt.Sprintf("Broadcast — Enter Prompt (%d repos selected)", selectedCount)))
 	b.WriteString("\n\n")
 
-	// Show selected dirs.
 	for _, t := range m.broadcastTargets {
 		b.WriteString(fmt.Sprintf("  • %s\n", styleDir.Render(shortenDir(t.dir))))
 	}
@@ -2378,7 +2549,7 @@ func (m Model) viewBroadcastPrompt(b *strings.Builder) string {
 
 	b.WriteString(styleHelpBar.Render("Enter:send  Esc:back"))
 
-	return b.String()
+	return renderOverlayBox(b.String(), overlayWidth)
 }
 
 func (m Model) viewBroadcastWait(b *strings.Builder) string {
