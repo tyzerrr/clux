@@ -2189,3 +2189,235 @@ func TestDashboard_ViewShowsPageIndicator(t *testing.T) {
 		}
 	}
 }
+
+// --- Grouping tests ---
+
+func TestGroupKey_WithGhqRoot(t *testing.T) {
+	ghqRoot := "/Users/h-tanaka/go/src/"
+	s := session.Session{Dir: "/Users/h-tanaka/go/src/github.com/tanaka0325/clux"}
+	key := groupKey(s, ghqRoot)
+	if key != "github.com/tanaka0325/clux" {
+		t.Errorf("expected 'github.com/tanaka0325/clux', got %q", key)
+	}
+}
+
+func TestGroupKey_WithoutGhqRoot(t *testing.T) {
+	s := session.Session{Dir: "/some/random/path/to/project"}
+	key := groupKey(s, "")
+	if key != "to/project" {
+		t.Errorf("expected 'to/project', got %q", key)
+	}
+}
+
+func TestGroupKey_External(t *testing.T) {
+	s := session.Session{External: true, Dir: "/any/dir"}
+	key := groupKey(s, "/some/root/")
+	if key != "External" {
+		t.Errorf("expected 'External', got %q", key)
+	}
+}
+
+func TestGroupKey_WorktreeStripping(t *testing.T) {
+	ghqRoot := "/Users/h-tanaka/go/src/"
+	s := session.Session{Dir: "/Users/h-tanaka/go/src/github.com/tanaka0325/clux/.claude/worktrees/agent-abc123"}
+	key := groupKey(s, ghqRoot)
+	if key != "github.com/tanaka0325/clux" {
+		t.Errorf("expected 'github.com/tanaka0325/clux', got %q", key)
+	}
+}
+
+func TestGroupKey_DirNotUnderGhqRoot(t *testing.T) {
+	ghqRoot := "/Users/h-tanaka/go/src/"
+	s := session.Session{Dir: "/opt/projects/my-app"}
+	key := groupKey(s, ghqRoot)
+	if key != "projects/my-app" {
+		t.Errorf("expected 'projects/my-app', got %q", key)
+	}
+}
+
+func TestGroupKey_ShortPath(t *testing.T) {
+	s := session.Session{Dir: "/root"}
+	key := groupKey(s, "")
+	// len(parts) >= 2: ["", "root"] -> "/root"
+	if key != "/root" {
+		t.Errorf("expected '/root', got %q", key)
+	}
+}
+
+func TestBuildGroups_CorrectGrouping(t *testing.T) {
+	sessions := []session.Session{
+		{Name: "s1", Dir: "/home/user/go/src/github.com/owner/repo-a", Status: session.StatusIdle},
+		{Name: "s2", Dir: "/home/user/go/src/github.com/owner/repo-b", Status: session.StatusWorking},
+		{Name: "s3", Dir: "/home/user/go/src/github.com/owner/repo-a", Status: session.StatusWaiting},
+	}
+	ghqRoot := "/home/user/go/src/"
+	groups := buildGroups(sessions, ghqRoot)
+
+	if len(groups) != 2 {
+		t.Fatalf("expected 2 groups, got %d", len(groups))
+	}
+
+	// Groups should be sorted by activity: repo-a has Waiting (3), repo-b has Working (2).
+	if groups[0].name != "github.com/owner/repo-a" {
+		t.Errorf("expected first group 'github.com/owner/repo-a', got %q", groups[0].name)
+	}
+	if len(groups[0].sessions) != 2 {
+		t.Errorf("expected 2 sessions in first group, got %d", len(groups[0].sessions))
+	}
+	if groups[1].name != "github.com/owner/repo-b" {
+		t.Errorf("expected second group 'github.com/owner/repo-b', got %q", groups[1].name)
+	}
+	if len(groups[1].sessions) != 1 {
+		t.Errorf("expected 1 session in second group, got %d", len(groups[1].sessions))
+	}
+}
+
+func TestBuildGroups_IndexPreserved(t *testing.T) {
+	sessions := []session.Session{
+		{Name: "s0", Dir: "/home/user/projects/a", Status: session.StatusIdle},
+		{Name: "s1", Dir: "/home/user/projects/b", Status: session.StatusIdle},
+		{Name: "s2", Dir: "/home/user/projects/a", Status: session.StatusIdle},
+	}
+	groups := buildGroups(sessions, "")
+
+	for _, g := range groups {
+		for _, is := range g.sessions {
+			if sessions[is.index].Name != is.session.Name {
+				t.Errorf("index %d points to %q but session is %q", is.index, sessions[is.index].Name, is.session.Name)
+			}
+		}
+	}
+}
+
+func TestGroupPriority(t *testing.T) {
+	tests := []struct {
+		name     string
+		statuses []session.Status
+		expected int
+	}{
+		{"waiting_highest", []session.Status{session.StatusIdle, session.StatusWaiting}, 3},
+		{"working_only", []session.Status{session.StatusWorking}, 2},
+		{"idle_only", []session.Status{session.StatusIdle}, 1},
+		{"unknown_only", []session.Status{session.StatusUnknown}, 0},
+		{"mixed", []session.Status{session.StatusUnknown, session.StatusIdle, session.StatusWorking}, 2},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var sessions []indexedSession
+			for i, st := range tc.statuses {
+				sessions = append(sessions, indexedSession{index: i, session: session.Session{Status: st}})
+			}
+			g := sessionGroup{name: "test", sessions: sessions}
+			if got := groupPriority(g); got != tc.expected {
+				t.Errorf("expected priority %d, got %d", tc.expected, got)
+			}
+		})
+	}
+}
+
+func TestGroupedSessionRows(t *testing.T) {
+	groups := []sessionGroup{
+		{name: "group-a", sessions: []indexedSession{{}, {}, {}}},
+		{name: "group-b", sessions: []indexedSession{{}}},
+	}
+	// 2 headers + 4 sessions = 6
+	if got := groupedSessionRows(groups); got != 6 {
+		t.Errorf("expected 6 rows, got %d", got)
+	}
+}
+
+func TestToggleGroupKey(t *testing.T) {
+	m := testModel(testSessions)
+	if m.GroupEnabled() {
+		t.Fatal("groupEnabled should default to false")
+	}
+
+	// Press 'g' to enable.
+	m2, _ := m.Update(tea.KeyPressMsg{Code: 'g'})
+	m = m2.(Model)
+	if !m.GroupEnabled() {
+		t.Error("expected groupEnabled to be true after pressing 'g'")
+	}
+
+	// Press 'g' again to disable.
+	m3, _ := m.Update(tea.KeyPressMsg{Code: 'g'})
+	m = m3.(Model)
+	if m.GroupEnabled() {
+		t.Error("expected groupEnabled to be false after pressing 'g' again")
+	}
+}
+
+func TestViewGroupedRendering(t *testing.T) {
+	sessions := []session.Session{
+		{Name: "s1", Dir: "/home/user/go/src/github.com/owner/repo-a", Status: session.StatusIdle, WindowIndex: "0", PaneIndex: "0"},
+		{Name: "s2", Dir: "/home/user/go/src/github.com/owner/repo-b", Status: session.StatusWorking, WindowIndex: "1", PaneIndex: "0"},
+		{Name: "s3", Dir: "/home/user/go/src/github.com/owner/repo-a", Status: session.StatusWaiting, WindowIndex: "2", PaneIndex: "0"},
+	}
+	m := testModel(sessions)
+	m.groupEnabled = true
+	m.ghqRoot = "/home/user/go/src/"
+	m.width = 120
+	m.height = 40
+
+	view := m.View()
+	viewStr := fmt.Sprint(view)
+
+	// Verify group headers appear.
+	if !strings.Contains(viewStr, "repo-a") {
+		t.Error("expected group header containing 'repo-a' in view")
+	}
+	if !strings.Contains(viewStr, "repo-b") {
+		t.Error("expected group header containing 'repo-b' in view")
+	}
+	// Verify session names appear.
+	if !strings.Contains(viewStr, "s1") {
+		t.Error("expected session 's1' in view")
+	}
+	if !strings.Contains(viewStr, "s2") {
+		t.Error("expected session 's2' in view")
+	}
+	if !strings.Contains(viewStr, "s3") {
+		t.Error("expected session 's3' in view")
+	}
+}
+
+func TestViewGroupedHelpBar(t *testing.T) {
+	m := testModel(testSessions)
+	m.width = 120
+	m.height = 40
+
+	// Flat mode: help bar should show "g:group".
+	view := m.View()
+	viewStr := fmt.Sprint(view)
+	if !strings.Contains(viewStr, "g:group") {
+		t.Error("expected 'g:group' in help bar when grouping is off")
+	}
+
+	// Grouped mode: help bar should show "g:group(on)".
+	m.groupEnabled = true
+	view = m.View()
+	viewStr = fmt.Sprint(view)
+	if !strings.Contains(viewStr, "g:group(on)") {
+		t.Error("expected 'g:group(on)' in help bar when grouping is on")
+	}
+}
+
+func TestBuildGroups_WorktreeSessionsGroupTogether(t *testing.T) {
+	sessions := []session.Session{
+		{Name: "main", Dir: "/home/user/go/src/github.com/owner/repo", Status: session.StatusIdle},
+		{Name: "wt1", Dir: "/home/user/go/src/github.com/owner/repo/.claude/worktrees/agent-abc", Status: session.StatusWorking},
+	}
+	ghqRoot := "/home/user/go/src/"
+	groups := buildGroups(sessions, ghqRoot)
+
+	if len(groups) != 1 {
+		t.Fatalf("expected 1 group (worktree sessions should group with base repo), got %d", len(groups))
+	}
+	if groups[0].name != "github.com/owner/repo" {
+		t.Errorf("expected group name 'github.com/owner/repo', got %q", groups[0].name)
+	}
+	if len(groups[0].sessions) != 2 {
+		t.Errorf("expected 2 sessions in group, got %d", len(groups[0].sessions))
+	}
+}

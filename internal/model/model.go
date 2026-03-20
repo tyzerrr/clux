@@ -48,6 +48,7 @@ type (
 	broadcastReadyMsg          struct{}          // all broadcast targets are idle; send the prompt
 	broadcastTargetsUpdatedMsg []broadcastTarget // updated ready flags from poll
 	broadcastTimeoutMsg        struct{}          // waiting exceeded 120s; abort broadcast
+	ghqRootMsg                 string            // cached ghq root path
 )
 
 // broadcastTargetsResolvedMsg is returned after resolving broadcast targets.
@@ -115,6 +116,10 @@ type Model struct {
 	dashPageOffset int            // index of first displayed item in dashboard
 	dashFocused    bool           // true when in single-session focus mode
 
+	// Grouping mode
+	groupEnabled bool   // toggle for grouped display
+	ghqRoot      string // cached result of `ghq root`
+
 	// Broadcast mode
 	broadcastDirs        []string           // all ghq dirs (loaded once)
 	broadcastFiltered    []string           // filtered by broadcastInput
@@ -169,6 +174,7 @@ func New() Model {
 		broadcastPromptInput: bpi,
 		cfg:                  cfg,
 		previewEnabled:       cfg.PreviewDefault,
+		groupEnabled:         cfg.GroupDefault,
 		prevStatuses:         make(map[string]session.Status),
 		dashPreviews:         make(map[int]string),
 		broadcastSelected:    make(map[string]bool),
@@ -185,6 +191,7 @@ func (m Model) Width() int                   { return m.width }
 func (m Model) Height() int                  { return m.height }
 func (m Model) FilterInput() textinput.Model { return m.filterInput }
 func (m Model) Err() error                   { return m.err }
+func (m Model) GroupEnabled() bool            { return m.groupEnabled }
 
 // --- Command functions ---
 
@@ -442,12 +449,108 @@ func filterDirs(dirs []string, query string) []string {
 	return result
 }
 
+// --- Grouping ---
+
+// sessionGroup holds a group of sessions for display.
+type sessionGroup struct {
+	name     string
+	sessions []indexedSession
+}
+
+// indexedSession pairs a session with its index in the filtered slice.
+type indexedSession struct {
+	index   int
+	session session.Session
+}
+
+func fetchGhqRoot() tea.Msg {
+	out, err := exec.Command("ghq", "root").Output()
+	if err != nil {
+		return ghqRootMsg("")
+	}
+	root := strings.TrimSpace(string(out))
+	if root != "" && !strings.HasSuffix(root, "/") {
+		root += "/"
+	}
+	return ghqRootMsg(root)
+}
+
+// groupKey returns the group key for a session based on its Dir.
+func groupKey(s session.Session, ghqRoot string) string {
+	if s.External {
+		return "External"
+	}
+	dir := s.Dir
+	// Strip worktree paths to group by base repo.
+	if idx := strings.Index(dir, "/.claude/worktrees/"); idx >= 0 {
+		dir = dir[:idx]
+	}
+	if ghqRoot != "" && strings.HasPrefix(dir, ghqRoot) {
+		return strings.TrimPrefix(dir, ghqRoot)
+	}
+	// Fallback: use last 2 path components.
+	parts := strings.Split(dir, "/")
+	if len(parts) >= 2 {
+		return strings.Join(parts[len(parts)-2:], "/")
+	}
+	return dir
+}
+
+// buildGroups creates sorted session groups from filtered sessions.
+func buildGroups(sessions []session.Session, ghqRoot string) []sessionGroup {
+	groups := make(map[string][]indexedSession)
+	var order []string
+	for i, s := range sessions {
+		key := groupKey(s, ghqRoot)
+		if _, exists := groups[key]; !exists {
+			order = append(order, key)
+		}
+		groups[key] = append(groups[key], indexedSession{index: i, session: s})
+	}
+
+	// Convert map to sorted slice.
+	result := make([]sessionGroup, 0, len(groups))
+	for _, name := range order {
+		result = append(result, sessionGroup{name: name, sessions: groups[name]})
+	}
+
+	// Sort groups by activity (most active first).
+	sort.SliceStable(result, func(i, j int) bool {
+		return groupPriority(result[i]) > groupPriority(result[j])
+	})
+
+	return result
+}
+
+// groupPriority returns the highest status priority among sessions in the group.
+func groupPriority(g sessionGroup) int {
+	maxPri := 0
+	for _, is := range g.sessions {
+		if p := statusPriority(is.session.Status); p > maxPri {
+			maxPri = p
+		}
+	}
+	return maxPri
+}
+
+// groupedSessionRows calculates the total visual rows in grouped mode
+// (group headers + session rows).
+func groupedSessionRows(groups []sessionGroup) int {
+	total := 0
+	for _, g := range groups {
+		total++ // group header
+		total += len(g.sessions)
+	}
+	return total
+}
+
 // --- tea.Model interface ---
 
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		fetchSessionsCmdWithExternals(m.cfg),
 		doTick(),
+		fetchGhqRoot,
 	)
 }
 
@@ -632,6 +735,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.broadcastErrors = nil
 		m.mode = ModeList
 		m.err = fmt.Errorf("Broadcast timed out: some sessions did not become idle")
+		return m, nil
+
+	case ghqRootMsg:
+		m.ghqRoot = string(msg)
 		return m, nil
 
 	case externalWindowsMsg:
@@ -872,6 +979,9 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.broadcastFiltered = m.broadcastDirs
 		}
 		return m, tea.Batch(cmds...)
+
+	case "g":
+		m.groupEnabled = !m.groupEnabled
 
 	case "/":
 		m.mode = ModeFilter
@@ -1533,6 +1643,10 @@ func (m Model) dashMaxVisible() int {
 // previewHeight returns the number of lines available for preview content.
 func previewHeight(m Model) int {
 	sessionRows := len(m.filtered)
+	if m.groupEnabled && sessionRows > 0 {
+		groups := buildGroups(m.filtered, m.ghqRoot)
+		sessionRows = groupedSessionRows(groups)
+	}
 	topLines := 2 + 1 + sessionRows + 1
 	if m.err != nil {
 		topLines += 2
@@ -1569,7 +1683,8 @@ var (
 	styleHelpBar  = lipgloss.NewStyle().Faint(true)
 	styleError    = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 	styleDir      = lipgloss.NewStyle().Faint(true)
-	stylePreview  = lipgloss.NewStyle().Faint(true)
+	stylePreview     = lipgloss.NewStyle().Faint(true)
+	styleGroupHeader = lipgloss.NewStyle().Faint(true).Bold(true)
 
 	styleWorking = lipgloss.NewStyle().Foreground(lipgloss.Color("2")) // green
 	styleWaiting = lipgloss.NewStyle().Foreground(lipgloss.Color("3")) // yellow
@@ -1666,7 +1781,43 @@ func (m Model) View() tea.View {
 	// Session list.
 	if len(m.filtered) == 0 {
 		b.WriteString("No Claude Code sessions found. Start Claude Code in another tmux session.\n")
+	} else if m.groupEnabled {
+		// Grouped display.
+		groups := buildGroups(m.filtered, m.ghqRoot)
+		b.WriteString(styleHelpBar.Render(fmt.Sprintf(" %-16s %-*s  %-*s %s", "Status", nameWidth, "Name", branchWidth, "Branch", "Dir")))
+		b.WriteString("\n")
+		for _, g := range groups {
+			// Group header.
+			groupHeader := fmt.Sprintf("── %s (%d) ", g.name, len(g.sessions))
+			remaining := m.width - len([]rune(groupHeader))
+			if remaining > 0 {
+				groupHeader += strings.Repeat("─", remaining)
+			}
+			b.WriteString(styleGroupHeader.Render(groupHeader))
+			b.WriteString("\n")
+			// Sessions in group.
+			for _, is := range g.sessions {
+				s := is.session
+				statusText := statusStyle(s.Status).Render(fmt.Sprintf("%s %-7s", s.Status.Icon(), s.Status.String()))
+				displayName := s.DisplayName()
+				if runes := []rune(displayName); len(runes) > nameWidth {
+					displayName = string(runes[:nameWidth-1]) + "…"
+				}
+				branch := s.Branch
+				if runes := []rune(branch); len(runes) > branchWidth {
+					branch = string(runes[:branchWidth-1]) + "…"
+				}
+				dir := styleDir.Render(shortenDir(s.Dir))
+				row := fmt.Sprintf("   %s  %-*s  %-*s %s", statusText, nameWidth, displayName, branchWidth, branch, dir)
+				if is.index == m.cursor {
+					row = styleSelected.Render(row)
+				}
+				b.WriteString(row)
+				b.WriteString("\n")
+			}
+		}
 	} else {
+		// Flat display.
 		b.WriteString(styleHelpBar.Render(fmt.Sprintf(" %-16s %-*s  %-*s %s", "Status", nameWidth, "Name", branchWidth, "Branch", "Dir")))
 		b.WriteString("\n")
 		for i, s := range m.filtered {
@@ -1696,6 +1847,10 @@ func (m Model) View() tea.View {
 		// Calculate layout.
 		// Top section: header(2) + col-header(1) + sessions + blank(1)
 		sessionRows := len(m.filtered)
+		if m.groupEnabled {
+			groups := buildGroups(m.filtered, m.ghqRoot)
+			sessionRows = groupedSessionRows(groups)
+		}
 		topLines := 2 + 1 + sessionRows + 1
 		if m.err != nil {
 			topLines += 2 // error + blank
@@ -1784,7 +1939,11 @@ func (m Model) View() tea.View {
 		if m.previewEnabled {
 			previewLabel = "p:preview(on)  Ctrl+U/D:scroll"
 		}
-		b.WriteString(styleHelpBar.Render("Enter:attach  y:approve  n:new  a:add-external  b:broadcast  K:kill  R:refresh  " + previewLabel + "  d:dash  /:filter  q:quit"))
+		groupLabel := "g:group"
+		if m.groupEnabled {
+			groupLabel = "g:group(on)"
+		}
+		b.WriteString(styleHelpBar.Render("Enter:attach  y:approve  n:new  a:add-external  b:broadcast  K:kill  R:refresh  " + previewLabel + "  " + groupLabel + "  d:dash  /:filter  q:quit"))
 	}
 
 	return newView(b.String())

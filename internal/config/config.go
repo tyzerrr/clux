@@ -40,6 +40,7 @@ type Config struct {
 	ExternalSessions []ExternalSession  `json:"external_sessions"`
 	PreviewDefault   bool               `json:"preview_default"`
 	Notifications    *NotificationConfig `json:"notifications,omitempty"`
+	GroupDefault     bool               `json:"group_default"`
 }
 
 const configDir = ".config/clux"

@@ -198,3 +198,39 @@ func TestConfig_PreviewDefault_RoundTrip(t *testing.T) {
 		t.Error("expected PreviewDefault=true after round-trip, got false")
 	}
 }
+
+func TestConfig_GroupDefault_RoundTrip(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	cfg := &Config{GroupDefault: true}
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	loaded, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !loaded.GroupDefault {
+		t.Error("expected GroupDefault=true after round-trip, got false")
+	}
+}
+
+func TestConfig_GroupDefault_DefaultFalse(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	cfg := &Config{}
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	loaded, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if loaded.GroupDefault {
+		t.Error("expected GroupDefault=false by default, got true")
+	}
+}
