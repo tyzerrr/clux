@@ -113,7 +113,7 @@ type Model struct {
 	// Broadcast mode
 	broadcastDirs        []string           // all ghq dirs (loaded once)
 	broadcastFiltered    []string           // filtered by broadcastInput
-	broadcastSelected    map[int]bool       // selected indices in broadcastFiltered
+	broadcastSelected    map[string]bool    // selected dir paths (persists across filter changes)
 	broadcastInput       textinput.Model    // filter input for repo select
 	broadcastCursor      int                // cursor in broadcastFiltered
 	broadcastPromptInput textinput.Model    // prompt text input
@@ -166,7 +166,7 @@ func New() Model {
 		previewEnabled:       cfg.PreviewDefault,
 		prevStatuses:         make(map[string]session.Status),
 		dashPreviews:         make(map[int]string),
-		broadcastSelected:    make(map[int]bool),
+		broadcastSelected:    make(map[string]bool),
 	}
 }
 
@@ -635,8 +635,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.broadcastInput, cmd = m.broadcastInput.Update(msg)
 			m.broadcastFiltered = filterDirs(m.broadcastDirs, m.broadcastInput.Value())
-			// Reset selection and cursor when filter changes.
-			m.broadcastSelected = make(map[int]bool)
 			if m.broadcastCursor >= len(m.broadcastFiltered) {
 				m.broadcastCursor = 0
 			}
@@ -760,7 +758,7 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.err = nil
 		m.broadcastInput.SetValue("")
 		m.broadcastCursor = 0
-		m.broadcastSelected = make(map[int]bool)
+		m.broadcastSelected = make(map[string]bool)
 		cmds := []tea.Cmd{m.broadcastInput.Focus()}
 		if len(m.broadcastDirs) == 0 {
 			cmds = append(cmds, fetchBroadcastGhqDirs)
@@ -1078,9 +1076,9 @@ func (m Model) updateBroadcastSelect(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		// Collect selected dirs; if nothing selected, treat cursor item as selected.
 		var selectedDirs []string
-		for idx, sel := range m.broadcastSelected {
-			if sel && idx < len(m.broadcastFiltered) {
-				selectedDirs = append(selectedDirs, m.broadcastFiltered[idx])
+		for dir, sel := range m.broadcastSelected {
+			if sel {
+				selectedDirs = append(selectedDirs, dir)
 			}
 		}
 		if len(selectedDirs) == 0 && len(m.broadcastFiltered) > 0 {
@@ -1089,15 +1087,7 @@ func (m Model) updateBroadcastSelect(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if len(selectedDirs) == 0 {
 			return m, nil
 		}
-		// Deduplicate preserving order.
-		seen := make(map[string]bool)
-		var uniqueDirs []string
-		for _, d := range selectedDirs {
-			if !seen[d] {
-				seen[d] = true
-				uniqueDirs = append(uniqueDirs, d)
-			}
-		}
+		uniqueDirs := selectedDirs // already unique since map keys are unique
 		// Store as a temporary field; transition to prompt.
 		// We reuse broadcastTargets with dir only (windowIndex/sessionName resolved later).
 		m.broadcastTargets = make([]broadcastTarget, len(uniqueDirs))
@@ -1112,31 +1102,33 @@ func (m Model) updateBroadcastSelect(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		m.mode = ModeList
 		m.broadcastInput.Blur()
-		m.broadcastSelected = make(map[int]bool)
+		m.broadcastSelected = make(map[string]bool)
 		return m, nil
 
 	case " ", "space":
 		// Toggle selection of item at cursor.
 		if len(m.broadcastFiltered) > 0 {
-			m.broadcastSelected[m.broadcastCursor] = !m.broadcastSelected[m.broadcastCursor]
+			dir := m.broadcastFiltered[m.broadcastCursor]
+			m.broadcastSelected[dir] = !m.broadcastSelected[dir]
 		}
 		return m, nil
 
 	case "a":
-		// Toggle all: if all are selected, deselect all; otherwise select all.
-		allSelected := len(m.broadcastSelected) == len(m.broadcastFiltered)
-		if allSelected {
-			for i := range m.broadcastFiltered {
-				if !m.broadcastSelected[i] {
-					allSelected = false
-					break
-				}
+		// Toggle all visible: if all visible are selected, deselect them; otherwise select all visible.
+		allSelected := true
+		for _, dir := range m.broadcastFiltered {
+			if !m.broadcastSelected[dir] {
+				allSelected = false
+				break
 			}
 		}
-		m.broadcastSelected = make(map[int]bool)
-		if !allSelected {
-			for i := range m.broadcastFiltered {
-				m.broadcastSelected[i] = true
+		if allSelected {
+			for _, dir := range m.broadcastFiltered {
+				delete(m.broadcastSelected, dir)
+			}
+		} else {
+			for _, dir := range m.broadcastFiltered {
+				m.broadcastSelected[dir] = true
 			}
 		}
 		return m, nil
@@ -1157,8 +1149,6 @@ func (m Model) updateBroadcastSelect(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.broadcastInput, cmd = m.broadcastInput.Update(msg)
 		m.broadcastFiltered = filterDirs(m.broadcastDirs, m.broadcastInput.Value())
-		// Reset selection when filter changes.
-		m.broadcastSelected = make(map[int]bool)
 		if m.broadcastCursor >= len(m.broadcastFiltered) {
 			m.broadcastCursor = 0
 		}
@@ -1848,9 +1838,10 @@ func (m Model) viewBroadcastSelect(b *strings.Builder) string {
 			end = len(m.broadcastFiltered)
 		}
 		for i := offset; i < end; i++ {
-			dir := shortenDir(m.broadcastFiltered[i])
+			fullDir := m.broadcastFiltered[i]
+			dir := shortenDir(fullDir)
 			checkmark := "[ ]"
-			if m.broadcastSelected[i] {
+			if m.broadcastSelected[fullDir] {
 				checkmark = "[x]"
 			}
 			if i == m.broadcastCursor {
