@@ -125,6 +125,62 @@ func TestLoad_InvalidJSON(t *testing.T) {
 	}
 }
 
+func TestNotificationConfig_NilReceiver(t *testing.T) {
+	var n *NotificationConfig
+	if !n.ShouldNotifyWorkingToIdle() {
+		t.Error("expected nil receiver WorkingToIdle to default to true")
+	}
+	if !n.ShouldNotifyWorkingToWaiting() {
+		t.Error("expected nil receiver WorkingToWaiting to default to true")
+	}
+}
+
+func TestNotificationConfig_Defaults(t *testing.T) {
+	n := &NotificationConfig{}
+	if !n.ShouldNotifyWorkingToIdle() {
+		t.Error("expected default WorkingToIdle to be true")
+	}
+	if !n.ShouldNotifyWorkingToWaiting() {
+		t.Error("expected default WorkingToWaiting to be true")
+	}
+}
+
+func TestNotificationConfig_ExplicitValues(t *testing.T) {
+	f := false
+	tr := true
+	n := &NotificationConfig{WorkingToIdle: &f, WorkingToWaiting: &tr}
+	if n.ShouldNotifyWorkingToIdle() {
+		t.Error("expected WorkingToIdle=false")
+	}
+	if !n.ShouldNotifyWorkingToWaiting() {
+		t.Error("expected WorkingToWaiting=true")
+	}
+}
+
+func TestConfig_Notifications_RoundTrip(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	f := false
+	cfg := &Config{
+		Notifications: &NotificationConfig{WorkingToIdle: &f},
+	}
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	loaded, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if loaded.Notifications.ShouldNotifyWorkingToIdle() {
+		t.Error("expected WorkingToIdle=false after round-trip")
+	}
+	if !loaded.Notifications.ShouldNotifyWorkingToWaiting() {
+		t.Error("expected WorkingToWaiting=true (default) after round-trip")
+	}
+}
+
 func TestConfig_PreviewDefault_RoundTrip(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)

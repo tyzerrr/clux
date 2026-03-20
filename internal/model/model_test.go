@@ -22,9 +22,9 @@ func testModel(sessions []session.Session) Model {
 }
 
 var testSessions = []session.Session{
-	{Name: "alpha-session", Summary: "auth refactor", Dir: "/home/user/projects/alpha", Status: session.StatusWorking, WindowIndex: "0", PaneIndex: "0"},
-	{Name: "beta-session", Dir: "/home/user/projects/beta", Status: session.StatusIdle, WindowIndex: "1", PaneIndex: "0"},
-	{Name: "gamma-session", Summary: "fix bug #42", Dir: "/home/user/projects/gamma", Status: session.StatusWaiting, WindowIndex: "2", PaneIndex: "0"},
+	{Name: "alpha-session", Summary: "auth refactor", Dir: "/home/user/projects/alpha", Branch: "feature/auth", Status: session.StatusWorking, WindowIndex: "0", PaneIndex: "0"},
+	{Name: "beta-session", Dir: "/home/user/projects/beta", Branch: "main", Status: session.StatusIdle, WindowIndex: "1", PaneIndex: "0"},
+	{Name: "gamma-session", Summary: "fix bug #42", Dir: "/home/user/projects/gamma", Branch: "fix/bug-42", Status: session.StatusWaiting, WindowIndex: "2", PaneIndex: "0"},
 }
 
 // --- Helper function tests ---
@@ -67,6 +67,40 @@ func TestApplyFilter_MatchByDir(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected 'gamma-session' in results")
+	}
+}
+
+func TestApplyFilter_MatchByBranch(t *testing.T) {
+	result := applyFilter(testSessions, "feature/auth")
+	if len(result) == 0 {
+		t.Fatal("expected at least one match by branch, got none")
+	}
+	found := false
+	for _, s := range result {
+		if s.Name == "alpha-session" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected 'alpha-session' in results when filtering by branch")
+	}
+}
+
+func TestApplyFilter_MatchByBranchPrefix(t *testing.T) {
+	result := applyFilter(testSessions, "fix/")
+	if len(result) == 0 {
+		t.Fatal("expected at least one match by branch prefix, got none")
+	}
+	found := false
+	for _, s := range result {
+		if s.Name == "gamma-session" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected 'gamma-session' in results when filtering by branch prefix")
 	}
 }
 
@@ -1265,6 +1299,70 @@ func TestModeDashboard_Navigation(t *testing.T) {
 	rm = result.(Model)
 	if rm.dashCursor != 0 {
 		t.Errorf("after k: expected dashCursor=0, got %d", rm.dashCursor)
+	}
+}
+
+func TestModeDashboard_ShiftKSetsConfirmKill(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeDashboard
+	m.width = 200
+	m.dashCursor = 0
+
+	result, _ := m.updateDashboard(tea.KeyPressMsg{Code: 'K', Text: "K"})
+	rm := result.(Model)
+	if rm.mode != ModeConfirmKill {
+		t.Errorf("expected ModeConfirmKill, got %v", rm.mode)
+	}
+	if rm.confirmWindowIndex != testSessions[0].WindowIndex {
+		t.Errorf("expected confirmWindowIndex=%q, got %q", testSessions[0].WindowIndex, rm.confirmWindowIndex)
+	}
+}
+
+func TestModeDashboard_ShiftKWithEmptyList(t *testing.T) {
+	m := testModel(nil)
+	m.mode = ModeDashboard
+	m.width = 200
+
+	result, _ := m.updateDashboard(tea.KeyPressMsg{Code: 'K', Text: "K"})
+	rm := result.(Model)
+	if rm.mode != ModeDashboard {
+		t.Errorf("expected mode to remain ModeDashboard, got %v", rm.mode)
+	}
+}
+
+func TestModeDashboard_NSetsNewSession(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeDashboard
+	m.width = 200
+
+	result, _ := m.updateDashboard(tea.KeyPressMsg{Code: 'n', Text: "n"})
+	rm := result.(Model)
+	if rm.mode != ModeNewSession {
+		t.Errorf("expected ModeNewSession, got %v", rm.mode)
+	}
+}
+
+func TestModeDashboard_SlashSetsFilterMode(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeDashboard
+	m.width = 200
+
+	result, _ := m.updateDashboard(tea.KeyPressMsg{Code: '/', Text: "/"})
+	rm := result.(Model)
+	if rm.mode != ModeFilter {
+		t.Errorf("expected ModeFilter, got %v", rm.mode)
+	}
+}
+
+func TestModeDashboard_BSetsBroadcastSelect(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeDashboard
+	m.width = 200
+
+	result, _ := m.updateDashboard(tea.KeyPressMsg{Code: 'b', Text: "b"})
+	rm := result.(Model)
+	if rm.mode != ModeBroadcastSelect {
+		t.Errorf("expected ModeBroadcastSelect, got %v", rm.mode)
 	}
 }
 

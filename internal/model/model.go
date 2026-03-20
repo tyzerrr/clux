@@ -322,6 +322,21 @@ func applyFilter(sessions []session.Session, query string) []session.Session {
 		}
 	}
 
+	// Match against branches
+	branches := make([]string, len(sessions))
+	for i, s := range sessions {
+		branches[i] = s.Branch
+	}
+	for _, m := range fuzzy.Find(query, branches) {
+		if branches[m.Index] == "" {
+			continue
+		}
+		if !seen[m.Index] {
+			seen[m.Index] = true
+			result = append(result, sessions[m.Index])
+		}
+	}
+
 	return result
 }
 
@@ -433,7 +448,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sessions = []session.Session(msg)
 		m.err = nil
 
-		// Check for Working→Waiting transitions and update prevStatuses.
+		// Check for status transitions and update prevStatuses.
 		shouldBell := false
 		for _, s := range m.sessions {
 			paneIdx := resolvePaneIndex(s.PaneIndex)
@@ -443,8 +458,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			key := sessionName + ":" + s.WindowIndex + "." + paneIdx
 			prev, exists := m.prevStatuses[key]
-			if exists && prev == session.StatusWorking && s.Status == session.StatusWaiting {
-				shouldBell = true
+			if exists {
+				if prev == session.StatusWorking && s.Status == session.StatusWaiting && m.cfg.Notifications.ShouldNotifyWorkingToWaiting() {
+					shouldBell = true
+				}
+				if prev == session.StatusWorking && s.Status == session.StatusIdle && m.cfg.Notifications.ShouldNotifyWorkingToIdle() {
+					shouldBell = true
+				}
 			}
 			m.prevStatuses[key] = s.Status
 		}
@@ -1079,6 +1099,49 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return fetchSessionsCmdWithExternals(m.cfg)()
 			}
 		}
+
+	case "K":
+		if len(m.filtered) > 0 && m.dashCursor < len(m.filtered) {
+			s := m.filtered[m.dashCursor]
+			m.confirmTarget = s.DisplayName()
+			m.confirmWindowIndex = s.WindowIndex
+			m.confirmPaneIndex = resolvePaneIndex(s.PaneIndex)
+			m.confirmExternal = s.External
+			m.confirmSessionName = s.SessionName
+			m.err = nil
+			m.mode = ModeConfirmKill
+		}
+
+	case "n":
+		m.mode = ModeNewSession
+		m.err = nil
+		m.newSessionInput.SetValue("")
+		m.newSessionCursor = 0
+		cmds := []tea.Cmd{m.newSessionInput.Focus()}
+		if len(m.repoDirs) == 0 {
+			cmds = append(cmds, fetchGhqDirs)
+		} else {
+			m.filteredDirs = m.repoDirs
+		}
+		return m, tea.Batch(cmds...)
+
+	case "/":
+		m.mode = ModeFilter
+		return m, m.filterInput.Focus()
+
+	case "b":
+		m.mode = ModeBroadcastSelect
+		m.err = nil
+		m.broadcastInput.SetValue("")
+		m.broadcastCursor = 0
+		m.broadcastSelected = make(map[string]bool)
+		cmds := []tea.Cmd{m.broadcastInput.Focus()}
+		if len(m.broadcastDirs) == 0 {
+			cmds = append(cmds, fetchBroadcastGhqDirs)
+		} else {
+			m.broadcastFiltered = m.broadcastDirs
+		}
+		return m, tea.Batch(cmds...)
 	}
 	return m, nil
 }
@@ -1773,7 +1836,7 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 
 	// Help bar
 	b.WriteString("\n")
-	b.WriteString(styleHelpBar.Render("Enter:attach  y:approve  hjkl/arrows:navigate  Esc/d:back  q:quit"))
+	b.WriteString(styleHelpBar.Render("Enter:attach  y:approve  K:kill  n:new  /:filter  b:broadcast  hjkl:navigate  Esc/d:back  q:quit"))
 
 	return b.String()
 }

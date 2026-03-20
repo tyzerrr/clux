@@ -13,10 +13,33 @@ type ExternalSession struct {
 	Window  string `json:"window"`
 }
 
+// NotificationConfig controls which status transitions trigger a bell notification.
+type NotificationConfig struct {
+	WorkingToIdle    *bool `json:"working_to_idle,omitempty"`
+	WorkingToWaiting *bool `json:"working_to_waiting,omitempty"`
+}
+
+// ShouldNotifyWorkingToIdle returns true if a Working→Idle bell should fire. Default: true.
+func (n *NotificationConfig) ShouldNotifyWorkingToIdle() bool {
+	if n == nil || n.WorkingToIdle == nil {
+		return true
+	}
+	return *n.WorkingToIdle
+}
+
+// ShouldNotifyWorkingToWaiting returns true if a Working→Waiting bell should fire. Default: true.
+func (n *NotificationConfig) ShouldNotifyWorkingToWaiting() bool {
+	if n == nil || n.WorkingToWaiting == nil {
+		return true
+	}
+	return *n.WorkingToWaiting
+}
+
 // Config holds clux persistent configuration.
 type Config struct {
-	ExternalSessions []ExternalSession `json:"external_sessions"`
-	PreviewDefault   bool              `json:"preview_default"`
+	ExternalSessions []ExternalSession  `json:"external_sessions"`
+	PreviewDefault   bool               `json:"preview_default"`
+	Notifications    *NotificationConfig `json:"notifications,omitempty"`
 }
 
 const configDir = ".config/clux"
