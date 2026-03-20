@@ -842,8 +842,12 @@ const bottomScanLines = 15
 // bottomContent returns the last n lines of content.
 func bottomContent(content string, n int) string {
 	lines := strings.Split(content, "\n")
+	// Trim trailing blank lines so padding doesn't push real content out of the window.
+	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
+	}
 	if len(lines) <= n {
-		return content
+		return strings.Join(lines, "\n")
 	}
 	return strings.Join(lines[len(lines)-n:], "\n")
 }

@@ -85,6 +85,10 @@ func TestBottomContent(t *testing.T) {
 		{"exact lines", "a\nb\nc", 3, "a\nb\nc"},
 		{"more lines than n", "a\nb\nc\nd\ne", 3, "c\nd\ne"},
 		{"empty content", "", 5, ""},
+		{"trailing blank lines trimmed", "a\nb\nc\n\n\n\n", 3, "a\nb\nc"},
+		{"prompt followed by padding", "line1\nline2\nDo you want to proceed?\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n", 3, "line1\nline2\nDo you want to proceed?"},
+		{"all blank lines", "\n\n\n\n", 3, ""},
+		{"trailing whitespace-only lines", "a\nb\n   \n  \t\n", 3, "a\nb"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
