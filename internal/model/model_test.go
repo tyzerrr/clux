@@ -2065,11 +2065,16 @@ func TestPreviewHeight(t *testing.T) {
 func TestPreviewHeight_ShortTerminal(t *testing.T) {
 	m := testModel(testSessions)
 	m.width = 80
-	m.height = 5 // too short to show preview
+	m.height = 3 // right-panel layout: 3-3=0, so no preview lines
 	h := previewHeight(m)
-	// topLines = 2+1+3+1 = 7, which > height, so h <= 0
 	if h > 0 {
-		t.Errorf("expected previewHeight <= 0 for short terminal, got %d", h)
+		t.Errorf("expected previewHeight <= 0 for very short terminal, got %d", h)
+	}
+	// height=5 should give 2 lines of preview in right-panel layout (5-3=2)
+	m.height = 5
+	h = previewHeight(m)
+	if h != 2 {
+		t.Errorf("expected previewHeight == 2 for height=5, got %d", h)
 	}
 }
 
@@ -2452,6 +2457,71 @@ func TestDashboard_ViewShowsPageIndicator(t *testing.T) {
 }
 
 // --- Grouping tests ---
+
+func TestListPanelWidth(t *testing.T) {
+	m := testModel(nil)
+
+	// Preview disabled: full width
+	m.previewEnabled = false
+	m.width = 200
+	if got := m.listPanelWidth(); got != 200 {
+		t.Errorf("preview off: expected 200, got %d", got)
+	}
+
+	// Preview enabled, wide terminal: 45%
+	m.previewEnabled = true
+	m.width = 200
+	if got := m.listPanelWidth(); got != 90 {
+		t.Errorf("wide: expected 90 (45%% of 200), got %d", got)
+	}
+
+	// Preview enabled, narrow-ish: clamped to 50
+	m.width = 80
+	if got := m.listPanelWidth(); got != 50 {
+		t.Errorf("narrow: expected 50 (clamped), got %d", got)
+	}
+
+	// Below 80: full width (no split)
+	m.width = 79
+	if got := m.listPanelWidth(); got != 79 {
+		t.Errorf("below 80: expected 79, got %d", got)
+	}
+}
+
+func TestPreviewPanelWidth_Invariant(t *testing.T) {
+	m := testModel(nil)
+	m.previewEnabled = true
+
+	for _, w := range []int{80, 100, 120, 160, 200, 256} {
+		m.width = w
+		list := m.listPanelWidth()
+		preview := m.previewPanelWidth()
+		total := list + 1 + preview // +1 for separator
+		if total != w {
+			t.Errorf("width=%d: list(%d) + 1 + preview(%d) = %d, want %d", w, list, preview, total, w)
+		}
+	}
+}
+
+func TestColumnWidthsForWidth(t *testing.T) {
+	// Wide panel: nameWidth=30
+	name, _ := columnWidthsForWidth(80)
+	if name != 30 {
+		t.Errorf("w=80: expected nameWidth=30, got %d", name)
+	}
+
+	// Medium panel: nameWidth=25
+	name, _ = columnWidthsForWidth(60)
+	if name != 25 {
+		t.Errorf("w=60: expected nameWidth=25, got %d", name)
+	}
+
+	// Narrow panel: nameWidth=20
+	name, _ = columnWidthsForWidth(50)
+	if name != 20 {
+		t.Errorf("w=50: expected nameWidth=20, got %d", name)
+	}
+}
 
 func TestGroupKey_WithGhqRoot(t *testing.T) {
 	ghqRoot := "/Users/h-tanaka/go/src/"

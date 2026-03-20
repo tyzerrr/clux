@@ -10,6 +10,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/rivo/uniseg"
 	"github.com/sahilm/fuzzy"
 	"github.com/tanaka0325/clux/internal/config"
@@ -1710,26 +1711,12 @@ func (m Model) dashMaxVisible() int {
 }
 
 // previewHeight returns the number of lines available for preview content.
+// With right-panel layout, preview uses the full height minus header (1 line) and helpbar (1 line).
 func previewHeight(m Model) int {
-	sessionRows := len(m.filtered)
-	if m.groupEnabled && sessionRows > 0 {
-		groups := buildGroups(m.filtered, m.ghqRoot)
-		sessionRows = groupedSessionRows(groups)
-	}
-	topLines := 2 + 1 + sessionRows + 1
-	if m.err != nil {
-		topLines += 2
-	}
-	maxPreviewHeight := m.height - topLines - 2
-	if maxPreviewHeight < 1 {
+	// Right-panel layout: preview height = total height - header(1) - separator(1) - helpbar(1)
+	h := m.height - 3
+	if h < 1 {
 		return 0
-	}
-	h := maxPreviewHeight / 2
-	if h < 5 {
-		h = 5
-	}
-	if h > maxPreviewHeight {
-		h = maxPreviewHeight
 	}
 	return h
 }
@@ -1912,27 +1899,59 @@ func (m Model) viewWithOverlay(viewFn func(*strings.Builder) (string, *overlayCu
 	return newView(overlay)
 }
 
-// columnWidths returns the name and branch column widths based on terminal width.
-func (m Model) columnWidths() (int, int) {
+// columnWidthsForWidth returns the name and branch column widths based on the given width.
+func columnWidthsForWidth(w int) (int, int) {
 	nameWidth := 20
 	branchWidth := 15
-	if m.width > 100 {
+	if w > 70 {
 		nameWidth = 30
-	} else if m.width > 80 {
+	} else if w > 55 {
 		nameWidth = 25
 	}
 	return nameWidth, branchWidth
 }
 
+// columnWidths returns the name and branch column widths based on terminal width.
+func (m Model) columnWidths() (int, int) {
+	return columnWidthsForWidth(m.listPanelWidth())
+}
+
+// listPanelWidth returns the width available for the session list panel.
+// When preview is enabled and the terminal is wide enough, the list gets the left portion.
+func (m Model) listPanelWidth() int {
+	if m.previewEnabled && m.width >= 80 {
+		// 45% for list, 1 for separator, rest for preview
+		w := m.width * 45 / 100
+		if w < 50 {
+			w = 50
+		}
+		// Ensure we don't exceed total width minus separator
+		if w > m.width-2 {
+			w = m.width - 2
+		}
+		return w
+	}
+	return m.width
+}
+
+// previewPanelWidth returns the width available for the preview panel.
+func (m Model) previewPanelWidth() int {
+	if !m.previewEnabled || m.width < 80 {
+		return 0
+	}
+	return m.width - m.listPanelWidth() - 1 // -1 for separator
+}
+
 // renderSessionRows writes session rows (grouped or flat) to the builder.
 // groups must be non-nil when m.groupEnabled is true.
-func (m Model) renderSessionRows(b *strings.Builder, groups []sessionGroup, nameWidth, branchWidth int) {
+// panelWidth controls the width used for group header separators.
+func (m Model) renderSessionRows(b *strings.Builder, groups []sessionGroup, nameWidth, branchWidth, panelWidth int) {
 	b.WriteString(styleHelpBar.Render(fmt.Sprintf(" %-16s %-*s  %-*s %s", "Status", nameWidth, "Name", branchWidth, "Branch", "Dir")))
 	b.WriteString("\n")
 	if m.groupEnabled {
 		for _, g := range groups {
 			groupHeader := fmt.Sprintf("── %s (%d) ", g.name, len(g.sessions))
-			remaining := m.width - len([]rune(groupHeader))
+			remaining := panelWidth - len([]rune(groupHeader))
 			if remaining > 0 {
 				groupHeader += strings.Repeat("─", remaining)
 			}
@@ -1982,25 +2001,65 @@ func (m Model) renderSessionRows(b *strings.Builder, groups []sessionGroup, name
 
 // viewListBase renders the session list view dimmed, used as overlay background.
 func (m Model) viewListBase() string {
-	var b strings.Builder
+	var leftBuf strings.Builder
+	leftWidth := m.listPanelWidth()
 
 	header := fmt.Sprintf("Clux — Sessions (%d)", len(m.filtered))
 	if summary := statusSummary(m.filtered); summary != "" {
 		header += " — " + summary
 	}
-	b.WriteString(styleHeader.Render(header))
-	b.WriteString("\n\n")
+	leftBuf.WriteString(styleHeader.Render(header))
+	leftBuf.WriteString("\n\n")
 
 	nameWidth, branchWidth := m.columnWidths()
 
 	if len(m.filtered) == 0 {
-		b.WriteString("No Claude Code sessions found.\n")
+		leftBuf.WriteString("No Claude Code sessions found.\n")
 	} else {
 		var groups []sessionGroup
 		if m.groupEnabled {
 			groups = buildGroups(m.filtered, m.ghqRoot)
 		}
-		m.renderSessionRows(&b, groups, nameWidth, branchWidth)
+		m.renderSessionRows(&leftBuf, groups, nameWidth, branchWidth, leftWidth)
+	}
+
+	showPreviewPanel := m.previewEnabled && len(m.filtered) > 0 && m.width >= 80
+	if !showPreviewPanel {
+		return styleDimmed.Render(leftBuf.String())
+	}
+
+	// Two-column layout for overlay background.
+	rightWidth := m.previewPanelWidth()
+	leftLines := strings.Split(leftBuf.String(), "\n")
+	if len(leftLines) > 0 && leftLines[len(leftLines)-1] == "" {
+		leftLines = leftLines[:len(leftLines)-1]
+	}
+
+	contentHeight := m.height
+	if contentHeight < 1 {
+		contentHeight = 1
+	}
+
+	var b strings.Builder
+	sep := stylePreview.Render("│")
+	for i := 0; i < contentHeight; i++ {
+		var left string
+		if i < len(leftLines) {
+			left = leftLines[i]
+		}
+		lw := lipgloss.Width(left)
+		if lw > leftWidth {
+			left = ansi.Truncate(left, leftWidth, "")
+		} else if lw < leftWidth {
+			left += strings.Repeat(" ", leftWidth-lw)
+		}
+
+		right := strings.Repeat(" ", rightWidth)
+
+		b.WriteString(left)
+		b.WriteString(sep)
+		b.WriteString(right)
+		b.WriteString("\n")
 	}
 
 	return styleDimmed.Render(b.String())
@@ -2048,133 +2107,150 @@ func (m Model) View() tea.View {
 		return newView(m.viewBroadcastWait(&b))
 	}
 
-	// Header.
-	header := fmt.Sprintf("Clux — Sessions (%d)", len(m.filtered))
-	if summary := statusSummary(m.filtered); summary != "" {
-		header += " — " + summary
-	}
-	b.WriteString(styleHeader.Render(header))
-	b.WriteString("\n\n")
-
-	// Error display.
-	if m.err != nil {
-		b.WriteString(styleError.Render("Error: " + m.err.Error()))
-		b.WriteString("\n\n")
-	}
-
-	nameWidth, branchWidth := m.columnWidths()
-
-	// Session list.
-	var groups []sessionGroup
-	if len(m.filtered) == 0 {
-		b.WriteString("No Claude Code sessions found. Start Claude Code in another tmux session.\n")
-	} else {
-		if m.groupEnabled {
-			groups = buildGroups(m.filtered, m.ghqRoot)
-		}
-		m.renderSessionRows(&b, groups, nameWidth, branchWidth)
-	}
-
-	b.WriteString("\n")
-
-	// Preview area (when enabled and terminal is tall enough).
-	if m.previewEnabled && len(m.filtered) > 0 && m.height >= 15 {
-		// Calculate layout.
-		// Top section: header(2) + col-header(1) + sessions + blank(1)
-		sessionRows := len(m.filtered)
-		if m.groupEnabled && groups != nil {
-			sessionRows = groupedSessionRows(groups)
-		}
-		topLines := 2 + 1 + sessionRows + 1
-		if m.err != nil {
-			topLines += 2 // error + blank
-		}
-		// Bottom section needs at least: separator(1) + 1 preview line + helpbar(1) = 3
-		maxPreviewHeight := m.height - topLines - 2 // minus separator, minus helpbar
-		if maxPreviewHeight >= 1 {
-			ph := previewHeight(m)
-			// Insert padding to push preview to bottom.
-			bottomLines := 1 + ph + 1 // separator + preview + helpbar
-			padding := m.height - topLines - bottomLines
-			if padding > 0 {
-				b.WriteString(strings.Repeat("\n", padding))
-			}
-
-			// Build separator line.
-			selectedName := m.filtered[m.cursor].DisplayName()
-			scrollIndicator := ""
-			if m.previewScrollOffset > 0 {
-				scrollIndicator = " ↑ scrolled (Ctrl+D to go back)"
-			}
-			sepLabel := " Preview: " + selectedName + scrollIndicator + " "
-			sepWidth := m.width
-			if sepWidth <= 0 {
-				sepWidth = 80
-			}
-			// Use rune count for width calculations (multi-byte safe).
-			labelLen := len([]rune(sepLabel))
-			if labelLen >= sepWidth {
-				nameRunes := []rune(selectedName)
-				maxNameLen := sepWidth - len([]rune(" Preview:  ")) - 2
-				if maxNameLen > 0 && len(nameRunes) > maxNameLen {
-					selectedName = string(nameRunes[:maxNameLen]) + "…"
-				}
-				sepLabel = " Preview: " + selectedName + " "
-				labelLen = len([]rune(sepLabel))
-			}
-			leftPad := (sepWidth - labelLen) / 2
-			rightPad := sepWidth - labelLen - leftPad
-			if leftPad < 0 {
-				leftPad = 0
-			}
-			if rightPad < 0 {
-				rightPad = 0
-			}
-			sep := strings.Repeat("─", leftPad) + sepLabel + strings.Repeat("─", rightPad)
-			b.WriteString(stylePreview.Render(sep))
-			b.WriteString("\n")
-
-			// Get last N lines from preview content.
-			previewLines := strings.Split(m.previewContent, "\n")
-			// Remove trailing empty lines.
-			for len(previewLines) > 0 && strings.TrimSpace(previewLines[len(previewLines)-1]) == "" {
-				previewLines = previewLines[:len(previewLines)-1]
-			}
-			if len(previewLines) == 0 {
-				b.WriteString(stylePreview.Render("  No preview available"))
-				b.WriteString("\n")
-				for i := 1; i < ph; i++ {
-					b.WriteString("\n")
-				}
-			} else {
-				// Take last ph lines.
-				start := len(previewLines) - ph
-				if start < 0 {
-					start = 0
-				}
-				displayLines := previewLines[start:]
-				for _, line := range displayLines {
-					// Output directly to preserve ANSI color sequences.
-					b.WriteString(line)
-					b.WriteString("\n")
-				}
-			}
-		} // maxPreviewHeight >= 1
-	}
-
-	// Filter input (when in filter mode).
+	// Build helpbar first (spans full width at bottom).
+	var helpBar string
 	if m.mode == ModeFilter {
-		b.WriteString(" / ")
-		b.WriteString(m.filterInput.View())
-		b.WriteString("\n\n")
-		b.WriteString(styleHelpBar.Render("↵:apply  Esc:clear"))
+		helpBar = " / " + m.filterInput.View() + "\n\n" + styleHelpBar.Render("↵:apply  Esc:clear")
 	} else {
 		previewLabel := "p:preview"
 		if m.previewEnabled {
 			previewLabel = "p:preview  Ctrl+U/D:scroll"
 		}
 		groupLabel := "g:group"
-		b.WriteString(styleHelpBar.Render("↵:attach  n:new  a:add-external  b:broadcast  K:kill  " + previewLabel + "  " + groupLabel + "  d:dashboard  /:filter  q:quit"))
+		helpBar = styleHelpBar.Render("↵:attach  n:new  a:add-external  b:broadcast  K:kill  " + previewLabel + "  " + groupLabel + "  d:dashboard  /:filter  q:quit")
+	}
+
+	showPreviewPanel := m.previewEnabled && len(m.filtered) > 0 && m.width >= 80
+	leftWidth := m.listPanelWidth()
+
+	nameWidth, branchWidth := m.columnWidths()
+
+	// --- Build left panel (session list) ---
+	var leftBuf strings.Builder
+	header := fmt.Sprintf("Clux — Sessions (%d)", len(m.filtered))
+	if summary := statusSummary(m.filtered); summary != "" {
+		header += " — " + summary
+	}
+	leftBuf.WriteString(styleHeader.Render(header))
+	leftBuf.WriteString("\n\n")
+
+	if m.err != nil {
+		leftBuf.WriteString(styleError.Render("Error: " + m.err.Error()))
+		leftBuf.WriteString("\n\n")
+	}
+
+	var groups []sessionGroup
+	if len(m.filtered) == 0 {
+		leftBuf.WriteString("No Claude Code sessions found. Start Claude Code in another tmux session.\n")
+	} else {
+		if m.groupEnabled {
+			groups = buildGroups(m.filtered, m.ghqRoot)
+		}
+		m.renderSessionRows(&leftBuf, groups, nameWidth, branchWidth, leftWidth)
+	}
+
+	if !showPreviewPanel {
+		// No preview panel: write left content + helpbar directly.
+		b.WriteString(leftBuf.String())
+		b.WriteString("\n")
+		b.WriteString(helpBar)
+	} else {
+		// Two-column layout: left panel | right panel, helpbar at bottom.
+		rightWidth := m.previewPanelWidth()
+
+		// --- Build right panel (preview) ---
+		var rightLines []string
+
+		// Preview header.
+		selectedName := m.filtered[m.cursor].DisplayName()
+		scrollIndicator := ""
+		if m.previewScrollOffset > 0 {
+			scrollIndicator = " ↑scrolled"
+		}
+		previewTitle := " Preview: " + selectedName + scrollIndicator
+		if lipgloss.Width(previewTitle) > rightWidth {
+			previewTitle = ansi.Truncate(previewTitle, rightWidth, "…")
+		}
+		rightLines = append(rightLines, styleHeader.Render(previewTitle))
+
+		// Separator line.
+		rightLines = append(rightLines, stylePreview.Render(strings.Repeat("─", rightWidth)))
+
+		// Preview content lines.
+		ph := previewHeight(m)
+		previewContentLines := strings.Split(m.previewContent, "\n")
+		// Remove trailing empty lines.
+		for len(previewContentLines) > 0 && strings.TrimSpace(previewContentLines[len(previewContentLines)-1]) == "" {
+			previewContentLines = previewContentLines[:len(previewContentLines)-1]
+		}
+		if len(previewContentLines) == 0 {
+			rightLines = append(rightLines, stylePreview.Render("  No preview available"))
+			for i := 1; i < ph; i++ {
+				rightLines = append(rightLines, "")
+			}
+		} else {
+			start := len(previewContentLines) - ph
+			if start < 0 {
+				start = 0
+			}
+			displayLines := previewContentLines[start:]
+			for _, line := range displayLines {
+				rightLines = append(rightLines, line)
+			}
+			// Pad to fill remaining height
+			for i := len(displayLines); i < ph; i++ {
+				rightLines = append(rightLines, "")
+			}
+		}
+
+		// --- Join left and right panels line by line ---
+		leftLines := strings.Split(leftBuf.String(), "\n")
+		// Remove trailing empty string from Split.
+		if len(leftLines) > 0 && leftLines[len(leftLines)-1] == "" {
+			leftLines = leftLines[:len(leftLines)-1]
+		}
+
+		// Total content height (excluding helpbar line).
+		contentHeight := m.height - 1
+		if contentHeight < 1 {
+			contentHeight = 1
+		}
+
+		sep := stylePreview.Render("│")
+
+		for i := 0; i < contentHeight; i++ {
+			// Left line: pad/truncate to leftWidth.
+			var left string
+			if i < len(leftLines) {
+				left = leftLines[i]
+			}
+			lw := lipgloss.Width(left)
+			if lw > leftWidth {
+				left = ansi.Truncate(left, leftWidth, "")
+			} else if lw < leftWidth {
+				left += strings.Repeat(" ", leftWidth-lw)
+			}
+
+			// Right line: pad/truncate to rightWidth.
+			var right string
+			if i < len(rightLines) {
+				right = rightLines[i]
+			}
+			rw := lipgloss.Width(right)
+			if rw > rightWidth {
+				right = ansi.Truncate(right, rightWidth, "")
+			} else if rw < rightWidth {
+				right += strings.Repeat(" ", rightWidth-rw)
+			}
+
+			b.WriteString(left)
+			b.WriteString(sep)
+			b.WriteString(right)
+			b.WriteString("\n")
+		}
+
+		// Helpbar at the bottom, spanning full width.
+		b.WriteString(helpBar)
 	}
 
 	return newView(b.String())
