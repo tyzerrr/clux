@@ -1050,17 +1050,3 @@ func getWindowSummaryForSession(sessionName, windowIndex, paneIndex string) stri
 	return tmuxDisplayOption(sessionName, windowIndex, paneIndex, "#{@clux-summary}")
 }
 
-// IsZoomed returns true if the current pane is zoomed.
-func IsZoomed() bool {
-	out, err := exec.Command("tmux", "display-message", "-p", "#{window_zoomed_flag}").Output()
-	if err != nil {
-		return false
-	}
-	return strings.TrimSpace(string(out)) == "1"
-}
-
-// ToggleZoom toggles the zoom state of the current pane.
-func ToggleZoom() error {
-	return exec.Command("tmux", "resize-pane", "-Z").Run()
-}
-

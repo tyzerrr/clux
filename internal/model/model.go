@@ -1020,10 +1020,6 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.dashFocused = false
 		m.previewScrollOffset = 0
 		m.dashPreviews = make(map[int]string)
-		// Zoom tmux pane for full-screen dashboard
-		if !tmux.IsZoomed() {
-			_ = tmux.ToggleZoom()
-		}
 		maxVisible := m.dashMaxVisible()
 		pageItems := len(m.filtered)
 		if pageItems > maxVisible {
@@ -1292,17 +1288,9 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.dashFocused = false
 			return m, nil
 		}
-		// Unzoom when leaving dashboard
-		if tmux.IsZoomed() {
-			_ = tmux.ToggleZoom()
-		}
 		m.mode = ModeList
 		return m, nil
 	case "q":
-		// Unzoom when quitting from dashboard
-		if tmux.IsZoomed() {
-			_ = tmux.ToggleZoom()
-		}
 		return m, tea.Quit
 	case "f":
 		if pageItems > 0 {
