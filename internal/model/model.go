@@ -2379,6 +2379,14 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 	if cellWidth < 20 {
 		cellWidth = 20
 	}
+	// contentWidth is the usable text area inside each cell, after subtracting
+	// the border (2 chars) and padding (2 chars) added by lipgloss.
+	borderWidth := 2  // RoundedBorder left + right
+	paddingWidth := 2 // Padding(0, 1) left + right
+	contentWidth := cellWidth - borderWidth - paddingWidth
+	if contentWidth < 16 {
+		contentWidth = 16
+	}
 	// availableHeight excludes header, helpbar, border lines (2 per row), and
 	// the trailing newline after each grid row (1 per row).
 	// cellHeight is the inner (content-only) height of each cell.
@@ -2403,7 +2411,7 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 			localIdx := row*cols + col
 			if localIdx >= pageItems {
 				// Empty cell
-				cellContents = append(cellContents, strings.Repeat(" ", cellWidth-2))
+				cellContents = append(cellContents, strings.Repeat(" ", contentWidth))
 				continue
 			}
 			s := m.filtered[m.dashPageOffset+localIdx]
@@ -2415,8 +2423,8 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 			cellHeaderText := fmt.Sprintf(" %s %s %s", icon, statusStr, displayName)
 			// Truncate if needed
 			cellHeaderRunes := []rune(cellHeaderText)
-			if len(cellHeaderRunes) > cellWidth-2 {
-				cellHeaderText = string(cellHeaderRunes[:cellWidth-3]) + "…"
+			if len(cellHeaderRunes) > contentWidth {
+				cellHeaderText = string(cellHeaderRunes[:contentWidth-1]) + "…"
 			}
 
 			// Get preview content
@@ -2441,15 +2449,15 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 			var cell strings.Builder
 			cell.WriteString(cellHeaderText)
 			cell.WriteString("\n")
-			cell.WriteString(strings.Repeat("─", cellWidth-2))
+			cell.WriteString(strings.Repeat("─", contentWidth))
 			cell.WriteString("\n")
 			for i := 0; i < previewLines; i++ {
 				if i < len(displayPreview) {
 					line := displayPreview[i]
 					// Truncate line to cell width
 					lineRunes := []rune(line)
-					if len(lineRunes) > cellWidth-2 {
-						line = string(lineRunes[:cellWidth-3]) + "…"
+					if len(lineRunes) > contentWidth {
+						line = string(lineRunes[:contentWidth-1]) + "…"
 					}
 					cell.WriteString(line)
 				}
@@ -2466,8 +2474,9 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 		for col, content := range cellContents {
 			localIdx := row*cols + col
 			style := lipgloss.NewStyle().
-				Width(cellWidth - 2).
+				Width(contentWidth).
 				Height(cellHeight).
+				MaxHeight(cellHeight).
 				Padding(0, 1)
 			if localIdx == m.dashCursor && localIdx < pageItems {
 				style = style.
