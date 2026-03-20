@@ -763,8 +763,8 @@ func TestModeNewSession_EnterWithValidDir(t *testing.T) {
 	msg := tea.KeyPressMsg{Code: tea.KeyEnter}
 	result, _ := m.updateNewSession(msg)
 	rm := result.(Model)
-	if rm.mode != ModeNewSessionBranch {
-		t.Errorf("expected ModeNewSessionBranch, got %v", rm.mode)
+	if rm.mode != ModeNewSessionPrompt {
+		t.Errorf("expected ModeNewSessionPrompt, got %v", rm.mode)
 	}
 	if rm.selectedRepoDir != os.TempDir() {
 		t.Errorf("expected selectedRepoDir %q, got %q", os.TempDir(), rm.selectedRepoDir)
@@ -787,42 +787,230 @@ func TestModeNewSession_EnterWithInvalidDir(t *testing.T) {
 	}
 }
 
-// --- ModeNewSessionBranch tests ---
+// --- ModeNewSessionPrompt tests ---
 
-func TestModeNewSessionBranch_EmptyBranchCreatesWindowDirectly(t *testing.T) {
+func TestModeNewSessionPrompt_EmptyPromptCreatesWindowDirectly(t *testing.T) {
 	m := testModel(testSessions)
-	m.mode = ModeNewSessionBranch
+	m.mode = ModeNewSessionPrompt
 	m.selectedRepoDir = os.TempDir()
-	m.branchInput.SetValue("")
+	m.newSessionPromptInput.SetValue("")
 	msg := tea.KeyPressMsg{Code: tea.KeyEnter}
-	_, cmd := m.updateNewSessionBranch(msg)
+	_, cmd := m.updateNewSessionPrompt(msg)
 	if cmd == nil {
-		t.Error("expected non-nil cmd for empty branch (direct window creation)")
+		t.Error("expected non-nil cmd for empty prompt (direct window creation)")
 	}
 }
 
-func TestModeNewSessionBranch_EscGoesBackToModeNewSession(t *testing.T) {
+func TestModeNewSessionPrompt_WithPromptCreatesWindowSilently(t *testing.T) {
 	m := testModel(testSessions)
-	m.mode = ModeNewSessionBranch
+	m.mode = ModeNewSessionPrompt
+	m.selectedRepoDir = os.TempDir()
+	m.newSessionPromptInput.SetValue("fix the bug")
+	msg := tea.KeyPressMsg{Code: tea.KeyEnter}
+	result, cmd := m.updateNewSessionPrompt(msg)
+	rm := result.(Model)
+	if rm.mode != ModeList {
+		t.Errorf("expected ModeList, got %v", rm.mode)
+	}
+	if cmd == nil {
+		t.Error("expected non-nil cmd for prompt (silent window creation)")
+	}
+}
+
+func TestModeNewSessionPrompt_EscGoesToModeList(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeNewSessionPrompt
 	m.selectedRepoDir = os.TempDir()
 	msg := tea.KeyPressMsg{Code: tea.KeyEscape}
-	result, _ := m.updateNewSessionBranch(msg)
+	result, _ := m.updateNewSessionPrompt(msg)
 	rm := result.(Model)
-	if rm.mode != ModeNewSession {
-		t.Errorf("expected ModeNewSession, got %v", rm.mode)
+	if rm.mode != ModeList {
+		t.Errorf("expected ModeList, got %v", rm.mode)
 	}
 }
 
-func TestView_ModeNewSessionBranch(t *testing.T) {
+func TestView_ModeNewSessionPrompt(t *testing.T) {
 	m := New()
-	m.mode = ModeNewSessionBranch
+	m.mode = ModeNewSessionPrompt
 	m.selectedRepoDir = "/tmp/test-repo"
 	view := m.View().Content
-	if !strings.Contains(view, "Branch Name") {
-		t.Error("expected view to contain 'Branch Name'")
+	if !strings.Contains(view, "Initial Prompt") {
+		t.Error("expected view to contain 'Initial Prompt'")
 	}
-	if !strings.Contains(view, "skip worktree") {
-		t.Error("expected view to contain 'skip worktree'")
+	if !strings.Contains(view, "skip prompt") {
+		t.Error("expected view to contain 'skip prompt'")
+	}
+}
+
+func TestNewSessionCreatedWithPromptMsg_SetsPendingPrompt(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeList
+	msg := newSessionCreatedWithPromptMsg{windowIndex: "5", prompt: "fix the bug"}
+	result, cmd := m.Update(msg)
+	rm := result.(Model)
+	if rm.pendingPrompt != "fix the bug" {
+		t.Errorf("expected pendingPrompt 'fix the bug', got %q", rm.pendingPrompt)
+	}
+	if rm.pendingPromptTarget != "5" {
+		t.Errorf("expected pendingPromptTarget '5', got %q", rm.pendingPromptTarget)
+	}
+	if cmd == nil {
+		t.Error("expected non-nil cmd (fetch sessions)")
+	}
+}
+
+func TestSessionsMsg_SendsPendingPromptWhenIdle(t *testing.T) {
+	m := testModel(nil)
+	m.pendingPrompt = "fix the bug"
+	m.pendingPromptTarget = "5"
+	m.pendingPromptDeadline = time.Now().Add(120 * time.Second)
+	m.prevStatuses = make(map[string]session.Status)
+	msg := sessionsMsg([]session.Session{
+		{Name: "test", WindowIndex: "5", PaneIndex: "0", Status: session.StatusIdle, Dir: "/tmp"},
+	})
+	result, cmd := m.Update(msg)
+	rm := result.(Model)
+	if rm.pendingPrompt != "" {
+		t.Errorf("expected pendingPrompt to be cleared, got %q", rm.pendingPrompt)
+	}
+	if rm.pendingPromptTarget != "" {
+		t.Errorf("expected pendingPromptTarget to be cleared, got %q", rm.pendingPromptTarget)
+	}
+	if cmd == nil {
+		t.Error("expected non-nil cmd (send keys)")
+	}
+}
+
+func TestSessionsMsg_DoesNotSendPendingPromptWhenNotIdle(t *testing.T) {
+	m := testModel(nil)
+	m.pendingPrompt = "fix the bug"
+	m.pendingPromptTarget = "5"
+	m.pendingPromptDeadline = time.Now().Add(120 * time.Second)
+	m.prevStatuses = make(map[string]session.Status)
+	msg := sessionsMsg([]session.Session{
+		{Name: "test", WindowIndex: "5", PaneIndex: "0", Status: session.StatusWorking, Dir: "/tmp"},
+	})
+	result, _ := m.Update(msg)
+	rm := result.(Model)
+	if rm.pendingPrompt != "fix the bug" {
+		t.Errorf("expected pendingPrompt to remain, got %q", rm.pendingPrompt)
+	}
+	if rm.pendingPromptTarget != "5" {
+		t.Errorf("expected pendingPromptTarget to remain, got %q", rm.pendingPromptTarget)
+	}
+}
+
+func TestUpdate_SessionsMsg_PendingPromptTimeout(t *testing.T) {
+	m := New()
+	m.pendingPrompt = "test prompt"
+	m.pendingPromptTarget = "5"
+	// Set deadline in the past to simulate timeout.
+	m.pendingPromptDeadline = time.Now().Add(-1 * time.Second)
+
+	sessions := []session.Session{
+		{Name: "target", Dir: "/tmp", Status: session.StatusWorking, WindowIndex: "5"},
+	}
+	msg := sessionsMsg(sessions)
+	result, _ := m.Update(msg)
+	rm := result.(Model)
+
+	if rm.pendingPrompt != "" {
+		t.Errorf("expected pendingPrompt cleared, got %q", rm.pendingPrompt)
+	}
+	if rm.pendingPromptTarget != "" {
+		t.Errorf("expected pendingPromptTarget cleared, got %q", rm.pendingPromptTarget)
+	}
+	if rm.pendingPromptDeadline != (time.Time{}) {
+		t.Errorf("expected pendingPromptDeadline zeroed, got %v", rm.pendingPromptDeadline)
+	}
+	if rm.err == nil {
+		t.Fatal("expected err to be set for timeout")
+	}
+	if !strings.Contains(rm.err.Error(), "timed out") {
+		t.Errorf("expected timeout error message, got %q", rm.err.Error())
+	}
+}
+
+func TestUpdate_SessionsMsg_PendingPromptTargetDisappeared(t *testing.T) {
+	m := New()
+	m.pendingPrompt = "test prompt"
+	m.pendingPromptTarget = "5"
+	m.pendingPromptDeadline = time.Now().Add(120 * time.Second)
+
+	// Sessions list does NOT contain window index "5".
+	sessions := []session.Session{
+		{Name: "other", Dir: "/tmp", Status: session.StatusIdle, WindowIndex: "1"},
+	}
+	msg := sessionsMsg(sessions)
+	result, _ := m.Update(msg)
+	rm := result.(Model)
+
+	if rm.pendingPrompt != "" {
+		t.Errorf("expected pendingPrompt cleared, got %q", rm.pendingPrompt)
+	}
+	if rm.pendingPromptTarget != "" {
+		t.Errorf("expected pendingPromptTarget cleared, got %q", rm.pendingPromptTarget)
+	}
+	if rm.pendingPromptDeadline != (time.Time{}) {
+		t.Errorf("expected pendingPromptDeadline zeroed, got %v", rm.pendingPromptDeadline)
+	}
+	if rm.err == nil {
+		t.Fatal("expected err to be set for disappeared target")
+	}
+	if !strings.Contains(rm.err.Error(), "no longer exists") {
+		t.Errorf("expected target disappeared error message, got %q", rm.err.Error())
+	}
+}
+
+func TestUpdate_SessionsMsg_PendingPromptSentWhenIdle(t *testing.T) {
+	m := New()
+	m.pendingPrompt = "test prompt"
+	m.pendingPromptTarget = "5"
+	m.pendingPromptDeadline = time.Now().Add(120 * time.Second)
+
+	sessions := []session.Session{
+		{Name: "target", Dir: "/tmp", Status: session.StatusIdle, WindowIndex: "5"},
+	}
+	msg := sessionsMsg(sessions)
+	result, cmd := m.Update(msg)
+	rm := result.(Model)
+
+	if rm.pendingPrompt != "" {
+		t.Errorf("expected pendingPrompt cleared after send, got %q", rm.pendingPrompt)
+	}
+	if rm.pendingPromptTarget != "" {
+		t.Errorf("expected pendingPromptTarget cleared after send, got %q", rm.pendingPromptTarget)
+	}
+	if rm.pendingPromptDeadline != (time.Time{}) {
+		t.Errorf("expected pendingPromptDeadline zeroed after send, got %v", rm.pendingPromptDeadline)
+	}
+	if cmd == nil {
+		t.Error("expected non-nil cmd when prompt is sent")
+	}
+}
+
+func TestUpdate_SessionsMsg_PendingPromptWaitsWhileWorking(t *testing.T) {
+	m := New()
+	m.pendingPrompt = "test prompt"
+	m.pendingPromptTarget = "5"
+	m.pendingPromptDeadline = time.Now().Add(120 * time.Second)
+
+	sessions := []session.Session{
+		{Name: "target", Dir: "/tmp", Status: session.StatusWorking, WindowIndex: "5"},
+	}
+	msg := sessionsMsg(sessions)
+	result, _ := m.Update(msg)
+	rm := result.(Model)
+
+	// Pending prompt should still be set (waiting for idle).
+	if rm.pendingPrompt != "test prompt" {
+		t.Errorf("expected pendingPrompt still set, got %q", rm.pendingPrompt)
+	}
+	if rm.pendingPromptTarget != "5" {
+		t.Errorf("expected pendingPromptTarget still set, got %q", rm.pendingPromptTarget)
+	}
+	if rm.err != nil {
+		t.Errorf("expected no error while waiting, got %v", rm.err)
 	}
 }
 

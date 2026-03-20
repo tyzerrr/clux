@@ -23,7 +23,7 @@ const (
 	ModeList Mode = iota
 	ModeFilter
 	ModeNewSession
-	ModeNewSessionBranch // branch name input for worktree creation
+	ModeNewSessionPrompt // prompt input for new session
 	ModeConfirmKill
 	ModeAddExternal
 	ModeDashboard
@@ -45,7 +45,11 @@ type (
 	externalAddedMsg    struct{} // session registered successfully
 	dashPreviewsMsg     map[int]string
 	broadcastGhqDirsMsg        []string          // ghq dirs for broadcast select (separate from newSession)
-	broadcastReadyMsg          struct{}          // all broadcast targets are idle; send the prompt
+	newSessionCreatedWithPromptMsg struct { // window created; store pending prompt
+		windowIndex string
+		prompt      string
+	}
+	broadcastReadyMsg struct{} // all broadcast targets are idle; send the prompt
 	broadcastTargetsUpdatedMsg []broadcastTarget // updated ready flags from poll
 	broadcastTimeoutMsg        struct{}          // waiting exceeded 120s; abort broadcast
 	ghqRootMsg                 string            // cached ghq root path
@@ -92,9 +96,14 @@ type Model struct {
 	newSessionInput  textinput.Model
 	newSessionCursor int
 
-	// Worktree creation
-	branchInput     textinput.Model
-	selectedRepoDir string // repo selected in ModeNewSession, used in ModeNewSessionBranch
+	// New session prompt
+	newSessionPromptInput textinput.Model
+	selectedRepoDir       string // repo selected in ModeNewSession, used in ModeNewSessionPrompt
+
+	// Pending prompt for newly created session
+	pendingPrompt         string    // prompt to send when session becomes Idle
+	pendingPromptTarget   string    // window index of the target session
+	pendingPromptDeadline time.Time // deadline after which pending prompt is abandoned
 
 	// Preview mode
 	previewEnabled      bool   // toggle state, default false
@@ -143,9 +152,9 @@ func New() Model {
 	ni.Placeholder = "Search repository..."
 	ni.CharLimit = 64
 
-	bi := textinput.New()
-	bi.Placeholder = "Branch name (empty to skip worktree)..."
-	bi.CharLimit = 128
+	npi := textinput.New()
+	npi.Placeholder = "Enter prompt (optional, Enter to skip)..."
+	npi.CharLimit = 512
 
 	ai := textinput.New()
 	ai.Placeholder = "Search session:window..."
@@ -168,7 +177,7 @@ func New() Model {
 		mode:                 ModeList,
 		filterInput:          ti,
 		newSessionInput:      ni,
-		branchInput:          bi,
+		newSessionPromptInput: npi,
 		addExtInput:          ai,
 		broadcastInput:       bci,
 		broadcastPromptInput: bpi,
@@ -628,6 +637,44 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, fetchPreviewCmdForSession(m.filtered[m.cursor]))
 			}
 		}
+
+		// Check if there's a pending prompt to send to a newly created session.
+		if m.pendingPrompt != "" && m.pendingPromptTarget != "" {
+			// Check if the deadline has passed.
+			if !m.pendingPromptDeadline.IsZero() && time.Now().After(m.pendingPromptDeadline) {
+				m.pendingPrompt = ""
+				m.pendingPromptTarget = ""
+				m.pendingPromptDeadline = time.Time{}
+				m.err = fmt.Errorf("pending prompt timed out: session did not become idle within 120s")
+			} else {
+				targetFound := false
+				for _, s := range m.sessions {
+					if s.WindowIndex == m.pendingPromptTarget {
+						targetFound = true
+						if s.Status == session.StatusIdle {
+							prompt := m.pendingPrompt
+							target := m.pendingPromptTarget
+							m.pendingPrompt = ""
+							m.pendingPromptTarget = ""
+							m.pendingPromptDeadline = time.Time{}
+							cmds = append(cmds, func() tea.Msg {
+								_ = tmux.SendKeysLiteral(tmux.SessionName, target, "0", prompt)
+								return fetchSessionsCmdWithExternals(m.cfg)()
+							})
+							break
+						}
+					}
+				}
+				// If target window was not found in sessions, it was killed.
+				if !targetFound {
+					m.pendingPrompt = ""
+					m.pendingPromptTarget = ""
+					m.pendingPromptDeadline = time.Time{}
+					m.err = fmt.Errorf("pending prompt cancelled: target window no longer exists")
+				}
+			}
+		}
+
 		if len(cmds) > 0 {
 			return m, tea.Batch(cmds...)
 		}
@@ -671,7 +718,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if m.mode == ModeBroadcastWait {
 			return m, tea.Batch(doTick(), m.checkBroadcastTargetsCmd())
 		}
+		// If there's a pending prompt, keep polling sessions even in other modes.
+		if m.pendingPrompt != "" && m.pendingPromptTarget != "" {
+			return m, tea.Batch(doTick(), fetchSessionsCmdWithExternals(m.cfg))
+		}
 		return m, doTick()
+
+	case newSessionCreatedWithPromptMsg:
+		m.pendingPrompt = msg.prompt
+		m.pendingPromptTarget = msg.windowIndex
+		m.pendingPromptDeadline = time.Now().Add(120 * time.Second)
+		return m, fetchSessionsCmdWithExternals(m.cfg)
 
 	case windowKilledMsg:
 		return m, fetchSessionsCmdWithExternals(m.cfg)
@@ -763,8 +820,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateFilter(msg)
 		case ModeNewSession:
 			return m.updateNewSession(msg)
-		case ModeNewSessionBranch:
-			return m.updateNewSessionBranch(msg)
+		case ModeNewSessionPrompt:
+			return m.updateNewSessionPrompt(msg)
 		case ModeConfirmKill:
 			return m.updateConfirmKill(msg)
 		case ModeAddExternal:
@@ -800,9 +857,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, cmd
 
-		case ModeNewSessionBranch:
+		case ModeNewSessionPrompt:
 			var cmd tea.Cmd
-			m.branchInput, cmd = m.branchInput.Update(msg)
+			m.newSessionPromptInput, cmd = m.newSessionPromptInput.Update(msg)
 			return m, cmd
 
 		case ModeAddExternal:
@@ -1078,10 +1135,10 @@ func (m Model) updateNewSession(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.selectedRepoDir = dir
-			m.mode = ModeNewSessionBranch
-			m.branchInput.SetValue("")
+			m.mode = ModeNewSessionPrompt
+			m.newSessionPromptInput.SetValue("")
 			m.newSessionInput.Blur()
-			return m, m.branchInput.Focus()
+			return m, m.newSessionPromptInput.Focus()
 		}
 		return m, nil
 
@@ -1113,15 +1170,16 @@ func (m Model) updateNewSession(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
-func (m Model) updateNewSessionBranch(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+func (m Model) updateNewSessionPrompt(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "enter":
-		branch := strings.TrimSpace(m.branchInput.Value())
+		prompt := strings.TrimSpace(m.newSessionPromptInput.Value())
 		dir := m.selectedRepoDir
-		m.branchInput.Blur()
+		m.newSessionPromptInput.Blur()
+		m.mode = ModeList
 
-		if branch == "" {
-			// No worktree — use repo directly (original behavior)
+		if prompt == "" {
+			// No prompt — just create the window
 			name := tmux.GenerateWindowName(dir)
 			return m, func() tea.Msg {
 				if err := tmux.CreateWindow(name, dir); err != nil {
@@ -1131,48 +1189,24 @@ func (m Model) updateNewSessionBranch(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 			}
 		}
 
-		// Create worktree and start claude there
+		// Create window silently and store pending prompt
+		name := tmux.GenerateWindowName(dir)
 		return m, func() tea.Msg {
-			// Create worktree: gwq add -b <branch>
-			// exec.Command passes args directly (no shell), so no "--" needed for -b's value.
-			addCmd := exec.Command("gwq", "add", "-b", branch)
-			addCmd.Dir = dir
-			if out, err := addCmd.CombinedOutput(); err != nil {
-				return errMsg(fmt.Errorf("creating worktree: %s: %w", strings.TrimSpace(string(out)), err))
-			}
-
-			// Get worktree path: gwq get <branch>
-			getCmd := exec.Command("gwq", "get", "--", branch)
-			getCmd.Dir = dir
-			wtPath, err := getCmd.Output()
+			newIdx, err := tmux.CreateWindowSilent(name, dir)
 			if err != nil {
-				return errMsg(fmt.Errorf("getting worktree path: %w", err))
-			}
-			worktreeDir := strings.TrimSpace(string(wtPath))
-			if worktreeDir == "" {
-				return errMsg(fmt.Errorf("gwq get returned empty path for branch %q", branch))
-			}
-
-			name := tmux.GenerateWindowName(worktreeDir)
-			if err := tmux.CreateWindow(name, worktreeDir); err != nil {
-				// Best-effort cleanup to avoid orphaned worktree.
-				rmCmd := exec.Command("gwq", "remove", "--", branch)
-				rmCmd.Dir = dir
-				rmCmd.Run()
 				return errMsg(err)
 			}
-			return tea.QuitMsg{}
+			return newSessionCreatedWithPromptMsg{windowIndex: newIdx, prompt: prompt}
 		}
 
 	case "esc":
-		// Go back to repo selection
-		m.mode = ModeNewSession
-		m.branchInput.Blur()
-		return m, m.newSessionInput.Focus()
+		m.mode = ModeList
+		m.newSessionPromptInput.Blur()
+		return m, nil
 
 	default:
 		var cmd tea.Cmd
-		m.branchInput, cmd = m.branchInput.Update(msg)
+		m.newSessionPromptInput, cmd = m.newSessionPromptInput.Update(msg)
 		return m, cmd
 	}
 }
@@ -1732,8 +1766,8 @@ func (m Model) View() tea.View {
 		return newView(m.viewNewSession(&b))
 	}
 
-	if m.mode == ModeNewSessionBranch {
-		return newView(m.viewNewSessionBranch(&b))
+	if m.mode == ModeNewSessionPrompt {
+		return newView(m.viewNewSessionPrompt(&b))
 	}
 
 	if m.mode == ModeAddExternal {
@@ -1994,14 +2028,14 @@ func (m Model) viewNewSession(b *strings.Builder) string {
 	return b.String()
 }
 
-func (m Model) viewNewSessionBranch(b *strings.Builder) string {
-	b.WriteString(styleHeader.Render("New Session — Branch Name"))
+func (m Model) viewNewSessionPrompt(b *strings.Builder) string {
+	b.WriteString(styleHeader.Render("New Session — Initial Prompt"))
 	b.WriteString("\n\n")
 	b.WriteString(fmt.Sprintf(" Repository: %s\n\n", styleDir.Render(shortenDir(m.selectedRepoDir))))
 	b.WriteString(" ")
-	b.WriteString(m.branchInput.View())
+	b.WriteString(m.newSessionPromptInput.View())
 	b.WriteString("\n\n")
-	b.WriteString(styleHelpBar.Render("Enter:create  Enter(empty):skip worktree  Esc:back"))
+	b.WriteString(styleHelpBar.Render("Enter:create  Enter(empty):skip prompt  Esc:cancel"))
 
 	if m.err != nil {
 		b.WriteString("\n\n")
