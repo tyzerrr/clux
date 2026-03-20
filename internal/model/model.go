@@ -27,6 +27,9 @@ const (
 	ModeConfirmKill
 	ModeAddExternal
 	ModeDashboard
+	ModeBroadcastSelect // ghq repo multi-select for broadcast
+	ModeBroadcastPrompt // prompt/skill input for broadcast
+	ModeBroadcastWait   // waiting for sessions to become idle before sending
 )
 
 // Custom message types.
@@ -41,7 +44,26 @@ type (
 	externalWindowsMsg  []tmux.ExternalWindowInfo
 	externalAddedMsg    struct{} // session registered successfully
 	dashPreviewsMsg     map[int]string
+	broadcastGhqDirsMsg        []string          // ghq dirs for broadcast select (separate from newSession)
+	broadcastReadyMsg          struct{}          // all broadcast targets are idle; send the prompt
+	broadcastTargetsUpdatedMsg []broadcastTarget // updated ready flags from poll
+	broadcastTimeoutMsg        struct{}          // waiting exceeded 120s; abort broadcast
 )
+
+// broadcastTargetsResolvedMsg is returned after resolving broadcast targets.
+// It carries both the resolved window targets and any directory errors encountered.
+type broadcastTargetsResolvedMsg struct {
+	targets []broadcastTarget
+	errors  []string
+}
+
+// broadcastTarget holds the resolved target for a broadcast send.
+type broadcastTarget struct {
+	dir         string
+	windowIndex string
+	sessionName string // tmux session name; empty means clux session
+	ready       bool   // true once the session reaches Idle status
+}
 
 // Model is the main Bubble Tea model for Clux.
 type Model struct {
@@ -87,6 +109,18 @@ type Model struct {
 	// Dashboard mode
 	dashCursor   int            // index into m.filtered for focused cell
 	dashPreviews map[int]string // windowIndex -> pane content for each session
+
+	// Broadcast mode
+	broadcastDirs        []string           // all ghq dirs (loaded once)
+	broadcastFiltered    []string           // filtered by broadcastInput
+	broadcastSelected    map[int]bool       // selected indices in broadcastFiltered
+	broadcastInput       textinput.Model    // filter input for repo select
+	broadcastCursor      int                // cursor in broadcastFiltered
+	broadcastPromptInput textinput.Model    // prompt text input
+	broadcastTargets     []broadcastTarget  // resolved targets after selection
+	broadcastPrompt      string             // the prompt being sent (saved when entering wait)
+	broadcastStartTime   time.Time          // when ModeBroadcastWait was entered
+	broadcastErrors      []string           // dir validation errors collected during resolution
 }
 
 // New creates and returns an initialized Model.
@@ -107,21 +141,32 @@ func New() Model {
 	ai.Placeholder = "Search session:window..."
 	ai.CharLimit = 64
 
+	bci := textinput.New()
+	bci.Placeholder = "Search repository..."
+	bci.CharLimit = 64
+
+	bpi := textinput.New()
+	bpi.Placeholder = "Prompt or skill to broadcast..."
+	bpi.CharLimit = 512
+
 	cfg, _ := config.Load()
 	if cfg == nil {
 		cfg = &config.Config{}
 	}
 
 	return Model{
-		mode:            ModeList,
-		filterInput:     ti,
-		newSessionInput: ni,
-		branchInput:     bi,
-		addExtInput:     ai,
-		cfg:             cfg,
-		previewEnabled:  cfg.PreviewDefault,
-		prevStatuses:    make(map[string]session.Status),
-		dashPreviews:    make(map[int]string),
+		mode:                 ModeList,
+		filterInput:          ti,
+		newSessionInput:      ni,
+		branchInput:          bi,
+		addExtInput:          ai,
+		broadcastInput:       bci,
+		broadcastPromptInput: bpi,
+		cfg:                  cfg,
+		previewEnabled:       cfg.PreviewDefault,
+		prevStatuses:         make(map[string]session.Status),
+		dashPreviews:         make(map[int]string),
+		broadcastSelected:    make(map[int]bool),
 	}
 }
 
@@ -210,6 +255,22 @@ func fetchGhqDirs() tea.Msg {
 		}
 	}
 	return ghqDirsMsg(dirs)
+}
+
+func fetchBroadcastGhqDirs() tea.Msg {
+	out, err := exec.Command("ghq", "list", "-p").Output()
+	if err != nil {
+		return errMsg(fmt.Errorf("ghq list: %w", err))
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	var dirs []string
+	for _, l := range lines {
+		l = strings.TrimSpace(l)
+		if l != "" {
+			dirs = append(dirs, l)
+		}
+	}
+	return broadcastGhqDirsMsg(dirs)
 }
 
 // applyFilter returns sessions matching the query using fuzzy matching on Name or Dir.
@@ -427,6 +488,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if m.mode == ModeDashboard {
 			cmds := []tea.Cmd{fetchSessionsCmdWithExternals(m.cfg), doTick(), fetchDashboardPreviews(m.filtered)}
 			return m, tea.Batch(cmds...)
+		} else if m.mode == ModeBroadcastWait {
+			return m, tea.Batch(doTick(), m.checkBroadcastTargetsCmd())
 		}
 		return m, doTick()
 
@@ -444,6 +507,54 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if m.newSessionCursor >= len(m.filteredDirs) {
 			m.newSessionCursor = len(m.filteredDirs) - 1
 		}
+		return m, nil
+
+	case broadcastGhqDirsMsg:
+		m.broadcastDirs = []string(msg)
+		m.broadcastFiltered = filterDirs(m.broadcastDirs, m.broadcastInput.Value())
+		m.broadcastCursor = 0
+		return m, nil
+
+	case broadcastReadyMsg:
+		// All targets are idle; send the prompt to each.
+		targets := m.broadcastTargets
+		prompt := m.broadcastPrompt
+		m.broadcastTargets = nil
+		m.broadcastPrompt = ""
+		m.mode = ModeList
+		cfg := m.cfg
+		return m, func() tea.Msg {
+			for _, t := range targets {
+				sn := tmux.SessionName
+				if t.sessionName != "" {
+					sn = t.sessionName
+				}
+				_ = tmux.SendKeysLiteral(sn, t.windowIndex, prompt)
+			}
+			return fetchSessionsCmdWithExternals(cfg)()
+		}
+
+	case broadcastTargetsResolvedMsg:
+		m.broadcastTargets = msg.targets
+		m.broadcastErrors = msg.errors
+		if len(m.broadcastTargets) == 0 {
+			m.mode = ModeList
+			return m, nil
+		}
+		m.mode = ModeBroadcastWait
+		m.broadcastStartTime = time.Now()
+		return m, tea.Batch(doTick(), m.checkBroadcastTargetsCmd())
+
+	case broadcastTargetsUpdatedMsg:
+		m.broadcastTargets = []broadcastTarget(msg)
+		return m, nil
+
+	case broadcastTimeoutMsg:
+		m.broadcastTargets = nil
+		m.broadcastPrompt = ""
+		m.broadcastErrors = nil
+		m.mode = ModeList
+		m.err = fmt.Errorf("Broadcast timed out: some sessions did not become idle")
 		return m, nil
 
 	case externalWindowsMsg:
@@ -476,6 +587,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateAddExternal(msg)
 		case ModeDashboard:
 			return m.updateDashboard(msg)
+		case ModeBroadcastSelect:
+			return m.updateBroadcastSelect(msg)
+		case ModeBroadcastPrompt:
+			return m.updateBroadcastPrompt(msg)
+		case ModeBroadcastWait:
+			return m.updateBroadcastWait(msg)
 		}
 
 	case tea.PasteMsg:
@@ -512,6 +629,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.addExtCursor >= len(m.filteredExtWindows) {
 				m.addExtCursor = 0
 			}
+			return m, cmd
+
+		case ModeBroadcastSelect:
+			var cmd tea.Cmd
+			m.broadcastInput, cmd = m.broadcastInput.Update(msg)
+			m.broadcastFiltered = filterDirs(m.broadcastDirs, m.broadcastInput.Value())
+			// Reset selection and cursor when filter changes.
+			m.broadcastSelected = make(map[int]bool)
+			if m.broadcastCursor >= len(m.broadcastFiltered) {
+				m.broadcastCursor = 0
+			}
+			return m, cmd
+
+		case ModeBroadcastPrompt:
+			var cmd tea.Cmd
+			m.broadcastPromptInput, cmd = m.broadcastPromptInput.Update(msg)
 			return m, cmd
 		}
 	}
@@ -621,6 +754,20 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.dashCursor = 0
 		m.dashPreviews = make(map[int]string)
 		return m, fetchDashboardPreviews(m.filtered)
+
+	case "b":
+		m.mode = ModeBroadcastSelect
+		m.err = nil
+		m.broadcastInput.SetValue("")
+		m.broadcastCursor = 0
+		m.broadcastSelected = make(map[int]bool)
+		cmds := []tea.Cmd{m.broadcastInput.Focus()}
+		if len(m.broadcastDirs) == 0 {
+			cmds = append(cmds, fetchBroadcastGhqDirs)
+		} else {
+			m.broadcastFiltered = m.broadcastDirs
+		}
+		return m, tea.Batch(cmds...)
 
 	case "/":
 		m.mode = ModeFilter
@@ -926,6 +1073,236 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) updateBroadcastSelect(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		// Collect selected dirs; if nothing selected, treat cursor item as selected.
+		var selectedDirs []string
+		for idx, sel := range m.broadcastSelected {
+			if sel && idx < len(m.broadcastFiltered) {
+				selectedDirs = append(selectedDirs, m.broadcastFiltered[idx])
+			}
+		}
+		if len(selectedDirs) == 0 && len(m.broadcastFiltered) > 0 {
+			selectedDirs = append(selectedDirs, m.broadcastFiltered[m.broadcastCursor])
+		}
+		if len(selectedDirs) == 0 {
+			return m, nil
+		}
+		// Deduplicate preserving order.
+		seen := make(map[string]bool)
+		var uniqueDirs []string
+		for _, d := range selectedDirs {
+			if !seen[d] {
+				seen[d] = true
+				uniqueDirs = append(uniqueDirs, d)
+			}
+		}
+		// Store as a temporary field; transition to prompt.
+		// We reuse broadcastTargets with dir only (windowIndex/sessionName resolved later).
+		m.broadcastTargets = make([]broadcastTarget, len(uniqueDirs))
+		for i, d := range uniqueDirs {
+			m.broadcastTargets[i] = broadcastTarget{dir: d}
+		}
+		m.broadcastInput.Blur()
+		m.mode = ModeBroadcastPrompt
+		m.broadcastPromptInput.SetValue("")
+		return m, m.broadcastPromptInput.Focus()
+
+	case "esc":
+		m.mode = ModeList
+		m.broadcastInput.Blur()
+		m.broadcastSelected = make(map[int]bool)
+		return m, nil
+
+	case " ":
+		// Toggle selection of item at cursor.
+		if len(m.broadcastFiltered) > 0 {
+			m.broadcastSelected[m.broadcastCursor] = !m.broadcastSelected[m.broadcastCursor]
+		}
+		return m, nil
+
+	case "a":
+		// Toggle all: if all are selected, deselect all; otherwise select all.
+		allSelected := len(m.broadcastSelected) == len(m.broadcastFiltered)
+		if allSelected {
+			for i := range m.broadcastFiltered {
+				if !m.broadcastSelected[i] {
+					allSelected = false
+					break
+				}
+			}
+		}
+		m.broadcastSelected = make(map[int]bool)
+		if !allSelected {
+			for i := range m.broadcastFiltered {
+				m.broadcastSelected[i] = true
+			}
+		}
+		return m, nil
+
+	case "up", "ctrl+k", "ctrl+p":
+		if len(m.broadcastFiltered) > 0 {
+			m.broadcastCursor = (m.broadcastCursor - 1 + len(m.broadcastFiltered)) % len(m.broadcastFiltered)
+		}
+		return m, nil
+
+	case "down", "ctrl+j", "ctrl+n":
+		if len(m.broadcastFiltered) > 0 {
+			m.broadcastCursor = (m.broadcastCursor + 1) % len(m.broadcastFiltered)
+		}
+		return m, nil
+
+	default:
+		var cmd tea.Cmd
+		m.broadcastInput, cmd = m.broadcastInput.Update(msg)
+		m.broadcastFiltered = filterDirs(m.broadcastDirs, m.broadcastInput.Value())
+		// Reset selection when filter changes.
+		m.broadcastSelected = make(map[int]bool)
+		if m.broadcastCursor >= len(m.broadcastFiltered) {
+			m.broadcastCursor = 0
+		}
+		return m, cmd
+	}
+}
+
+func (m Model) updateBroadcastPrompt(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		prompt := strings.TrimSpace(m.broadcastPromptInput.Value())
+		if prompt == "" {
+			return m, nil
+		}
+		m.broadcastPromptInput.Blur()
+		m.broadcastPrompt = prompt
+
+		// Resolve targets: match existing sessions by Dir, create new windows for unmatched.
+		targets := m.broadcastTargets
+		sessions := m.sessions
+		return m, func() tea.Msg {
+			resolved := make([]broadcastTarget, 0, len(targets))
+			var dirErrors []string
+			for _, t := range targets {
+				// Find an existing session with matching Dir.
+				found := false
+				for _, s := range sessions {
+					if s.Dir == t.dir {
+						sn := ""
+						if s.External && s.SessionName != "" {
+							sn = s.SessionName
+						}
+						resolved = append(resolved, broadcastTarget{
+							dir:         t.dir,
+							windowIndex: s.WindowIndex,
+							sessionName: sn,
+							ready:       s.Status == session.StatusIdle,
+						})
+						found = true
+						break
+					}
+				}
+				if !found {
+					// Validate the directory before attempting to create a window.
+					if err := tmux.ValidateDir(t.dir); err != nil {
+						dirErrors = append(dirErrors, fmt.Sprintf("%s: %v", t.dir, err))
+						continue
+					}
+					// Create a new window for this dir without switching the client.
+					name := tmux.GenerateWindowName(t.dir)
+					newIdx, err := tmux.CreateWindowSilent(name, t.dir)
+					if err != nil {
+						dirErrors = append(dirErrors, fmt.Sprintf("%s: %v", t.dir, err))
+						continue
+					}
+					resolved = append(resolved, broadcastTarget{
+						dir:         t.dir,
+						windowIndex: newIdx,
+						sessionName: "",
+						ready:       false,
+					})
+				}
+			}
+			return broadcastTargetsResolvedMsg{targets: resolved, errors: dirErrors}
+		}
+
+	case "esc":
+		m.broadcastPromptInput.Blur()
+		m.mode = ModeBroadcastSelect
+		return m, m.broadcastInput.Focus()
+
+	default:
+		var cmd tea.Cmd
+		m.broadcastPromptInput, cmd = m.broadcastPromptInput.Update(msg)
+		return m, cmd
+	}
+}
+
+func (m Model) updateBroadcastWait(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		// Cancel broadcast.
+		m.broadcastTargets = nil
+		m.broadcastPrompt = ""
+		m.mode = ModeList
+		return m, nil
+	}
+	return m, nil
+}
+
+// checkBroadcastTargetsCmd returns a command that checks whether all broadcast targets
+// are idle. If all are ready, it returns broadcastReadyMsg; otherwise it updates the
+// ready flags and returns broadcastTargetsUpdatedMsg. Returns broadcastTimeoutMsg if
+// the wait has exceeded 120 seconds.
+func (m Model) checkBroadcastTargetsCmd() tea.Cmd {
+	targets := m.broadcastTargets
+	startTime := m.broadcastStartTime
+	return func() tea.Msg {
+		// Timeout: if waiting more than 120 seconds, abort.
+		if time.Since(startTime) > 120*time.Second {
+			return broadcastTimeoutMsg{}
+		}
+
+		allReady := true
+		updated := make([]broadcastTarget, len(targets))
+		for i, t := range targets {
+			sn := t.sessionName
+			if sn == "" {
+				// Clux session: use GetWindowStatus to check status.
+				// Newly-created Claude Code windows may not have loaded yet (hasClaudeCode
+				// returns false), so treat isClaudeCode=false within the first 30 seconds
+				// as "still starting up" rather than stuck.
+				st, isClaudeCode := tmux.GetWindowStatus(tmux.SessionName, t.windowIndex)
+				if isClaudeCode {
+					t.ready = st == session.StatusIdle
+				} else if time.Since(startTime) < 30*time.Second {
+					// Still booting; leave t.ready = false but don't consider it stuck.
+					t.ready = false
+				} else {
+					// Beyond 30s grace period and still not recognized as Claude Code.
+					t.ready = false
+				}
+			} else {
+				// External session: use ScanWindow which handles the full detection chain.
+				s := tmux.ScanWindow(sn, t.windowIndex)
+				if s != nil {
+					t.ready = s.Status == session.StatusIdle
+				} else {
+					t.ready = false
+				}
+			}
+			updated[i] = t
+			if !t.ready {
+				allReady = false
+			}
+		}
+		if allReady && len(updated) > 0 {
+			return broadcastReadyMsg{}
+		}
+		// Return updated targets as a special message.
+		return broadcastTargetsUpdatedMsg(updated)
+	}
+}
+
 // excludeRegistered removes windows that are already registered in cfg.
 func excludeRegistered(windows []tmux.ExternalWindowInfo, cfg *config.Config) []tmux.ExternalWindowInfo {
 	if cfg == nil || len(cfg.ExternalSessions) == 0 {
@@ -1020,6 +1397,18 @@ func (m Model) View() tea.View {
 
 	if m.mode == ModeDashboard {
 		return newView(m.viewDashboard(&b))
+	}
+
+	if m.mode == ModeBroadcastSelect {
+		return newView(m.viewBroadcastSelect(&b))
+	}
+
+	if m.mode == ModeBroadcastPrompt {
+		return newView(m.viewBroadcastPrompt(&b))
+	}
+
+	if m.mode == ModeBroadcastWait {
+		return newView(m.viewBroadcastWait(&b))
 	}
 
 	// Header.
@@ -1170,7 +1559,7 @@ func (m Model) View() tea.View {
 		if m.previewEnabled {
 			previewLabel = "p:preview(on)"
 		}
-		b.WriteString(styleHelpBar.Render("Enter:attach  y:approve  n:new  a:add-external  K:kill  R:refresh  " + previewLabel + "  d:dash  /:filter  q:quit"))
+		b.WriteString(styleHelpBar.Render("Enter:attach  y:approve  n:new  a:add-external  b:broadcast  K:kill  R:refresh  " + previewLabel + "  d:dash  /:filter  q:quit"))
 	}
 
 	return newView(b.String())
@@ -1422,6 +1811,126 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 	// Help bar
 	b.WriteString("\n")
 	b.WriteString(styleHelpBar.Render("Enter:attach  y:approve  hjkl/arrows:navigate  Esc/d:back  q:quit"))
+
+	return b.String()
+}
+
+func (m Model) viewBroadcastSelect(b *strings.Builder) string {
+	if m.err != nil {
+		b.WriteString(styleError.Render("Error: " + m.err.Error()))
+		b.WriteString("\n\n")
+	}
+
+	// Count selected items.
+	selectedCount := 0
+	for _, sel := range m.broadcastSelected {
+		if sel {
+			selectedCount++
+		}
+	}
+
+	b.WriteString(styleHeader.Render(fmt.Sprintf("Broadcast — Select Repositories (%d selected)", selectedCount)))
+	b.WriteString("\n\n")
+	b.WriteString(" ")
+	b.WriteString(m.broadcastInput.View())
+	b.WriteString("\n\n")
+
+	if len(m.broadcastFiltered) == 0 {
+		b.WriteString(styleHelpBar.Render(" No repositories found."))
+	} else {
+		maxShow := 20
+		offset := 0
+		if m.broadcastCursor >= maxShow {
+			offset = m.broadcastCursor - maxShow + 1
+		}
+		end := offset + maxShow
+		if end > len(m.broadcastFiltered) {
+			end = len(m.broadcastFiltered)
+		}
+		for i := offset; i < end; i++ {
+			dir := shortenDir(m.broadcastFiltered[i])
+			checkmark := "[ ]"
+			if m.broadcastSelected[i] {
+				checkmark = "[x]"
+			}
+			if i == m.broadcastCursor {
+				b.WriteString(styleSelected.Render(fmt.Sprintf(" > %s %s", checkmark, dir)))
+			} else {
+				b.WriteString(fmt.Sprintf("   %s %s", checkmark, dir))
+			}
+			b.WriteString("\n")
+		}
+		if end < len(m.broadcastFiltered) {
+			b.WriteString(styleHelpBar.Render(fmt.Sprintf("\n   ... and %d more", len(m.broadcastFiltered)-end)))
+		}
+	}
+
+	b.WriteString("\n\n")
+	b.WriteString(styleHelpBar.Render("Space:toggle  a:toggle-all  Enter:confirm  Esc:cancel  ↑/↓:navigate"))
+
+	return b.String()
+}
+
+func (m Model) viewBroadcastPrompt(b *strings.Builder) string {
+	selectedCount := len(m.broadcastTargets)
+	b.WriteString(styleHeader.Render(fmt.Sprintf("Broadcast — Enter Prompt (%d repos selected)", selectedCount)))
+	b.WriteString("\n\n")
+
+	// Show selected dirs.
+	for _, t := range m.broadcastTargets {
+		b.WriteString(fmt.Sprintf("  • %s\n", styleDir.Render(shortenDir(t.dir))))
+	}
+	b.WriteString("\n")
+
+	b.WriteString(" ")
+	b.WriteString(m.broadcastPromptInput.View())
+	b.WriteString("\n\n")
+
+	if m.err != nil {
+		b.WriteString(styleError.Render("Error: " + m.err.Error()))
+		b.WriteString("\n\n")
+	}
+
+	b.WriteString(styleHelpBar.Render("Enter:send  Esc:back"))
+
+	return b.String()
+}
+
+func (m Model) viewBroadcastWait(b *strings.Builder) string {
+	total := len(m.broadcastTargets)
+	ready := 0
+	for _, t := range m.broadcastTargets {
+		if t.ready {
+			ready++
+		}
+	}
+
+	b.WriteString(styleHeader.Render("Broadcast — Waiting for Sessions"))
+	b.WriteString("\n\n")
+	b.WriteString(fmt.Sprintf("  Waiting for sessions to become idle... (%d/%d ready)\n\n", ready, total))
+
+	for _, t := range m.broadcastTargets {
+		status := "waiting..."
+		if t.ready {
+			status = styleWorking.Render("idle")
+		}
+		b.WriteString(fmt.Sprintf("  %s  %s\n", status, styleDir.Render(shortenDir(t.dir))))
+	}
+
+	if len(m.broadcastErrors) > 0 {
+		b.WriteString("\n")
+		b.WriteString(styleError.Render("  Errors:"))
+		b.WriteString("\n")
+		for _, e := range m.broadcastErrors {
+			b.WriteString(styleError.Render("  • " + e))
+			b.WriteString("\n")
+		}
+	}
+
+	b.WriteString("\n")
+	b.WriteString(styleDir.Render(fmt.Sprintf("  Prompt: %s", m.broadcastPrompt)))
+	b.WriteString("\n\n")
+	b.WriteString(styleHelpBar.Render("Esc:cancel"))
 
 	return b.String()
 }

@@ -142,7 +142,7 @@ func ListExternalWindows(externals []config.ExternalSession) []session.Session {
 		wg.Add(1)
 		go func(i int, ext config.ExternalSession) {
 			defer wg.Done()
-			s := scanWindow(ext.Session, ext.Window)
+			s := ScanWindow(ext.Session, ext.Window)
 			if s != nil {
 				results[i] = result{s: s, ok: true}
 			}
@@ -159,9 +159,9 @@ func ListExternalWindows(externals []config.ExternalSession) []session.Session {
 	return sessions
 }
 
-// scanWindow checks if a specific session:window exists and returns a Session if it contains Claude Code.
+// ScanWindow checks if a specific session:window exists and returns a Session if it contains Claude Code.
 // Returns nil if the window doesn't exist or doesn't contain Claude Code.
-func scanWindow(sessionName, windowIndex string) *session.Session {
+func ScanWindow(sessionName, windowIndex string) *session.Session {
 	if !validWindowIndex.MatchString(windowIndex) {
 		return nil
 	}
@@ -362,6 +362,33 @@ func CreateWindow(name, dir string) error {
 	return switchClientGrouped(newIndex)
 }
 
+// CreateWindowSilent creates a new window in the clux session with the given name and directory,
+// running Claude Code directly, without switching the client to the new window.
+// Returns the new window's index.
+func CreateWindowSilent(name, dir string) (string, error) {
+	name = sanitizeWindowName(name)
+	out, err := exec.Command("tmux", "new-window", "-d", "-a", "-t", SessionName, "-n", name, "-c", dir, "-P", "-F", "#{window_index}", "claude").Output()
+	if err != nil {
+		return "", fmt.Errorf("creating window %q: %w", name, err)
+	}
+	newIndex := strings.TrimSpace(string(out))
+	if !validWindowIndex.MatchString(newIndex) {
+		return "", fmt.Errorf("unexpected window index %q from new-window", newIndex)
+	}
+	return newIndex, nil
+}
+
+// GetWindowStatus captures the pane content for a given session:window and returns its status.
+// Returns (status, true) if the window contains Claude Code, or (StatusUnknown, false) otherwise.
+func GetWindowStatus(sessionName, windowIndex string) (session.Status, bool) {
+	content, err := capturePaneContentForSession(sessionName, windowIndex)
+	if err != nil {
+		return session.StatusUnknown, false
+	}
+	status, isClaudeCode := detectStatusWithHooksForSession(content, sessionName, windowIndex)
+	return status, isClaudeCode
+}
+
 // ValidateDir checks that the given path exists and is a directory.
 func ValidateDir(dir string) error {
 	info, err := os.Stat(dir)
@@ -443,6 +470,25 @@ func SendKeys(sessionName, windowIndex, keys string) error {
 	target := sessionName + ":" + windowIndex
 	if err := exec.Command("tmux", "send-keys", "-t", target, keys, "Enter").Run(); err != nil {
 		return fmt.Errorf("sending keys to window %q in session %q: %w", windowIndex, sessionName, err)
+	}
+	return nil
+}
+
+// SendKeysLiteral sends text literally (no key name interpretation) to a window's first pane,
+// then sends Enter as a separate key press. This is safe for arbitrary prompt text that may
+// contain characters tmux would otherwise interpret as key names (e.g., "Up", "C-c").
+func SendKeysLiteral(sessionName, windowIndex, text string) error {
+	if !validWindowIndex.MatchString(windowIndex) {
+		return fmt.Errorf("invalid window index %q", windowIndex)
+	}
+	target := sessionName + ":" + windowIndex
+	// -l sends the text literally, preventing tmux from interpreting key names.
+	if err := exec.Command("tmux", "send-keys", "-l", "-t", target, text).Run(); err != nil {
+		return fmt.Errorf("sending literal keys to window %q in session %q: %w", windowIndex, sessionName, err)
+	}
+	// Send Enter separately so it is interpreted as the actual Enter key.
+	if err := exec.Command("tmux", "send-keys", "-t", target, "Enter").Run(); err != nil {
+		return fmt.Errorf("sending Enter to window %q in session %q: %w", windowIndex, sessionName, err)
 	}
 	return nil
 }
