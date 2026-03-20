@@ -96,8 +96,9 @@ type Model struct {
 	selectedRepoDir string // repo selected in ModeNewSession, used in ModeNewSessionBranch
 
 	// Preview mode
-	previewEnabled bool   // toggle state, default false
-	previewContent string // captured pane content for selected session
+	previewEnabled      bool   // toggle state, default false
+	previewContent      string // captured pane content for selected session
+	previewScrollOffset int    // lines scrolled up from bottom; 0 = live view
 
 	// Add external session mode
 	externalWindows    []tmux.ExternalWindowInfo // all available windows
@@ -109,8 +110,10 @@ type Model struct {
 	prevStatuses map[string]session.Status
 
 	// Dashboard mode
-	dashCursor   int            // index into m.filtered for focused cell
-	dashPreviews map[int]string // windowIndex -> pane content for each session
+	dashCursor     int            // index into m.filtered for focused cell
+	dashPreviews   map[int]string // windowIndex -> pane content for each session
+	dashPageOffset int            // index of first displayed item in dashboard
+	dashFocused    bool           // true when in single-session focus mode
 
 	// Broadcast mode
 	broadcastDirs        []string           // all ghq dirs (loaded once)
@@ -220,13 +223,25 @@ func fetchPreviewCmdForSession(s session.Session) tea.Cmd {
 	}
 }
 
+func fetchPreviewCmdForSessionWithOffset(s session.Session, scrollOffset, height int) tea.Cmd {
+	return func() tea.Msg {
+		sessionName := tmux.SessionName
+		if s.External && s.SessionName != "" {
+			sessionName = s.SessionName
+		}
+		paneIndex := resolvePaneIndex(s.PaneIndex)
+		content, err := tmux.CapturePaneForSessionWithOffset(sessionName, s.WindowIndex, paneIndex, scrollOffset, height)
+		if err != nil {
+			return previewMsg("")
+		}
+		return previewMsg(content)
+	}
+}
+
 func fetchDashboardPreviews(sessions []session.Session) tea.Cmd {
 	return func() tea.Msg {
 		result := make(map[int]string)
 		max := len(sessions)
-		if max > 9 {
-			max = 9
-		}
 		for i := 0; i < max; i++ {
 			s := sessions[i]
 			sessionName := tmux.SessionName
@@ -478,12 +493,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cursor = len(m.filtered) - 1
 		}
 
+		if m.mode == ModeDashboard {
+			maxVisible := m.dashMaxVisible()
+			// Snap page offset to a valid page boundary.
+			if maxVisible > 0 {
+				m.dashPageOffset = (m.dashPageOffset / maxVisible) * maxVisible
+			}
+			if m.dashPageOffset >= len(m.filtered) {
+				m.dashPageOffset = 0
+			}
+			pageCount := len(m.filtered) - m.dashPageOffset
+			if pageCount > maxVisible {
+				pageCount = maxVisible
+			}
+			if pageCount < 0 {
+				pageCount = 0
+			}
+			if m.dashCursor >= pageCount {
+				m.dashCursor = 0
+			}
+		}
+
 		var cmds []tea.Cmd
 		if shouldBell {
 			cmds = append(cmds, ringBell())
 		}
 		if m.previewEnabled && len(m.filtered) > 0 {
-			cmds = append(cmds, fetchPreviewCmdForSession(m.filtered[m.cursor]))
+			if m.previewScrollOffset > 0 {
+				cmds = append(cmds, fetchPreviewCmdForSessionWithOffset(m.filtered[m.cursor], m.previewScrollOffset, previewHeight(m)))
+			} else {
+				cmds = append(cmds, fetchPreviewCmdForSession(m.filtered[m.cursor]))
+			}
 		}
 		if len(cmds) > 0 {
 			return m, tea.Batch(cmds...)
@@ -506,11 +546,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mode == ModeList || m.mode == ModeFilter {
 			cmds := []tea.Cmd{fetchSessionsCmdWithExternals(m.cfg), doTick()}
 			if m.previewEnabled && len(m.filtered) > 0 {
-				cmds = append(cmds, fetchPreviewCmdForSession(m.filtered[m.cursor]))
+				if m.previewScrollOffset > 0 {
+					cmds = append(cmds, fetchPreviewCmdForSessionWithOffset(m.filtered[m.cursor], m.previewScrollOffset, previewHeight(m)))
+				} else {
+					cmds = append(cmds, fetchPreviewCmdForSession(m.filtered[m.cursor]))
+				}
 			}
 			return m, tea.Batch(cmds...)
 		} else if m.mode == ModeDashboard {
-			cmds := []tea.Cmd{fetchSessionsCmdWithExternals(m.cfg), doTick(), fetchDashboardPreviews(m.filtered)}
+			pageItems := len(m.filtered) - m.dashPageOffset
+			maxVisible := m.dashMaxVisible()
+			if pageItems > maxVisible {
+				pageItems = maxVisible
+			}
+			if pageItems < 0 {
+				pageItems = 0
+			}
+			pageSessions := m.filtered[m.dashPageOffset : m.dashPageOffset+pageItems]
+			cmds := []tea.Cmd{fetchSessionsCmdWithExternals(m.cfg), doTick(), fetchDashboardPreviews(pageSessions)}
 			return m, tea.Batch(cmds...)
 		} else if m.mode == ModeBroadcastWait {
 			return m, tea.Batch(doTick(), m.checkBroadcastTargetsCmd())
@@ -679,6 +732,7 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "k", "up", "ctrl+p":
 		if len(m.filtered) > 0 {
 			m.cursor = (m.cursor - 1 + len(m.filtered)) % len(m.filtered)
+			m.previewScrollOffset = 0
 			if m.previewEnabled {
 				return m, fetchPreviewCmdForSession(m.filtered[m.cursor])
 			}
@@ -687,9 +741,25 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "j", "down", "ctrl+n":
 		if len(m.filtered) > 0 {
 			m.cursor = (m.cursor + 1) % len(m.filtered)
+			m.previewScrollOffset = 0
 			if m.previewEnabled {
 				return m, fetchPreviewCmdForSession(m.filtered[m.cursor])
 			}
+		}
+
+	case "ctrl+u":
+		if m.previewEnabled && len(m.filtered) > 0 && previewHeight(m) > 0 {
+			m.previewScrollOffset += previewScrollStep(m)
+			return m, fetchPreviewCmdForSessionWithOffset(m.filtered[m.cursor], m.previewScrollOffset, previewHeight(m))
+		}
+
+	case "ctrl+d":
+		if m.previewEnabled && len(m.filtered) > 0 && previewHeight(m) > 0 {
+			m.previewScrollOffset -= previewScrollStep(m)
+			if m.previewScrollOffset < 0 {
+				m.previewScrollOffset = 0
+			}
+			return m, fetchPreviewCmdForSessionWithOffset(m.filtered[m.cursor], m.previewScrollOffset, previewHeight(m))
 		}
 
 	case "enter":
@@ -772,13 +842,22 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		if !m.previewEnabled {
 			m.previewContent = ""
+			m.previewScrollOffset = 0
 		}
 
 	case "d":
 		m.mode = ModeDashboard
 		m.dashCursor = 0
+		m.dashPageOffset = 0
+		m.dashFocused = false
+		m.previewScrollOffset = 0
 		m.dashPreviews = make(map[int]string)
-		return m, fetchDashboardPreviews(m.filtered)
+		maxVisible := m.dashMaxVisible()
+		pageItems := len(m.filtered)
+		if pageItems > maxVisible {
+			pageItems = maxVisible
+		}
+		return m, fetchDashboardPreviews(m.filtered[:pageItems])
 
 	case "b":
 		m.mode = ModeBroadcastSelect
@@ -1038,36 +1117,103 @@ func (m Model) updateAddExternal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	cols := m.dashCols()
-	maxItems := len(m.filtered)
-	if maxItems > 9 {
-		maxItems = 9
+	maxVisible := m.dashMaxVisible()
+	pageItems := len(m.filtered) - m.dashPageOffset
+	if pageItems > maxVisible {
+		pageItems = maxVisible
+	}
+	if pageItems < 0 {
+		pageItems = 0
 	}
 
 	switch msg.String() {
 	case "esc", "d":
+		if m.dashFocused {
+			m.dashFocused = false
+			return m, nil
+		}
 		m.mode = ModeList
 		return m, nil
 	case "q":
 		return m, tea.Quit
+	case "f":
+		if pageItems > 0 {
+			m.dashFocused = !m.dashFocused
+		}
+	case "]":
+		// Next page
+		if m.dashFocused {
+			m.dashFocused = false
+		}
+		nextOffset := m.dashPageOffset + maxVisible
+		if nextOffset < len(m.filtered) {
+			m.dashPageOffset = nextOffset
+			m.dashCursor = 0
+			pageSessions := m.filtered[m.dashPageOffset : m.dashPageOffset+min(m.dashMaxVisible(), len(m.filtered)-m.dashPageOffset)]
+			return m, fetchDashboardPreviews(pageSessions)
+		}
+	case "[":
+		// Previous page
+		if m.dashFocused {
+			m.dashFocused = false
+		}
+		prevOffset := m.dashPageOffset - maxVisible
+		if prevOffset < 0 {
+			prevOffset = 0
+		}
+		if prevOffset != m.dashPageOffset {
+			m.dashPageOffset = prevOffset
+			m.dashCursor = 0
+			pageSessions := m.filtered[m.dashPageOffset : m.dashPageOffset+min(m.dashMaxVisible(), len(m.filtered)-m.dashPageOffset)]
+			return m, fetchDashboardPreviews(pageSessions)
+		}
 	case "h", "left":
+		if m.dashFocused {
+			m.dashFocused = false
+		}
 		if m.dashCursor%cols > 0 {
 			m.dashCursor--
 		}
 	case "l", "right":
-		if m.dashCursor%cols < cols-1 && m.dashCursor+1 < maxItems {
+		if m.dashFocused {
+			m.dashFocused = false
+		}
+		if m.dashCursor%cols < cols-1 && m.dashCursor+1 < pageItems {
 			m.dashCursor++
 		}
 	case "k", "up", "ctrl+p":
+		if m.dashFocused {
+			m.dashFocused = false
+		}
 		if m.dashCursor-cols >= 0 {
 			m.dashCursor -= cols
+		} else if m.dashPageOffset > 0 {
+			// Go to previous page
+			prevOffset := m.dashPageOffset - maxVisible
+			if prevOffset < 0 {
+				prevOffset = 0
+			}
+			m.dashPageOffset = prevOffset
+			m.dashCursor = 0
+			pageSessions := m.filtered[m.dashPageOffset : m.dashPageOffset+min(m.dashMaxVisible(), len(m.filtered)-m.dashPageOffset)]
+			return m, fetchDashboardPreviews(pageSessions)
 		}
 	case "j", "down", "ctrl+n":
-		if m.dashCursor+cols < maxItems {
+		if m.dashFocused {
+			m.dashFocused = false
+		}
+		if m.dashCursor+cols < pageItems {
 			m.dashCursor += cols
+		} else if m.dashPageOffset+maxVisible < len(m.filtered) {
+			// Go to next page
+			m.dashPageOffset += maxVisible
+			m.dashCursor = 0
+			pageSessions := m.filtered[m.dashPageOffset : m.dashPageOffset+min(m.dashMaxVisible(), len(m.filtered)-m.dashPageOffset)]
+			return m, fetchDashboardPreviews(pageSessions)
 		}
 	case "enter":
-		if maxItems > 0 && m.dashCursor < len(m.filtered) {
-			s := m.filtered[m.dashCursor]
+		if pageItems > 0 && m.dashPageOffset+m.dashCursor < len(m.filtered) {
+			s := m.filtered[m.dashPageOffset+m.dashCursor]
 			sessionName := tmux.SessionName
 			if s.External && s.SessionName != "" {
 				sessionName = s.SessionName
@@ -1081,8 +1227,8 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case "y":
-		if maxItems > 0 && m.dashCursor < len(m.filtered) {
-			s := m.filtered[m.dashCursor]
+		if pageItems > 0 && m.dashPageOffset+m.dashCursor < len(m.filtered) {
+			s := m.filtered[m.dashPageOffset+m.dashCursor]
 			if s.Status != session.StatusWaiting {
 				break
 			}
@@ -1101,8 +1247,8 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "K":
-		if len(m.filtered) > 0 && m.dashCursor < len(m.filtered) {
-			s := m.filtered[m.dashCursor]
+		if len(m.filtered) > 0 && m.dashPageOffset+m.dashCursor < len(m.filtered) {
+			s := m.filtered[m.dashPageOffset+m.dashCursor]
 			m.confirmTarget = s.DisplayName()
 			m.confirmWindowIndex = s.WindowIndex
 			m.confirmPaneIndex = resolvePaneIndex(s.PaneIndex)
@@ -1347,15 +1493,72 @@ func excludeRegistered(windows []tmux.ExternalWindowInfo, cfg *config.Config) []
 	return out
 }
 
-// dashCols returns the number of columns for the dashboard grid based on terminal width.
+// dashCols returns the number of columns for the dashboard grid based on terminal width and session count.
 func (m Model) dashCols() int {
+	n := len(m.filtered)
+	if n == 0 {
+		return 1
+	}
+	maxColsByWidth := 1
 	if m.width >= 180 {
-		return 3
+		maxColsByWidth = 4
+	} else if m.width >= 120 {
+		maxColsByWidth = 3
+	} else if m.width >= 80 {
+		maxColsByWidth = 2
 	}
-	if m.width >= 100 {
-		return 2
+	if n < maxColsByWidth {
+		return n
 	}
-	return 1
+	return maxColsByWidth
+}
+
+// dashMaxVisible returns the maximum number of dashboard cells visible at once.
+func (m Model) dashMaxVisible() int {
+	cols := m.dashCols()
+	headerLines := 3
+	helpLines := 2
+	minCellHeight := 7 // minimum usable cell height (header + separator + some content)
+	available := m.height - headerLines - helpLines
+	if available < minCellHeight {
+		return cols // at least one row
+	}
+	maxRows := available / minCellHeight
+	if maxRows < 1 {
+		maxRows = 1
+	}
+	return cols * maxRows
+}
+
+// previewHeight returns the number of lines available for preview content.
+func previewHeight(m Model) int {
+	sessionRows := len(m.filtered)
+	topLines := 2 + 1 + sessionRows + 1
+	if m.err != nil {
+		topLines += 2
+	}
+	maxPreviewHeight := m.height - topLines - 2
+	if maxPreviewHeight < 1 {
+		return 0
+	}
+	available := m.height - topLines - 1 - 1
+	h := available / 2
+	if h < 5 {
+		h = 5
+	}
+	if h > maxPreviewHeight {
+		h = maxPreviewHeight
+	}
+	return h
+}
+
+// previewScrollStep returns the number of lines to scroll per Ctrl+U/D press.
+func previewScrollStep(m Model) int {
+	h := previewHeight(m)
+	if h < 2 {
+		return 1
+	}
+	return h / 2
 }
 
 // --- View ---
@@ -1500,17 +1703,9 @@ func (m Model) View() tea.View {
 		// Bottom section needs at least: separator(1) + 1 preview line + helpbar(1) = 3
 		maxPreviewHeight := m.height - topLines - 2 // minus separator, minus helpbar
 		if maxPreviewHeight >= 1 {
-			// Give roughly half the remaining height to preview, minimum 1.
-			available := m.height - topLines - 1 - 1
-			previewHeight := available / 2
-			if previewHeight < 5 {
-				previewHeight = 5
-			}
-			if previewHeight > maxPreviewHeight {
-				previewHeight = maxPreviewHeight
-			}
+			ph := previewHeight(m)
 			// Insert padding to push preview to bottom.
-			bottomLines := 1 + previewHeight + 1 // separator + preview + helpbar
+			bottomLines := 1 + ph + 1 // separator + preview + helpbar
 			padding := m.height - topLines - bottomLines
 			if padding > 0 {
 				b.WriteString(strings.Repeat("\n", padding))
@@ -1518,7 +1713,11 @@ func (m Model) View() tea.View {
 
 			// Build separator line.
 			selectedName := m.filtered[m.cursor].DisplayName()
-			sepLabel := " Preview: " + selectedName + " "
+			scrollIndicator := ""
+			if m.previewScrollOffset > 0 {
+				scrollIndicator = " ↑ scrolled (Ctrl+D to go back)"
+			}
+			sepLabel := " Preview: " + selectedName + scrollIndicator + " "
 			sepWidth := m.width
 			if sepWidth <= 0 {
 				sepWidth = 80
@@ -1555,12 +1754,12 @@ func (m Model) View() tea.View {
 			if len(previewLines) == 0 {
 				b.WriteString(stylePreview.Render("  No preview available"))
 				b.WriteString("\n")
-				for i := 1; i < previewHeight; i++ {
+				for i := 1; i < ph; i++ {
 					b.WriteString("\n")
 				}
 			} else {
-				// Take last previewHeight lines.
-				start := len(previewLines) - previewHeight
+				// Take last ph lines.
+				start := len(previewLines) - ph
 				if start < 0 {
 					start = 0
 				}
@@ -1583,7 +1782,7 @@ func (m Model) View() tea.View {
 	} else {
 		previewLabel := "p:preview"
 		if m.previewEnabled {
-			previewLabel = "p:preview(on)"
+			previewLabel = "p:preview(on)  Ctrl+U/D:scroll"
 		}
 		b.WriteString(styleHelpBar.Render("Enter:attach  y:approve  n:new  a:add-external  b:broadcast  K:kill  R:refresh  " + previewLabel + "  d:dash  /:filter  q:quit"))
 	}
@@ -1700,21 +1899,86 @@ func (m Model) viewAddExternal(b *strings.Builder) string {
 
 func (m Model) viewDashboard(b *strings.Builder) string {
 	cols := m.dashCols()
-	maxItems := len(m.filtered)
-	if maxItems > 9 {
-		maxItems = 9
+	maxVisible := m.dashMaxVisible()
+	pageItems := len(m.filtered) - m.dashPageOffset
+	if pageItems > maxVisible {
+		pageItems = maxVisible
 	}
-	rows := (maxItems + cols - 1) / cols
+	if pageItems < 0 {
+		pageItems = 0
+	}
 
-	// Header
-	header := fmt.Sprintf("Clux — Dashboard (%d sessions)", len(m.filtered))
+	// Focus mode: full-screen view of one session
+	if m.dashFocused && pageItems > 0 && m.dashPageOffset+m.dashCursor < len(m.filtered) {
+		s := m.filtered[m.dashPageOffset+m.dashCursor]
+		icon := s.Status.Icon()
+		statusStr := statusStyle(s.Status).Render(s.Status.String())
+		displayName := s.DisplayName()
+		branch := s.Branch
+		dir := shortenDir(s.Dir)
+		header := fmt.Sprintf("%s %s  %s", icon, statusStr, displayName)
+		if branch != "" {
+			header += "  [" + branch + "]"
+		}
+		if dir != "" {
+			header += "  " + styleDir.Render(dir)
+		}
+		b.WriteString(styleHeader.Render(header))
+		b.WriteString("\n")
+		b.WriteString(strings.Repeat("─", m.width))
+		b.WriteString("\n")
+
+		// Preview content filling remaining height
+		headerLines := 2 // header + separator
+		helpLines := 1
+		availableLines := m.height - headerLines - helpLines
+		if availableLines < 1 {
+			availableLines = 1
+		}
+		preview := m.dashPreviews[m.dashCursor]
+		lines := strings.Split(preview, "\n")
+		for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+			lines = lines[:len(lines)-1]
+		}
+		start := len(lines) - availableLines
+		if start < 0 {
+			start = 0
+		}
+		displayLines := lines[start:]
+		for _, line := range displayLines {
+			b.WriteString(line)
+			b.WriteString("\n")
+		}
+		// Pad remaining lines
+		for i := len(displayLines); i < availableLines; i++ {
+			b.WriteString("\n")
+		}
+
+		b.WriteString(styleHelpBar.Render("Esc:back  f:exit-focus  hjkl:navigate  q:quit"))
+		return b.String()
+	}
+
+	// Normal dashboard view
+	totalSessions := len(m.filtered)
+	rows := (pageItems + cols - 1) / cols
+	if rows == 0 {
+		rows = 1
+	}
+
+	// Header with page indicator
+	header := fmt.Sprintf("Clux — Dashboard (%d sessions)", totalSessions)
 	if summary := statusSummary(m.filtered); summary != "" {
 		header += " — " + summary
+	}
+	if totalSessions > maxVisible {
+		currentPage := m.dashPageOffset/maxVisible + 1
+		totalPages := (totalSessions + maxVisible - 1) / maxVisible
+		header += fmt.Sprintf("  Page %d/%d", currentPage, totalPages)
 	}
 	b.WriteString(styleHeader.Render(header))
 	b.WriteString("\n\n")
 
-	if maxItems == 0 {
+	if pageItems == 0 {
 		b.WriteString("No sessions to display.\n")
 		b.WriteString("\n")
 		b.WriteString(styleHelpBar.Render("Esc:back  q:quit"))
@@ -1747,13 +2011,13 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 		// Build each cell for this row
 		var cellContents []string
 		for col := 0; col < cols; col++ {
-			idx := row*cols + col
-			if idx >= maxItems {
+			localIdx := row*cols + col
+			if localIdx >= pageItems {
 				// Empty cell
 				cellContents = append(cellContents, strings.Repeat(" ", cellWidth-2))
 				continue
 			}
-			s := m.filtered[idx]
+			s := m.filtered[m.dashPageOffset+localIdx]
 
 			// Cell header: icon + status + name
 			icon := s.Status.Icon()
@@ -1769,7 +2033,7 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 			// Get preview content
 			preview := ""
 			if m.dashPreviews != nil {
-				preview = m.dashPreviews[idx]
+				preview = m.dashPreviews[localIdx]
 			}
 
 			// Get last N lines of preview
@@ -1811,16 +2075,16 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 		// Apply border style to focused cell
 		styledCells := make([]string, len(cellContents))
 		for col, content := range cellContents {
-			idx := row*cols + col
+			localIdx := row*cols + col
 			style := lipgloss.NewStyle().
 				Width(cellWidth - 2).
 				Height(cellHeight).
 				Padding(0, 1)
-			if idx == m.dashCursor && idx < maxItems {
+			if localIdx == m.dashCursor && localIdx < pageItems {
 				style = style.
 					Border(lipgloss.RoundedBorder()).
 					BorderForeground(lipgloss.Color("39"))
-			} else if idx < maxItems {
+			} else if localIdx < pageItems {
 				style = style.
 					Border(lipgloss.RoundedBorder()).
 					BorderForeground(lipgloss.Color("240"))
@@ -1836,7 +2100,7 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 
 	// Help bar
 	b.WriteString("\n")
-	b.WriteString(styleHelpBar.Render("Enter:attach  y:approve  K:kill  n:new  /:filter  b:broadcast  hjkl:navigate  Esc/d:back  q:quit"))
+	b.WriteString(styleHelpBar.Render("Enter:attach  y:approve  K:kill  n:new  /:filter  b:broadcast  f:focus  [/]:page  hjkl:navigate  Esc/d:back  q:quit"))
 
 	return b.String()
 }

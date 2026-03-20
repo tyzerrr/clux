@@ -1055,19 +1055,26 @@ func TestFilterExtWindows_MatchesQuery(t *testing.T) {
 // --- dashCols tests ---
 
 func TestDashCols(t *testing.T) {
+	// Build sessions to ensure n >= maxColsByWidth in all cases.
+	manySessions := make([]session.Session, 10)
+	for i := range manySessions {
+		manySessions[i] = session.Session{Name: fmt.Sprintf("s%d", i), Status: session.StatusIdle, WindowIndex: fmt.Sprintf("%d", i)}
+	}
 	tests := []struct {
 		width int
 		want  int
 	}{
-		{200, 3},
-		{180, 3},
-		{179, 2},
-		{100, 2},
-		{99, 1},
+		{200, 4},  // >= 180 → maxColsByWidth=4
+		{180, 4},  // >= 180 → maxColsByWidth=4
+		{179, 3},  // >= 120 → maxColsByWidth=3
+		{120, 3},  // >= 120 → maxColsByWidth=3
+		{119, 2},  // >= 80 → maxColsByWidth=2
+		{80, 2},   // >= 80 → maxColsByWidth=2
+		{79, 1},   // < 80 → maxColsByWidth=1
 		{50, 1},
 	}
 	for _, tt := range tests {
-		m := New()
+		m := testModel(manySessions)
 		m.width = tt.width
 		got := m.dashCols()
 		if got != tt.want {
@@ -1259,14 +1266,15 @@ func TestModeDashboard_QQuits(t *testing.T) {
 }
 
 func TestModeDashboard_Navigation(t *testing.T) {
-	// 6 sessions, width=200 → 3 cols
+	// 6 sessions, width=180 → 4 cols (>=180); use width=160 → 3 cols (>=120)
 	sessions := make([]session.Session, 6)
 	for i := range sessions {
 		sessions[i] = session.Session{Name: fmt.Sprintf("s%d", i), Status: session.StatusIdle, WindowIndex: fmt.Sprintf("%d", i)}
 	}
 	m := testModel(sessions)
 	m.mode = ModeDashboard
-	m.width = 200
+	m.width = 160  // >= 120 → 3 cols
+	m.height = 100 // enough height so all 6 sessions fit on one page
 	m.dashCursor = 0
 
 	// Move right
@@ -1809,5 +1817,375 @@ func TestView_ModeBroadcastWait(t *testing.T) {
 	out := m.View().Content
 	if out == "" {
 		t.Error("expected non-empty view for ModeBroadcastWait")
+	}
+}
+
+// --- Feature A: Preview Scroll ---
+
+func TestPreviewHeight(t *testing.T) {
+	m := testModel(testSessions)
+	m.width = 80
+	m.height = 40
+	h := previewHeight(m)
+	if h <= 0 {
+		t.Errorf("expected previewHeight > 0, got %d", h)
+	}
+	if h > m.height {
+		t.Errorf("previewHeight %d exceeds terminal height %d", h, m.height)
+	}
+}
+
+func TestPreviewHeight_ShortTerminal(t *testing.T) {
+	m := testModel(testSessions)
+	m.width = 80
+	m.height = 5 // too short to show preview
+	h := previewHeight(m)
+	// topLines = 2+1+3+1 = 7, which > height, so h <= 0
+	if h > 0 {
+		t.Errorf("expected previewHeight <= 0 for short terminal, got %d", h)
+	}
+}
+
+func TestPreviewScrollStep(t *testing.T) {
+	m := testModel(testSessions)
+	m.width = 80
+	m.height = 40
+	step := previewScrollStep(m)
+	if step <= 0 {
+		t.Errorf("expected previewScrollStep > 0, got %d", step)
+	}
+	h := previewHeight(m)
+	if h >= 2 && step != h/2 {
+		t.Errorf("expected previewScrollStep = %d (h/2), got %d", h/2, step)
+	}
+}
+
+func TestPreviewScrollStep_SmallHeight(t *testing.T) {
+	m := testModel(testSessions)
+	m.width = 80
+	m.height = 5
+	step := previewScrollStep(m)
+	if step != 1 {
+		t.Errorf("expected previewScrollStep=1 when previewHeight < 2, got %d", step)
+	}
+}
+
+func TestPreviewScrollOffset_ResetOnCursorMove(t *testing.T) {
+	m := testModel(testSessions)
+	m.width = 80
+	m.height = 40
+	m.previewEnabled = true
+	m.previewScrollOffset = 10
+
+	// Move cursor down, offset should reset
+	result, _ := m.updateList(tea.KeyPressMsg{Code: 'j', Text: "j"})
+	rm := result.(Model)
+	if rm.previewScrollOffset != 0 {
+		t.Errorf("expected previewScrollOffset=0 after cursor move, got %d", rm.previewScrollOffset)
+	}
+}
+
+func TestPreviewScrollOffset_ResetOnCursorMoveUp(t *testing.T) {
+	m := testModel(testSessions)
+	m.width = 80
+	m.height = 40
+	m.previewEnabled = true
+	m.previewScrollOffset = 5
+	m.cursor = 1
+
+	result, _ := m.updateList(tea.KeyPressMsg{Code: 'k', Text: "k"})
+	rm := result.(Model)
+	if rm.previewScrollOffset != 0 {
+		t.Errorf("expected previewScrollOffset=0 after cursor move up, got %d", rm.previewScrollOffset)
+	}
+}
+
+func TestPreviewScrollOffset_ResetOnPreviewToggleOff(t *testing.T) {
+	m := testModel(testSessions)
+	m.previewEnabled = true
+	m.previewScrollOffset = 7
+	m.previewContent = "some content"
+
+	result, _ := m.updateList(tea.KeyPressMsg{Code: 'p', Text: "p"})
+	rm := result.(Model)
+	if rm.previewScrollOffset != 0 {
+		t.Errorf("expected previewScrollOffset=0 after toggle off, got %d", rm.previewScrollOffset)
+	}
+	if rm.previewEnabled {
+		t.Error("expected previewEnabled=false after toggle")
+	}
+}
+
+func TestPreviewScrollOffset_ResetOnDashboardEntry(t *testing.T) {
+	m := testModel(testSessions)
+	m.width = 200
+	m.height = 40
+	m.previewEnabled = true
+	m.previewScrollOffset = 10
+
+	result, _ := m.updateList(tea.KeyPressMsg{Code: 'd', Text: "d"})
+	rm := result.(Model)
+	if rm.mode != ModeDashboard {
+		t.Errorf("expected ModeDashboard, got %v", rm.mode)
+	}
+	if rm.previewScrollOffset != 0 {
+		t.Errorf("expected previewScrollOffset=0 after entering dashboard, got %d", rm.previewScrollOffset)
+	}
+}
+
+func TestPreviewScroll_CtrlU_IncreasesOffset(t *testing.T) {
+	m := testModel(testSessions)
+	m.width = 80
+	m.height = 40
+	m.previewEnabled = true
+	m.previewScrollOffset = 0
+
+	result, _ := m.updateList(tea.KeyPressMsg{Mod: tea.ModCtrl, Code: 'u'})
+	rm := result.(Model)
+	if rm.previewScrollOffset <= 0 {
+		t.Errorf("expected previewScrollOffset > 0 after Ctrl+U, got %d", rm.previewScrollOffset)
+	}
+}
+
+func TestPreviewScroll_CtrlD_DecreasesOffset(t *testing.T) {
+	m := testModel(testSessions)
+	m.width = 80
+	m.height = 40
+	m.previewEnabled = true
+	m.previewScrollOffset = 20
+
+	result, _ := m.updateList(tea.KeyPressMsg{Mod: tea.ModCtrl, Code: 'd'})
+	rm := result.(Model)
+	if rm.previewScrollOffset >= 20 {
+		t.Errorf("expected previewScrollOffset < 20 after Ctrl+D, got %d", rm.previewScrollOffset)
+	}
+}
+
+func TestPreviewScroll_CtrlD_ClampsAtZero(t *testing.T) {
+	m := testModel(testSessions)
+	m.width = 80
+	m.height = 40
+	m.previewEnabled = true
+	m.previewScrollOffset = 1 // less than scroll step
+
+	result, _ := m.updateList(tea.KeyPressMsg{Mod: tea.ModCtrl, Code: 'd'})
+	rm := result.(Model)
+	if rm.previewScrollOffset < 0 {
+		t.Errorf("expected previewScrollOffset >= 0, got %d", rm.previewScrollOffset)
+	}
+}
+
+func TestPreviewScroll_NoOpWhenPreviewDisabled(t *testing.T) {
+	m := testModel(testSessions)
+	m.previewEnabled = false
+	m.previewScrollOffset = 0
+
+	result, _ := m.updateList(tea.KeyPressMsg{Mod: tea.ModCtrl, Code: 'u'})
+	rm := result.(Model)
+	if rm.previewScrollOffset != 0 {
+		t.Errorf("expected previewScrollOffset=0 when preview disabled, got %d", rm.previewScrollOffset)
+	}
+}
+
+// --- Feature B: Dashboard Layout Improvements ---
+
+func TestDashMaxVisible(t *testing.T) {
+	sessions := make([]session.Session, 10)
+	for i := range sessions {
+		sessions[i] = session.Session{Name: fmt.Sprintf("s%d", i), Status: session.StatusIdle, WindowIndex: fmt.Sprintf("%d", i)}
+	}
+	m := testModel(sessions)
+	m.width = 160
+	m.height = 50
+	maxVisible := m.dashMaxVisible()
+	if maxVisible <= 0 {
+		t.Errorf("expected dashMaxVisible > 0, got %d", maxVisible)
+	}
+}
+
+func TestDashMaxVisible_ShortTerminal(t *testing.T) {
+	sessions := make([]session.Session, 5)
+	for i := range sessions {
+		sessions[i] = session.Session{Name: fmt.Sprintf("s%d", i), Status: session.StatusIdle, WindowIndex: fmt.Sprintf("%d", i)}
+	}
+	m := testModel(sessions)
+	m.width = 80
+	m.height = 5 // very short
+	maxVisible := m.dashMaxVisible()
+	// Should return at least cols (one row fallback)
+	cols := m.dashCols()
+	if maxVisible < cols {
+		t.Errorf("expected dashMaxVisible >= cols (%d), got %d", cols, maxVisible)
+	}
+}
+
+func TestDashCols_WithFewSessions(t *testing.T) {
+	// With only 1 session, dashCols should return 1 regardless of width
+	m := testModel([]session.Session{
+		{Name: "solo", Status: session.StatusIdle, WindowIndex: "0"},
+	})
+	m.width = 200
+	got := m.dashCols()
+	if got != 1 {
+		t.Errorf("expected dashCols=1 with 1 session, got %d", got)
+	}
+}
+
+func TestDashCols_WithTwoSessions(t *testing.T) {
+	sessions := []session.Session{
+		{Name: "s0", Status: session.StatusIdle, WindowIndex: "0"},
+		{Name: "s1", Status: session.StatusIdle, WindowIndex: "1"},
+	}
+	m := testModel(sessions)
+	m.width = 200 // maxColsByWidth=4, but n=2 → should cap at 2
+	got := m.dashCols()
+	if got != 2 {
+		t.Errorf("expected dashCols=2 with 2 sessions on wide terminal, got %d", got)
+	}
+}
+
+func TestDashboard_FocusModeToggle(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeDashboard
+	m.width = 160
+	m.height = 50
+	m.dashCursor = 0
+
+	// Press f to enter focus mode
+	result, _ := m.updateDashboard(tea.KeyPressMsg{Code: 'f', Text: "f"})
+	rm := result.(Model)
+	if !rm.dashFocused {
+		t.Error("expected dashFocused=true after f")
+	}
+
+	// Press f again to exit focus mode
+	result2, _ := rm.updateDashboard(tea.KeyPressMsg{Code: 'f', Text: "f"})
+	rm2 := result2.(Model)
+	if rm2.dashFocused {
+		t.Error("expected dashFocused=false after second f")
+	}
+}
+
+func TestDashboard_EscExitsFocusMode(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeDashboard
+	m.width = 160
+	m.height = 50
+	m.dashFocused = true
+
+	result, _ := m.updateDashboard(tea.KeyPressMsg{Code: tea.KeyEscape})
+	rm := result.(Model)
+	if rm.dashFocused {
+		t.Error("expected dashFocused=false after Esc")
+	}
+	if rm.mode != ModeDashboard {
+		t.Errorf("expected mode to remain ModeDashboard after Esc from focus, got %v", rm.mode)
+	}
+}
+
+func TestDashboard_Pagination_NextPage(t *testing.T) {
+	// Create enough sessions to require pagination
+	sessions := make([]session.Session, 20)
+	for i := range sessions {
+		sessions[i] = session.Session{Name: fmt.Sprintf("s%d", i), Status: session.StatusIdle, WindowIndex: fmt.Sprintf("%d", i)}
+	}
+	m := testModel(sessions)
+	m.mode = ModeDashboard
+	m.width = 80  // 1 col
+	m.height = 20 // limited height forces pagination
+	m.dashPageOffset = 0
+
+	maxVisible := m.dashMaxVisible()
+	if maxVisible >= 20 {
+		t.Skip("terminal too large for pagination test")
+	}
+
+	result, _ := m.updateDashboard(tea.KeyPressMsg{Code: ']', Text: "]"})
+	rm := result.(Model)
+	if rm.dashPageOffset != maxVisible {
+		t.Errorf("expected dashPageOffset=%d after ], got %d", maxVisible, rm.dashPageOffset)
+	}
+	if rm.dashCursor != 0 {
+		t.Errorf("expected dashCursor=0 after page change, got %d", rm.dashCursor)
+	}
+}
+
+func TestDashboard_Pagination_PrevPage(t *testing.T) {
+	sessions := make([]session.Session, 20)
+	for i := range sessions {
+		sessions[i] = session.Session{Name: fmt.Sprintf("s%d", i), Status: session.StatusIdle, WindowIndex: fmt.Sprintf("%d", i)}
+	}
+	m := testModel(sessions)
+	m.mode = ModeDashboard
+	m.width = 80
+	m.height = 20
+	maxVisible := m.dashMaxVisible()
+	m.dashPageOffset = maxVisible // start on page 2
+	m.dashCursor = 0
+
+	result, _ := m.updateDashboard(tea.KeyPressMsg{Code: '[', Text: "["})
+	rm := result.(Model)
+	if rm.dashPageOffset != 0 {
+		t.Errorf("expected dashPageOffset=0 after [, got %d", rm.dashPageOffset)
+	}
+}
+
+func TestDashboard_Pagination_PrevPage_AtStart(t *testing.T) {
+	sessions := make([]session.Session, 5)
+	for i := range sessions {
+		sessions[i] = session.Session{Name: fmt.Sprintf("s%d", i), Status: session.StatusIdle, WindowIndex: fmt.Sprintf("%d", i)}
+	}
+	m := testModel(sessions)
+	m.mode = ModeDashboard
+	m.width = 80
+	m.height = 20
+	m.dashPageOffset = 0 // already on first page
+
+	result, _ := m.updateDashboard(tea.KeyPressMsg{Code: '[', Text: "["})
+	rm := result.(Model)
+	if rm.dashPageOffset != 0 {
+		t.Errorf("expected dashPageOffset=0 (no change), got %d", rm.dashPageOffset)
+	}
+}
+
+func TestDashboard_ViewFocusMode(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeDashboard
+	m.width = 80
+	m.height = 24
+	m.dashFocused = true
+	m.dashCursor = 0
+	m.dashPreviews = map[int]string{0: "preview content here"}
+
+	view := m.viewDashboard(&strings.Builder{})
+	// The focused session is filtered[dashPageOffset + dashCursor] = filtered[0]
+	// DisplayName() returns Summary if non-empty, else Name
+	focusedSession := m.filtered[0]
+	expectedDisplay := focusedSession.DisplayName()
+	if !strings.Contains(view, expectedDisplay) {
+		t.Errorf("focus mode view should contain display name %q, got:\n%s", expectedDisplay, view)
+	}
+	if !strings.Contains(view, "exit-focus") {
+		t.Error("focus mode help bar should mention exit-focus")
+	}
+}
+
+func TestDashboard_ViewShowsPageIndicator(t *testing.T) {
+	sessions := make([]session.Session, 20)
+	for i := range sessions {
+		sessions[i] = session.Session{Name: fmt.Sprintf("s%d", i), Status: session.StatusIdle, WindowIndex: fmt.Sprintf("%d", i)}
+	}
+	m := testModel(sessions)
+	m.mode = ModeDashboard
+	m.width = 80
+	m.height = 20
+	m.dashPageOffset = 0
+
+	var b strings.Builder
+	view := m.viewDashboard(&b)
+	if m.dashMaxVisible() < 20 {
+		if !strings.Contains(view, "Page") {
+			t.Error("expected 'Page' indicator in dashboard header when multiple pages exist")
+		}
 	}
 }

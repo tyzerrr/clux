@@ -801,3 +801,45 @@ func TestDetect_OldWaitingInScrollback_HashStable_Idle(t *testing.T) {
 	assert(t, st == session.StatusIdle, "expected Idle (old waiting in scrollback), got %v", st)
 	assert(t, isCC, "expected isClaudeCode=true")
 }
+
+// --- CapturePaneForSessionWithOffset validation ---
+
+func TestCapturePaneForSessionWithOffset_InvalidWindowIndex(t *testing.T) {
+	_, err := CapturePaneForSessionWithOffset("clux", "abc", "0", 0, 10)
+	if err == nil {
+		t.Error("expected error for invalid window index, got nil")
+	}
+}
+
+func TestCapturePaneForSessionWithOffset_InvalidPaneIndex(t *testing.T) {
+	_, err := CapturePaneForSessionWithOffset("clux", "0", "xyz", 0, 10)
+	if err == nil {
+		t.Error("expected error for invalid pane index, got nil")
+	}
+}
+
+func TestCapturePaneForSessionWithOffset_EmptyWindowIndex(t *testing.T) {
+	_, err := CapturePaneForSessionWithOffset("clux", "", "0", 5, 10)
+	if err == nil {
+		t.Error("expected error for empty window index, got nil")
+	}
+}
+
+func TestCapturePaneForSessionWithOffset_EmptyPaneIndex(t *testing.T) {
+	_, err := CapturePaneForSessionWithOffset("clux", "0", "", 5, 10)
+	if err == nil {
+		t.Error("expected error for empty pane index, got nil")
+	}
+}
+
+func TestCapturePaneForSessionWithOffset_ZeroOffsetValidation(t *testing.T) {
+	// With offset=0 and valid indices, validation should pass (tmux call will fail without tmux running, that's fine)
+	// We just test that the error is NOT a validation error (it would be a tmux exec error)
+	_, err := CapturePaneForSessionWithOffset("clux", "0", "0", 0, 10)
+	if err != nil {
+		// Error is expected (no real tmux session) but should not be a validation error
+		if err.Error() == `invalid window index "0"` || err.Error() == `invalid pane index "0"` {
+			t.Errorf("unexpected validation error with valid indices: %v", err)
+		}
+	}
+}

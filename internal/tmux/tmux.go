@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -648,6 +649,39 @@ func CapturePaneForSession(sessionName, windowIndex, paneIndex string) (string, 
 	out, err := exec.Command("tmux", "capture-pane", "-t", target, "-e", "-p").Output()
 	if err != nil {
 		return "", fmt.Errorf("capturing pane for window %q pane %q in session %q: %w", windowIndex, paneIndex, sessionName, err)
+	}
+	return string(out), nil
+}
+
+// CapturePaneForSessionWithOffset captures pane content at a specific scroll offset.
+// scrollOffset is the number of lines above the bottom to start from.
+// height is the number of lines to capture.
+// When scrollOffset is 0, behaves identically to CapturePaneForSession.
+func CapturePaneForSessionWithOffset(sessionName, windowIndex, paneIndex string, scrollOffset, height int) (string, error) {
+	if err := validatePaneTarget(windowIndex, paneIndex); err != nil {
+		return "", err
+	}
+	target := sessionName + ":" + windowIndex + "." + paneIndex
+	if scrollOffset <= 0 {
+		// Live view — same as regular capture with ANSI
+		out, err := exec.Command("tmux", "capture-pane", "-t", target, "-e", "-p").Output()
+		if err != nil {
+			return "", fmt.Errorf("capturing pane for window %q pane %q in session %q: %w", windowIndex, paneIndex, sessionName, err)
+		}
+		return string(out), nil
+	}
+	// Range capture into scrollback (tmux -S/-E are inclusive)
+	if height < 1 {
+		height = 1
+	}
+	startLine := -(scrollOffset + height - 1)
+	endLine := -scrollOffset
+	out, err := exec.Command("tmux", "capture-pane", "-t", target, "-e", "-p",
+		"-S", strconv.Itoa(startLine),
+		"-E", strconv.Itoa(endLine),
+	).Output()
+	if err != nil {
+		return "", fmt.Errorf("capturing pane with offset for window %q pane %q in session %q: %w", windowIndex, paneIndex, sessionName, err)
 	}
 	return string(out), nil
 }
