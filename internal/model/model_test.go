@@ -1267,3 +1267,449 @@ func TestModeDashboard_Navigation(t *testing.T) {
 		t.Errorf("after k: expected dashCursor=0, got %d", rm.dashCursor)
 	}
 }
+
+// ====================================================================
+// ModeBroadcastSelect key handling tests
+// ====================================================================
+
+func broadcastModel(dirs []string) Model {
+	m := New()
+	m.mode = ModeBroadcastSelect
+	m.broadcastDirs = dirs
+	m.broadcastFiltered = dirs
+	m.broadcastSelected = make(map[string]bool)
+	_ = m.broadcastInput.Focus()
+	return m
+}
+
+func TestModeBroadcastSelect_EscGoesBackToList(t *testing.T) {
+	m := broadcastModel([]string{"/repo/a", "/repo/b"})
+	m.broadcastSelected["/repo/a"] = true
+	result, _ := m.updateBroadcastSelect(tea.KeyPressMsg{Code: tea.KeyEscape})
+	rm := result.(Model)
+	if rm.mode != ModeList {
+		t.Errorf("expected ModeList, got %v", rm.mode)
+	}
+	if len(rm.broadcastSelected) != 0 {
+		t.Errorf("expected broadcastSelected cleared, got %d", len(rm.broadcastSelected))
+	}
+}
+
+func TestModeBroadcastSelect_SpaceTogglesSelection(t *testing.T) {
+	dirs := []string{"/repo/a", "/repo/b"}
+	m := broadcastModel(dirs)
+	m.broadcastCursor = 0
+
+	// Toggle on
+	result, _ := m.updateBroadcastSelect(tea.KeyPressMsg{Code: ' ', Text: " "})
+	rm := result.(Model)
+	if !rm.broadcastSelected["/repo/a"] {
+		t.Error("expected /repo/a to be selected")
+	}
+
+	// Toggle off
+	result, _ = rm.updateBroadcastSelect(tea.KeyPressMsg{Code: ' ', Text: " "})
+	rm = result.(Model)
+	if rm.broadcastSelected["/repo/a"] {
+		t.Error("expected /repo/a to be deselected")
+	}
+}
+
+func TestModeBroadcastSelect_UpDownMovesCursor(t *testing.T) {
+	dirs := []string{"/repo/a", "/repo/b", "/repo/c"}
+	m := broadcastModel(dirs)
+	m.broadcastCursor = 0
+
+	// Down
+	result, _ := m.updateBroadcastSelect(tea.KeyPressMsg{Code: tea.KeyDown})
+	rm := result.(Model)
+	if rm.broadcastCursor != 1 {
+		t.Errorf("expected cursor=1, got %d", rm.broadcastCursor)
+	}
+
+	// Up wraps
+	rm.broadcastCursor = 0
+	result, _ = rm.updateBroadcastSelect(tea.KeyPressMsg{Code: tea.KeyUp})
+	rm = result.(Model)
+	if rm.broadcastCursor != 2 {
+		t.Errorf("expected cursor to wrap to 2, got %d", rm.broadcastCursor)
+	}
+
+	// Ctrl+J
+	rm.broadcastCursor = 0
+	result, _ = rm.updateBroadcastSelect(tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl})
+	rm = result.(Model)
+	if rm.broadcastCursor != 1 {
+		t.Errorf("expected cursor=1 after ctrl+j, got %d", rm.broadcastCursor)
+	}
+
+	// Ctrl+K
+	rm.broadcastCursor = 1
+	result, _ = rm.updateBroadcastSelect(tea.KeyPressMsg{Code: 'k', Mod: tea.ModCtrl})
+	rm = result.(Model)
+	if rm.broadcastCursor != 0 {
+		t.Errorf("expected cursor=0 after ctrl+k, got %d", rm.broadcastCursor)
+	}
+}
+
+func TestModeBroadcastSelect_EnterWithSelectionGoesToPrompt(t *testing.T) {
+	dirs := []string{"/repo/a", "/repo/b"}
+	m := broadcastModel(dirs)
+	m.broadcastSelected["/repo/a"] = true
+
+	result, cmd := m.updateBroadcastSelect(tea.KeyPressMsg{Code: tea.KeyEnter})
+	rm := result.(Model)
+	if rm.mode != ModeBroadcastPrompt {
+		t.Errorf("expected ModeBroadcastPrompt, got %v", rm.mode)
+	}
+	if len(rm.broadcastTargets) != 1 {
+		t.Errorf("expected 1 target, got %d", len(rm.broadcastTargets))
+	}
+	if cmd == nil {
+		t.Error("expected non-nil cmd (focus prompt)")
+	}
+}
+
+func TestModeBroadcastSelect_EnterWithNoSelectionUsesCurrentItem(t *testing.T) {
+	dirs := []string{"/repo/a", "/repo/b"}
+	m := broadcastModel(dirs)
+	m.broadcastCursor = 1
+
+	result, _ := m.updateBroadcastSelect(tea.KeyPressMsg{Code: tea.KeyEnter})
+	rm := result.(Model)
+	if rm.mode != ModeBroadcastPrompt {
+		t.Errorf("expected ModeBroadcastPrompt, got %v", rm.mode)
+	}
+	if len(rm.broadcastTargets) != 1 || rm.broadcastTargets[0].dir != "/repo/b" {
+		t.Errorf("expected cursor item /repo/b as target, got %+v", rm.broadcastTargets)
+	}
+}
+
+func TestModeBroadcastSelect_EnterWithEmptyListStays(t *testing.T) {
+	m := broadcastModel([]string{})
+	result, cmd := m.updateBroadcastSelect(tea.KeyPressMsg{Code: tea.KeyEnter})
+	rm := result.(Model)
+	if rm.mode != ModeBroadcastSelect {
+		t.Errorf("expected ModeBroadcastSelect, got %v", rm.mode)
+	}
+	if cmd != nil {
+		t.Error("expected nil cmd")
+	}
+}
+
+// ====================================================================
+// ModeBroadcastPrompt key handling tests
+// ====================================================================
+
+func TestModeBroadcastPrompt_EscGoesBackToSelect(t *testing.T) {
+	m := New()
+	m.mode = ModeBroadcastPrompt
+	m.broadcastTargets = []broadcastTarget{{dir: "/repo/a"}}
+	_ = m.broadcastPromptInput.Focus()
+
+	result, cmd := m.updateBroadcastPrompt(tea.KeyPressMsg{Code: tea.KeyEscape})
+	rm := result.(Model)
+	if rm.mode != ModeBroadcastSelect {
+		t.Errorf("expected ModeBroadcastSelect, got %v", rm.mode)
+	}
+	if cmd == nil {
+		t.Error("expected non-nil cmd (focus broadcast input)")
+	}
+}
+
+func TestModeBroadcastPrompt_EnterWithEmptyStays(t *testing.T) {
+	m := New()
+	m.mode = ModeBroadcastPrompt
+	_ = m.broadcastPromptInput.Focus()
+	m.broadcastPromptInput.SetValue("")
+
+	result, cmd := m.updateBroadcastPrompt(tea.KeyPressMsg{Code: tea.KeyEnter})
+	rm := result.(Model)
+	if rm.mode != ModeBroadcastPrompt {
+		t.Errorf("expected ModeBroadcastPrompt, got %v", rm.mode)
+	}
+	if cmd != nil {
+		t.Error("expected nil cmd for empty prompt")
+	}
+}
+
+func TestModeBroadcastPrompt_EnterWithTextReturnsCmd(t *testing.T) {
+	m := New()
+	m.mode = ModeBroadcastPrompt
+	m.broadcastTargets = []broadcastTarget{{dir: "/repo/a"}}
+	_ = m.broadcastPromptInput.Focus()
+	m.broadcastPromptInput.SetValue("do the thing")
+
+	result, cmd := m.updateBroadcastPrompt(tea.KeyPressMsg{Code: tea.KeyEnter})
+	rm := result.(Model)
+	if rm.broadcastPrompt != "do the thing" {
+		t.Errorf("expected broadcastPrompt='do the thing', got %q", rm.broadcastPrompt)
+	}
+	if cmd == nil {
+		t.Error("expected non-nil cmd")
+	}
+}
+
+// ====================================================================
+// ModeBroadcastWait key handling tests
+// ====================================================================
+
+func TestModeBroadcastWait_EscCancels(t *testing.T) {
+	m := New()
+	m.mode = ModeBroadcastWait
+	m.broadcastTargets = []broadcastTarget{{dir: "/repo/a", ready: false}}
+	m.broadcastPrompt = "do stuff"
+
+	result, _ := m.updateBroadcastWait(tea.KeyPressMsg{Code: tea.KeyEscape})
+	rm := result.(Model)
+	if rm.mode != ModeList {
+		t.Errorf("expected ModeList, got %v", rm.mode)
+	}
+	if rm.broadcastTargets != nil {
+		t.Error("expected broadcastTargets cleared")
+	}
+	if rm.broadcastPrompt != "" {
+		t.Errorf("expected broadcastPrompt cleared, got %q", rm.broadcastPrompt)
+	}
+}
+
+func TestModeBroadcastWait_OtherKeyStays(t *testing.T) {
+	m := New()
+	m.mode = ModeBroadcastWait
+	m.broadcastTargets = []broadcastTarget{{dir: "/repo/a"}}
+
+	result, _ := m.updateBroadcastWait(tea.KeyPressMsg{Code: 'q', Text: "q"})
+	rm := result.(Model)
+	if rm.mode != ModeBroadcastWait {
+		t.Errorf("expected ModeBroadcastWait, got %v", rm.mode)
+	}
+}
+
+// ====================================================================
+// Update message handling tests
+// ====================================================================
+
+func TestUpdate_PreviewMsg(t *testing.T) {
+	m := testModel(testSessions)
+	m.previewEnabled = true
+	result, _ := m.Update(previewMsg("pane content here"))
+	rm := result.(Model)
+	if rm.previewContent != "pane content here" {
+		t.Errorf("expected previewContent='pane content here', got %q", rm.previewContent)
+	}
+}
+
+func TestUpdate_ExternalWindowsMsg(t *testing.T) {
+	m := New()
+	m.mode = ModeAddExternal
+	windows := []tmux.ExternalWindowInfo{
+		{Session: "main", WindowIndex: "1", WindowName: "editor", Dir: "/home"},
+		{Session: "work", WindowIndex: "2", WindowName: "shell", Dir: "/tmp"},
+	}
+	result, _ := m.Update(externalWindowsMsg(windows))
+	rm := result.(Model)
+	if len(rm.externalWindows) != 2 {
+		t.Errorf("expected 2 external windows, got %d", len(rm.externalWindows))
+	}
+	if len(rm.filteredExtWindows) != 2 {
+		t.Errorf("expected 2 filtered windows, got %d", len(rm.filteredExtWindows))
+	}
+}
+
+func TestUpdate_ExternalAddedMsg(t *testing.T) {
+	m := New()
+	m.mode = ModeAddExternal
+	result, cmd := m.Update(externalAddedMsg{})
+	rm := result.(Model)
+	// externalAddedMsg is not handled in Update — check it doesn't panic
+	_ = rm
+	_ = cmd
+}
+
+func TestUpdate_DashPreviewsMsg(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeDashboard
+	previews := map[int]string{0: "content0", 1: "content1"}
+	result, _ := m.Update(dashPreviewsMsg(previews))
+	rm := result.(Model)
+	if len(rm.dashPreviews) != 2 {
+		t.Errorf("expected 2 dash previews, got %d", len(rm.dashPreviews))
+	}
+	if rm.dashPreviews[0] != "content0" {
+		t.Errorf("expected dashPreviews[0]='content0', got %q", rm.dashPreviews[0])
+	}
+}
+
+func TestUpdate_SessionUnregistered(t *testing.T) {
+	m := testModel(testSessions)
+	_, cmd := m.Update(sessionUnregistered{})
+	if cmd == nil {
+		t.Error("expected non-nil cmd to refresh sessions")
+	}
+}
+
+func TestUpdate_BroadcastGhqDirsMsg(t *testing.T) {
+	m := New()
+	m.mode = ModeBroadcastSelect
+	dirs := []string{"/repo/a", "/repo/b", "/repo/c"}
+	result, _ := m.Update(broadcastGhqDirsMsg(dirs))
+	rm := result.(Model)
+	if len(rm.broadcastDirs) != 3 {
+		t.Errorf("expected 3 broadcastDirs, got %d", len(rm.broadcastDirs))
+	}
+	if len(rm.broadcastFiltered) != 3 {
+		t.Errorf("expected 3 broadcastFiltered, got %d", len(rm.broadcastFiltered))
+	}
+	if rm.broadcastCursor != 0 {
+		t.Errorf("expected cursor reset to 0, got %d", rm.broadcastCursor)
+	}
+}
+
+func TestUpdate_BroadcastTargetsResolvedMsg_WithTargets(t *testing.T) {
+	m := New()
+	m.mode = ModeBroadcastPrompt
+	targets := []broadcastTarget{
+		{dir: "/repo/a", windowIndex: "1", paneIndex: "0"},
+	}
+	result, cmd := m.Update(broadcastTargetsResolvedMsg{targets: targets})
+	rm := result.(Model)
+	if rm.mode != ModeBroadcastWait {
+		t.Errorf("expected ModeBroadcastWait, got %v", rm.mode)
+	}
+	if len(rm.broadcastTargets) != 1 {
+		t.Errorf("expected 1 target, got %d", len(rm.broadcastTargets))
+	}
+	if cmd == nil {
+		t.Error("expected non-nil cmd")
+	}
+}
+
+func TestUpdate_BroadcastTargetsResolvedMsg_Empty(t *testing.T) {
+	m := New()
+	m.mode = ModeBroadcastPrompt
+	result, _ := m.Update(broadcastTargetsResolvedMsg{targets: nil})
+	rm := result.(Model)
+	if rm.mode != ModeList {
+		t.Errorf("expected ModeList when no targets, got %v", rm.mode)
+	}
+}
+
+func TestUpdate_BroadcastTargetsUpdatedMsg(t *testing.T) {
+	m := New()
+	m.mode = ModeBroadcastWait
+	m.broadcastTargets = []broadcastTarget{{dir: "/repo/a", ready: false}}
+	updated := []broadcastTarget{{dir: "/repo/a", ready: true}}
+	result, _ := m.Update(broadcastTargetsUpdatedMsg(updated))
+	rm := result.(Model)
+	if !rm.broadcastTargets[0].ready {
+		t.Error("expected target to be ready after update")
+	}
+}
+
+func TestUpdate_BroadcastTimeoutMsg(t *testing.T) {
+	m := New()
+	m.mode = ModeBroadcastWait
+	m.broadcastTargets = []broadcastTarget{{dir: "/repo/a"}}
+	m.broadcastPrompt = "do stuff"
+	result, _ := m.Update(broadcastTimeoutMsg{})
+	rm := result.(Model)
+	if rm.mode != ModeList {
+		t.Errorf("expected ModeList, got %v", rm.mode)
+	}
+	if rm.broadcastTargets != nil {
+		t.Error("expected broadcastTargets cleared")
+	}
+	if rm.err == nil {
+		t.Error("expected error set on timeout")
+	}
+}
+
+func TestUpdate_BroadcastReadyMsg(t *testing.T) {
+	m := New()
+	m.mode = ModeBroadcastWait
+	m.broadcastTargets = []broadcastTarget{{dir: "/repo/a", windowIndex: "1", paneIndex: "0", ready: true}}
+	m.broadcastPrompt = "do stuff"
+	result, cmd := m.Update(broadcastReadyMsg{})
+	rm := result.(Model)
+	if rm.mode != ModeList {
+		t.Errorf("expected ModeList, got %v", rm.mode)
+	}
+	if cmd == nil {
+		t.Error("expected non-nil cmd to send keys")
+	}
+}
+
+// ====================================================================
+// View rendering tests
+// ====================================================================
+
+func TestView_ModeAddExternal(t *testing.T) {
+	m := New()
+	m.mode = ModeAddExternal
+	m.width = 80
+	m.height = 24
+	m.externalWindows = []tmux.ExternalWindowInfo{
+		{Session: "main", WindowIndex: "1", WindowName: "editor", Dir: "/home"},
+	}
+	m.filteredExtWindows = m.externalWindows
+	out := m.View().Content
+	if !strings.Contains(out, "Add External") && !strings.Contains(out, "external") && !strings.Contains(out, "Register") {
+		// Check for any expected content - the view should render something
+		if out == "" {
+			t.Error("expected non-empty view for ModeAddExternal")
+		}
+	}
+}
+
+func TestView_ModeDashboard(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeDashboard
+	m.width = 120
+	m.height = 40
+	m.dashPreviews = map[int]string{0: "preview content"}
+	out := m.View().Content
+	if out == "" {
+		t.Error("expected non-empty view for ModeDashboard")
+	}
+}
+
+func TestView_ModeBroadcastSelect(t *testing.T) {
+	m := New()
+	m.mode = ModeBroadcastSelect
+	m.width = 80
+	m.height = 24
+	m.broadcastDirs = []string{"/repo/a", "/repo/b"}
+	m.broadcastFiltered = m.broadcastDirs
+	out := m.View().Content
+	if out == "" {
+		t.Error("expected non-empty view for ModeBroadcastSelect")
+	}
+}
+
+func TestView_ModeBroadcastPrompt(t *testing.T) {
+	m := New()
+	m.mode = ModeBroadcastPrompt
+	m.width = 80
+	m.height = 24
+	m.broadcastTargets = []broadcastTarget{{dir: "/repo/a"}}
+	out := m.View().Content
+	if out == "" {
+		t.Error("expected non-empty view for ModeBroadcastPrompt")
+	}
+}
+
+func TestView_ModeBroadcastWait(t *testing.T) {
+	m := New()
+	m.mode = ModeBroadcastWait
+	m.width = 80
+	m.height = 24
+	m.broadcastTargets = []broadcastTarget{
+		{dir: "/repo/a", windowIndex: "1", ready: false},
+		{dir: "/repo/b", windowIndex: "2", ready: true},
+	}
+	m.broadcastPrompt = "run tests"
+	out := m.View().Content
+	if out == "" {
+		t.Error("expected non-empty view for ModeBroadcastWait")
+	}
+}
