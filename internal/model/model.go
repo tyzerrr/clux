@@ -1115,7 +1115,7 @@ func (m Model) updateBroadcastSelect(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.broadcastSelected = make(map[int]bool)
 		return m, nil
 
-	case " ":
+	case " ", "space":
 		// Toggle selection of item at cursor.
 		if len(m.broadcastFiltered) > 0 {
 			m.broadcastSelected[m.broadcastCursor] = !m.broadcastSelected[m.broadcastCursor]
