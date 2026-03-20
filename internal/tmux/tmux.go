@@ -754,11 +754,11 @@ func detectStatusWithHooksForSession(content, sessionName, windowIndex, paneInde
 			tier1Status = st
 			tier1Valid = true
 			debugLog(fmt.Sprintf("%s tier1=%s", label, st))
-			// Idle and waiting from hooks are reliable — return immediately.
-			if st != session.StatusWorking {
+			// Waiting from hooks is reliable — return immediately.
+			if st == session.StatusWaiting {
 				return st, true
 			}
-			// "working" from hooks can be stale; fall through to Tier 3 for override.
+			// Idle and working from hooks can be stale; fall through for cross-check.
 		}
 	}
 	if !tier1Valid {
@@ -783,7 +783,12 @@ func detectStatusWithHooksForSession(content, sessionName, windowIndex, paneInde
 		debugLog(fmt.Sprintf("%s tier3=waiting -> final=waiting", label))
 		return session.StatusWaiting, true
 	}
+	if isWorking(bottom) {
+		debugLog(fmt.Sprintf("%s tier3=working -> final=working", label))
+		return session.StatusWorking, true
+	}
 	if isIdle(bottom) {
+		// Cross-check: if Tier 1 says "working" but pane looks idle, trust pane (tier3 override).
 		if tier1Valid && tier1Status == session.StatusWorking {
 			debugLog(fmt.Sprintf("%s tier3=idle -> final=idle (tier3 override)", label))
 		} else {
@@ -792,10 +797,10 @@ func detectStatusWithHooksForSession(content, sessionName, windowIndex, paneInde
 		return session.StatusIdle, true
 	}
 
-	// Tier 3 found nothing conclusive; use Tier 1 "working" if we have it.
-	if tier1Valid && tier1Status == session.StatusWorking {
-		debugLog(fmt.Sprintf("%s tier3=unknown -> final=working (tier1 fallback)", label))
-		return session.StatusWorking, true
+	// Tier 3 found nothing conclusive; use Tier 1 if we have it.
+	if tier1Valid {
+		debugLog(fmt.Sprintf("%s tier3=unknown -> final=%s (tier1 fallback)", label, tier1Status))
+		return tier1Status, true
 	}
 
 	debugLog(fmt.Sprintf("%s tier3=unknown -> final=unknown", label))
@@ -843,16 +848,21 @@ func isWaiting(content string) bool {
 
 // isWorking returns true when the pane shows Claude Code actively processing.
 func isWorking(content string) bool {
-	indicators := []string{
-		"✳ Fermenting",
-		"✻ Baked",
-		"✻ Cooked",
-		"✻ Churned",
-		"✻ Worked",
+	// Unicode indicators are unique enough for substring match.
+	unicodeIndicators := []string{
 		"⏺ ",
+		"✳ ",
+		"✻ ",
 	}
-	for _, ind := range indicators {
+	for _, ind := range unicodeIndicators {
 		if strings.Contains(content, ind) {
+			return true
+		}
+	}
+	// ASCII indicators need line-start matching to avoid false positives.
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "* ") {
 			return true
 		}
 	}

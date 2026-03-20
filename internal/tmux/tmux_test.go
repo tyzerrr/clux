@@ -72,12 +72,12 @@ func TestIsWorking(t *testing.T) {
 		content string
 		want    bool
 	}{
-		{"contains Fermenting", "✳ Fermenting tokens...", true},
-		{"contains Baked", "✻ Baked response", true},
-		{"contains Cooked", "✻ Cooked result", true},
-		{"contains Churned", "✻ Churned output", true},
-		{"contains Worked", "✻ Worked on it", true},
+		{"contains thinking indicator", "✳ Fermenting tokens...", true},
+		{"contains done indicator", "✻ Baked response", true},
 		{"contains record indicator", "⏺ running task", true},
+		{"contains task spinner", "* Implementing features..", true},
+		{"task spinner with leading spaces", "  * Running tests..", true},
+		{"asterisk in middle of text", "this is not * working", false},
 		{"no working indicator", "-- INSERT --\njust idle text", false},
 		{"empty string", "", false},
 	}
@@ -796,15 +796,32 @@ func withMockedDeps(t *testing.T, statusFn func(string, string, string) string, 
 	})
 }
 
-func TestDetectStatusWithHooks_Tier1IdleReturnsImmediately(t *testing.T) {
+func TestDetectStatusWithHooks_Tier1IdleFallsThrough(t *testing.T) {
 	withMockedDeps(t,
 		func(_, _, _ string) string { return "idle" },
-		func(_, _, _ string) bool { t.Error("hasActiveChildren should not be called"); return false },
+		func(_, _, _ string) bool { return false },
 	)
+	// Hook says "idle" and pane content confirms idle (no working indicators) → idle.
 	content := "-- INSERT --\nsome output\n❯ "
 	st, isCC := detectStatusWithHooksForSession(content, "clux", "0", "0")
 	if st != session.StatusIdle {
 		t.Errorf("expected StatusIdle, got %v", st)
+	}
+	if !isCC {
+		t.Error("expected isClaudeCode=true")
+	}
+}
+
+func TestDetectStatusWithHooks_Tier1IdleOverriddenByWorkingContent(t *testing.T) {
+	withMockedDeps(t,
+		func(_, _, _ string) string { return "idle" },
+		func(_, _, _ string) bool { return false },
+	)
+	// Hook says "idle" but pane shows working indicators → working.
+	content := "-- INSERT --\n⏺ Bash(go test ./...)\n❯ "
+	st, isCC := detectStatusWithHooksForSession(content, "clux", "0", "0")
+	if st != session.StatusWorking {
+		t.Errorf("expected StatusWorking, got %v", st)
 	}
 	if !isCC {
 		t.Error("expected isClaudeCode=true")
@@ -881,6 +898,38 @@ func TestDetectStatusWithHooks_Tier3IdleFromContent(t *testing.T) {
 	st, isCC := detectStatusWithHooksForSession(content, "clux", "0", "0")
 	if st != session.StatusIdle {
 		t.Errorf("expected StatusIdle from tier3, got %v", st)
+	}
+	if !isCC {
+		t.Error("expected isClaudeCode=true")
+	}
+}
+
+func TestDetectStatusWithHooks_Tier3WorkingOverridesIdle(t *testing.T) {
+	// Working indicators in pane should win even though > prompt is also present.
+	withMockedDeps(t,
+		func(_, _, _ string) string { return "" },
+		func(_, _, _ string) bool { return false },
+	)
+	content := "-- INSERT --\n⏺ Bash(git diff --stat)\n* Implementing features.. (2m 21s)\n>\n-- INSERT --"
+	st, isCC := detectStatusWithHooksForSession(content, "clux", "0", "0")
+	if st != session.StatusWorking {
+		t.Errorf("expected StatusWorking from tier3, got %v", st)
+	}
+	if !isCC {
+		t.Error("expected isClaudeCode=true")
+	}
+}
+
+func TestDetectStatusWithHooks_Tier1IdleFallbackWhenTier3Unknown(t *testing.T) {
+	// Tier1 says "idle", tier3 can't determine → should use tier1 idle
+	withMockedDeps(t,
+		func(_, _, _ string) string { return "idle" },
+		func(_, _, _ string) bool { return false },
+	)
+	content := "-- INSERT --\nsome unrecognized output"
+	st, isCC := detectStatusWithHooksForSession(content, "clux", "0", "0")
+	if st != session.StatusIdle {
+		t.Errorf("expected StatusIdle (tier1 fallback), got %v", st)
 	}
 	if !isCC {
 		t.Error("expected isClaudeCode=true")
