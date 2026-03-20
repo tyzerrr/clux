@@ -932,6 +932,11 @@ func TestUpdate_SessionsMsg_PendingPromptTimeout(t *testing.T) {
 }
 
 func TestUpdate_SessionsMsg_PendingPromptTargetDisappeared(t *testing.T) {
+	// Mock WindowExistsFn to report that window "5" does not exist in tmux.
+	orig := tmux.WindowExistsFn
+	tmux.WindowExistsFn = func(windowIndex string) bool { return false }
+	t.Cleanup(func() { tmux.WindowExistsFn = orig })
+
 	m := New()
 	m.pendingPrompt = "test prompt"
 	m.pendingPromptTarget = "5"
@@ -2222,6 +2227,40 @@ func TestDashMaxVisible(t *testing.T) {
 	maxVisible := m.dashMaxVisible()
 	if maxVisible <= 0 {
 		t.Errorf("expected dashMaxVisible > 0, got %d", maxVisible)
+	}
+}
+
+func TestDashMaxVisible_AccountsForBorderAndNewline(t *testing.T) {
+	// minCellHeight = 7 (content) + 2 (border) + 1 (trailing newline) = 10
+	// headerLines = 3, helpLines = 2 → overhead = 5
+	// With height=25, available=20, maxRows = 20/10 = 2
+	// With 2 cols (width=80), maxVisible = 2*2 = 4
+	sessions := make([]session.Session, 10)
+	for i := range sessions {
+		sessions[i] = session.Session{Name: fmt.Sprintf("s%d", i), Status: session.StatusIdle, WindowIndex: fmt.Sprintf("%d", i)}
+	}
+	m := testModel(sessions)
+	m.width = 80 // 2 cols
+	m.height = 25
+	maxVisible := m.dashMaxVisible()
+	if maxVisible != 4 {
+		t.Errorf("expected dashMaxVisible=4 (2 cols * 2 rows), got %d", maxVisible)
+	}
+}
+
+func TestDashMaxVisible_SingleRowWhenShort(t *testing.T) {
+	// height=14: available = 14 - 5 = 9, maxRows = 9/10 = 0 → clamped to 1
+	// With 2 cols, maxVisible = 2
+	sessions := make([]session.Session, 10)
+	for i := range sessions {
+		sessions[i] = session.Session{Name: fmt.Sprintf("s%d", i), Status: session.StatusIdle, WindowIndex: fmt.Sprintf("%d", i)}
+	}
+	m := testModel(sessions)
+	m.width = 80 // 2 cols
+	m.height = 14
+	maxVisible := m.dashMaxVisible()
+	if maxVisible != 2 {
+		t.Errorf("expected dashMaxVisible=2 (2 cols * 1 row), got %d", maxVisible)
 	}
 }
 

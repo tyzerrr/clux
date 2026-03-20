@@ -1674,8 +1674,8 @@ func (m Model) dashMaxVisible() int {
 	cols := m.dashCols()
 	headerLines := 3
 	helpLines := 2
-	borderHeight := 2                  // lipgloss RoundedBorder adds top + bottom border lines per row
-	minCellHeight := 7 + borderHeight  // minimum usable cell height including border
+	borderHeight := 2                      // lipgloss RoundedBorder adds top + bottom border lines per row
+	minCellHeight := 7 + borderHeight + 1  // minimum usable cell height including border and trailing newline
 	available := m.height - headerLines - helpLines
 	if available < minCellHeight {
 		return cols // at least one row
@@ -2379,12 +2379,13 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 	if cellWidth < 20 {
 		cellWidth = 20
 	}
-	// availableHeight excludes header, helpbar, and border lines (2 per row).
+	// availableHeight excludes header, helpbar, border lines (2 per row), and
+	// the trailing newline after each grid row (1 per row).
 	// cellHeight is the inner (content-only) height of each cell.
 	headerLines := 3
 	helpLines := 2
 	borderHeight := 2 // lipgloss RoundedBorder adds top + bottom border lines per row
-	availableHeight := m.height - headerLines - helpLines - (rows * borderHeight)
+	availableHeight := m.height - headerLines - helpLines - (rows * (borderHeight + 1))
 	cellHeight := availableHeight / rows
 	if cellHeight < 5 {
 		cellHeight = 5
