@@ -2476,7 +2476,7 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 			style := lipgloss.NewStyle().
 				Width(contentWidth).
 				Height(cellHeight).
-				MaxHeight(cellHeight).
+				MaxHeight(cellHeight + borderHeight).
 				Padding(0, 1)
 			if localIdx == m.dashCursor && localIdx < pageItems {
 				style = style.
