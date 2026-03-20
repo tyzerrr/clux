@@ -2385,13 +2385,16 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 		baseCellWidth = 20
 		widthRemainder = 0
 	}
-	// colContentWidths[col] is the usable text area for each column.
+	// colCellWidths[col] is the total cell width (lipgloss Width, includes border+padding).
+	// colContentWidths[col] is the usable text area for truncation.
+	colCellWidths := make([]int, cols)
 	colContentWidths := make([]int, cols)
 	for c := 0; c < cols; c++ {
 		w := baseCellWidth
 		if c < widthRemainder {
 			w++
 		}
+		colCellWidths[c] = w
 		cw := w - cellChrome
 		if cw < 16 {
 			cw = 16
@@ -2492,11 +2495,11 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 		// Apply border style to focused cell
 		styledCells := make([]string, len(cellContents))
 		for col, content := range cellContents {
-			cw := colContentWidths[col]
 			localIdx := row*cols + col
+			// lipgloss v2 Width/Height include border and padding.
 			style := lipgloss.NewStyle().
-				Width(cw).
-				Height(rowCellHeight).
+				Width(colCellWidths[col]).
+				Height(rowCellHeight + borderHeight).
 				MaxHeight(rowCellHeight + borderHeight).
 				Padding(0, 1)
 			if localIdx == m.dashCursor && localIdx < pageItems {
