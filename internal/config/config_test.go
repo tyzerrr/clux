@@ -124,3 +124,21 @@ func TestLoad_InvalidJSON(t *testing.T) {
 		t.Error("expected error for invalid JSON, got nil")
 	}
 }
+
+func TestConfig_PreviewDefault_RoundTrip(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	cfg := &Config{PreviewDefault: true}
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	loaded, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !loaded.PreviewDefault {
+		t.Error("expected PreviewDefault=true after round-trip, got false")
+	}
+}
