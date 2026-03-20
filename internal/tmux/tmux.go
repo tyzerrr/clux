@@ -292,7 +292,16 @@ func switchClientGrouped(windowIndex string) error {
 	if clientSession == SessionName || strings.HasPrefix(clientSession, SessionName+"-") {
 		target := clientSession + ":" + windowIndex
 		if err := exec.Command("tmux", "select-window", "-t", target).Run(); err != nil {
-			return fmt.Errorf("selecting window %q in session %q: %w", windowIndex, clientSession, err)
+			// The grouped session may be stale; fall back to base session.
+			debugLog(fmt.Sprintf("select-window failed in %q, falling back to base session: %v", clientSession, err))
+			baseTarget := SessionName + ":" + windowIndex
+			if err2 := exec.Command("tmux", "select-window", "-t", baseTarget).Run(); err2 != nil {
+				return fmt.Errorf("selecting window %q: %w", windowIndex, err2)
+			}
+			if err2 := exec.Command("tmux", "switch-client", "-t", baseTarget).Run(); err2 != nil {
+				return fmt.Errorf("switching client to session %q: %w", SessionName, err2)
+			}
+			return nil
 		}
 		if err := exec.Command("tmux", "switch-client", "-t", target).Run(); err != nil {
 			return fmt.Errorf("switching client to %q: %w", target, err)
