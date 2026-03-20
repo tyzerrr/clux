@@ -2,6 +2,7 @@ package tmux
 
 import (
 	"fmt"
+	"hash/fnv"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -57,6 +58,55 @@ type windowInfo struct {
 type captureResult struct {
 	content string
 	err     error
+}
+
+// paneContentHashes stores the FNV-1a hash of the last captured pane content.
+// Key format: "sessionName:windowIndex.paneIndex"
+var (
+	paneContentHashes   = map[string]uint64{}
+	paneContentHashesMu sync.Mutex
+)
+
+// paneKey returns the canonical map key for a pane's content hash.
+func paneKey(sessionName, windowIndex, paneIndex string) string {
+	return sessionName + ":" + windowIndex + "." + paneIndex
+}
+
+// contentChanged compares the current content hash with the stored hash.
+// Returns true if content changed since the last call. Updates the stored hash.
+// On the first call for a given key (no previous hash), returns false —
+// we cannot assume Working just because we haven't seen the pane before.
+func contentChanged(key string, content string) bool {
+	h := fnv.New64a()
+	h.Write([]byte(content))
+	hash := h.Sum64()
+	paneContentHashesMu.Lock()
+	defer paneContentHashesMu.Unlock()
+	prev, exists := paneContentHashes[key]
+	paneContentHashes[key] = hash
+	if !exists {
+		return false // First time — no previous state to compare
+	}
+	return prev != hash
+}
+
+// ClearPaneHash removes the stored hash for a pane.
+func ClearPaneHash(sessionName, windowIndex, paneIndex string) {
+	key := paneKey(sessionName, windowIndex, paneIndex)
+	paneContentHashesMu.Lock()
+	defer paneContentHashesMu.Unlock()
+	delete(paneContentHashes, key)
+}
+
+// clearPaneHashByPrefix removes all stored hashes whose key starts with the given prefix.
+func clearPaneHashByPrefix(prefix string) {
+	paneContentHashesMu.Lock()
+	defer paneContentHashesMu.Unlock()
+	for k := range paneContentHashes {
+		if strings.HasPrefix(k, prefix) {
+			delete(paneContentHashes, k)
+		}
+	}
 }
 
 // capturePanesConcurrently captures the plain content of all given panes concurrently.
@@ -565,6 +615,7 @@ func KillWindow(windowIndex string) error {
 	if err := exec.Command("tmux", "kill-window", "-t", SessionName+":"+windowIndex).Run(); err != nil {
 		return fmt.Errorf("killing window %q: %w", windowIndex, err)
 	}
+	clearPaneHashByPrefix(SessionName + ":" + windowIndex + ".")
 	return nil
 }
 
@@ -650,8 +701,9 @@ func getClaudeStatusForSession(sessionName, windowIndex, paneIndex string) strin
 
 // Package-level function variables for dependency injection in tests.
 var (
-	getClaudeStatusFn    = getClaudeStatusForSession
-	hasActiveChildrenFn  = hasActiveChildrenForSession
+	getClaudeStatusFn   = getClaudeStatusForSession
+	hasActiveChildrenFn = hasActiveChildrenForSession
+	contentChangedFn    = contentChanged
 )
 
 // parseClaudeStatus converts a @claude-status string to a session.Status.
@@ -697,29 +749,20 @@ func hasActiveChildrenForSession(sessionName, windowIndex, paneIndex string) boo
 	return false
 }
 
-// detectStatusFromContent determines status from pane content using pattern matching only.
-func detectStatusFromContent(content string) (status session.Status, isClaudeCode bool) {
-	if !hasClaudeCode(content) {
-		return session.StatusUnknown, false
-	}
-	bottom := bottomContent(content, bottomScanLines)
-	if isWaiting(bottom) {
-		return session.StatusWaiting, true
-	}
-	if isWorking(bottom) {
-		return session.StatusWorking, true
-	}
-	if isIdle(bottom) {
-		return session.StatusIdle, true
-	}
-	return session.StatusUnknown, true
-}
-
 var (
 	debugEnabled  = os.Getenv("CLUX_DEBUG") == "1"
 	debugFile     *os.File
 	debugFileOnce sync.Once
 )
+
+// debugLogf appends a formatted log line to /tmp/clux-debug.log when CLUX_DEBUG=1.
+// Formatting is deferred so no allocation occurs when debug is disabled.
+func debugLogf(format string, args ...any) {
+	if !debugEnabled {
+		return
+	}
+	debugLog(fmt.Sprintf(format, args...))
+}
 
 // debugLog appends a log line to /tmp/clux-debug.log when CLUX_DEBUG=1 is set.
 // The file is opened once and kept open for the lifetime of the process.
@@ -741,70 +784,47 @@ func debugLog(msg string) {
 	fmt.Fprintf(debugFile, "%s %s\n", ts, msg)
 }
 
-// detectStatusWithHooksForSession determines status using hooks (@claude-status) first,
-// then falls back to process tree + pane content analysis.
+// detectStatusWithHooksForSession determines status using a hash-based change detection
+// approach: if pane content changed since last check → Working. If stable, use pattern
+// matching and process tree to distinguish Waiting vs Idle.
 func detectStatusWithHooksForSession(content, sessionName, windowIndex, paneIndex string) (status session.Status, isClaudeCode bool) {
-	label := fmt.Sprintf("[%s:%s.%s]", sessionName, windowIndex, paneIndex)
+	key := paneKey(sessionName, windowIndex, paneIndex)
 
-	// Tier 1: Check @claude-status hook.
-	var tier1Status session.Status
-	var tier1Valid bool
+	// @claude-status hook — only trust "waiting" immediately.
 	if cs := getClaudeStatusFn(sessionName, windowIndex, paneIndex); cs != "" {
-		if st, ok := parseClaudeStatus(cs); ok {
-			tier1Status = st
-			tier1Valid = true
-			debugLog(fmt.Sprintf("%s tier1=%s", label, st))
-			// Waiting from hooks is reliable — return immediately.
-			if st == session.StatusWaiting {
-				return st, true
-			}
-			// Idle and working from hooks can be stale; fall through for cross-check.
+		if st, ok := parseClaudeStatus(cs); ok && st == session.StatusWaiting {
+			debugLogf("[%s] hook=waiting -> final=waiting", key)
+			return session.StatusWaiting, true
 		}
 	}
-	if !tier1Valid {
-		debugLog(fmt.Sprintf("%s tier1=none", label))
-	}
 
-	// Tier 2: Fallback — require Claude Code presence in pane content.
+	// Require Claude Code presence in pane content.
 	if !hasClaudeCode(content) {
 		return session.StatusUnknown, false
 	}
 
-	// Use process tree to detect active tool execution.
-	if hasActiveChildrenFn(sessionName, windowIndex, paneIndex) {
-		debugLog(fmt.Sprintf("%s tier2=hasChildren -> final=working", label))
+	// Primary signal: content hash comparison.
+	if contentChangedFn(key, content) {
+		debugLogf("[%s] hash=changed -> final=working", key)
 		return session.StatusWorking, true
 	}
-	debugLog(fmt.Sprintf("%s tier2=noChildren", label))
+	debugLogf("[%s] hash=stable", key)
 
-	// Tier 3: Pattern matching on the bottom of the pane.
+	// Hash stable — determine Waiting vs Idle.
 	bottom := bottomContent(content, bottomScanLines)
 	if isWaiting(bottom) {
-		debugLog(fmt.Sprintf("%s tier3=waiting -> final=waiting", label))
+		debugLogf("[%s] pattern=waiting -> final=waiting", key)
 		return session.StatusWaiting, true
 	}
-	if isWorking(bottom) {
-		debugLog(fmt.Sprintf("%s tier3=working -> final=working", label))
+
+	// Safety net: process tree check for active tool execution.
+	if hasActiveChildrenFn(sessionName, windowIndex, paneIndex) {
+		debugLogf("[%s] proctree=active -> final=working", key)
 		return session.StatusWorking, true
 	}
-	if isIdle(bottom) {
-		// Cross-check: if Tier 1 says "working" but pane looks idle, trust pane (tier3 override).
-		if tier1Valid && tier1Status == session.StatusWorking {
-			debugLog(fmt.Sprintf("%s tier3=idle -> final=idle (tier3 override)", label))
-		} else {
-			debugLog(fmt.Sprintf("%s tier3=idle -> final=idle", label))
-		}
-		return session.StatusIdle, true
-	}
 
-	// Tier 3 found nothing conclusive; use Tier 1 if we have it.
-	if tier1Valid {
-		debugLog(fmt.Sprintf("%s tier3=unknown -> final=%s (tier1 fallback)", label, tier1Status))
-		return tier1Status, true
-	}
-
-	debugLog(fmt.Sprintf("%s tier3=unknown -> final=unknown", label))
-	return session.StatusUnknown, true
+	debugLogf("[%s] -> final=idle", key)
+	return session.StatusIdle, true
 }
 
 // hasClaudeCode checks whether the pane content looks like Claude Code is running.
@@ -846,29 +866,6 @@ func isWaiting(content string) bool {
 	return false
 }
 
-// isWorking returns true when the pane shows Claude Code actively processing.
-func isWorking(content string) bool {
-	// Unicode indicators are unique enough for substring match.
-	unicodeIndicators := []string{
-		"⏺ ",
-		"✳ ",
-		"✻ ",
-	}
-	for _, ind := range unicodeIndicators {
-		if strings.Contains(content, ind) {
-			return true
-		}
-	}
-	// ASCII indicators need line-start matching to avoid false positives.
-	for _, line := range strings.Split(content, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "* ") {
-			return true
-		}
-	}
-	return false
-}
-
 // getGitBranch returns the current git branch for the given directory.
 // Returns empty string if not a git repo or on error.
 func getGitBranch(dir string) string {
@@ -885,37 +882,3 @@ func getWindowSummaryForSession(sessionName, windowIndex, paneIndex string) stri
 	return tmuxDisplayOption(sessionName, windowIndex, paneIndex, "#{@clux-summary}")
 }
 
-// isIdle returns true when the pane is at the Claude Code input prompt.
-func isIdle(content string) bool {
-	lines := strings.Split(content, "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(lines[i])
-		if line == "" {
-			continue
-		}
-		if strings.HasPrefix(line, "❯") || line == ">" {
-			return true
-		}
-		if strings.HasPrefix(line, "-- INSERT --") {
-			continue
-		}
-		if isSeparatorLine(line) {
-			continue
-		}
-		break
-	}
-	return false
-}
-
-// isSeparatorLine returns true if the line consists entirely of box-drawing horizontal characters (─).
-func isSeparatorLine(line string) bool {
-	if line == "" {
-		return false
-	}
-	for _, r := range line {
-		if r != '─' {
-			return false
-		}
-	}
-	return true
-}

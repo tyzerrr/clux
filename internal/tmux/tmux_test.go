@@ -8,6 +8,14 @@ import (
 	"github.com/tanaka0325/clux/internal/session"
 )
 
+// assert is a test helper that fails with a formatted message if the condition is false.
+func assert(t *testing.T, cond bool, format string, args ...any) {
+	t.Helper()
+	if !cond {
+		t.Errorf(format, args...)
+	}
+}
+
 // --- hasClaudeCode ---
 
 func TestHasClaudeCode(t *testing.T) {
@@ -64,34 +72,6 @@ func TestIsWaiting(t *testing.T) {
 	}
 }
 
-// --- isWorking ---
-
-func TestIsWorking(t *testing.T) {
-	tests := []struct {
-		name    string
-		content string
-		want    bool
-	}{
-		{"contains thinking indicator", "✳ Fermenting tokens...", true},
-		{"contains done indicator", "✻ Baked response", true},
-		{"contains record indicator", "⏺ running task", true},
-		{"contains task spinner", "* Implementing features..", true},
-		{"task spinner with leading spaces", "  * Running tests..", true},
-		{"asterisk in middle of text", "this is not * working", false},
-		{"no working indicator", "-- INSERT --\njust idle text", false},
-		{"empty string", "", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := isWorking(tt.content)
-			if got != tt.want {
-				t.Errorf("isWorking(%q) = %v, want %v", tt.content, got, tt.want)
-			}
-		})
-	}
-}
-
 // --- bottomContent ---
 
 func TestBottomContent(t *testing.T) {
@@ -111,66 +91,6 @@ func TestBottomContent(t *testing.T) {
 			got := bottomContent(tt.content, tt.n)
 			if got != tt.want {
 				t.Errorf("bottomContent() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
-// --- isIdle ---
-
-func TestIsIdle(t *testing.T) {
-	tests := []struct {
-		name    string
-		content string
-		want    bool
-	}{
-		{
-			"last non-empty line starts with ❯",
-			"some output\n❯ ",
-			true,
-		},
-		{
-			"last non-empty line is >",
-			"some output\n>",
-			true,
-		},
-		{
-			"trailing empty lines before ❯ prompt",
-			"some output\n❯ \n\n",
-			true,
-		},
-		{
-			"trailing empty lines before > prompt",
-			"some output\n>\n\n",
-			true,
-		},
-		{
-			"idle with separator line and INSERT",
-			"some output\n❯ \n────────────────────\n  -- INSERT --\n\n",
-			true,
-		},
-		{
-			"no idle prompt",
-			"-- INSERT --\nsome text\n✻ Working",
-			false,
-		},
-		{
-			"empty string",
-			"",
-			false,
-		},
-		{
-			"INSERT line followed by empty lines but no prompt",
-			"output\n-- INSERT --\n\n",
-			false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := isIdle(tt.content)
-			if got != tt.want {
-				t.Errorf("isIdle(%q) = %v, want %v", tt.content, got, tt.want)
 			}
 		})
 	}
@@ -271,9 +191,9 @@ func TestSanitizeWindowName(t *testing.T) {
 
 func TestParseClaudeStatus(t *testing.T) {
 	tests := []struct {
-		input    string
-		wantSt   session.Status
-		wantOK   bool
+		input  string
+		wantSt session.Status
+		wantOK bool
 	}{
 		{"working", session.StatusWorking, true},
 		{"idle", session.StatusIdle, true},
@@ -287,90 +207,6 @@ func TestParseClaudeStatus(t *testing.T) {
 			st, ok := parseClaudeStatus(tt.input)
 			if st != tt.wantSt || ok != tt.wantOK {
 				t.Errorf("parseClaudeStatus(%q) = (%v, %v), want (%v, %v)", tt.input, st, ok, tt.wantSt, tt.wantOK)
-			}
-		})
-	}
-}
-
-// --- detectStatusFromContent ---
-
-func TestDetectStatus(t *testing.T) {
-	tests := []struct {
-		name           string
-		content        string
-		wantStatus     session.Status
-		wantIsClaudeCode bool
-	}{
-		{
-			name:           "not Claude Code returns false",
-			content:        "regular shell output without any indicators",
-			wantStatus:     session.StatusUnknown,
-			wantIsClaudeCode: false,
-		},
-		{
-			name:           "Waiting takes priority over Working",
-			content:        "-- INSERT --\n✻ Worked\nDo you want to proceed?",
-			wantStatus:     session.StatusWaiting,
-			wantIsClaudeCode: true,
-		},
-		{
-			name:           "Waiting takes priority over Idle",
-			content:        "-- INSERT --\n❯ \n[Y/n]",
-			wantStatus:     session.StatusWaiting,
-			wantIsClaudeCode: true,
-		},
-		{
-			name:           "Working when no Waiting",
-			content:        "-- INSERT --\n✻ Worked on task",
-			wantStatus:     session.StatusWorking,
-			wantIsClaudeCode: true,
-		},
-		{
-			name:           "Working takes priority over Idle",
-			content:        "-- INSERT --\n✻ Worked\n❯ ",
-			wantStatus:     session.StatusWorking,
-			wantIsClaudeCode: true,
-		},
-		{
-			name:           "Idle when only idle prompt",
-			content:        "-- INSERT --\nsome text\n❯ ",
-			wantStatus:     session.StatusIdle,
-			wantIsClaudeCode: true,
-		},
-		{
-			name:           "Unknown when Claude Code but no recognizable state",
-			content:        "-- INSERT --\nsome unrecognized output",
-			wantStatus:     session.StatusUnknown,
-			wantIsClaudeCode: true,
-		},
-		{
-			name:           "old Esc to cancel in scrollback does not trigger Waiting",
-			content:        "-- INSERT --\nEsc to cancel\n" + strings.Repeat("filler line\n", 20) + "❯ \n",
-			wantStatus:     session.StatusIdle,
-			wantIsClaudeCode: true,
-		},
-		{
-			name:           "old working indicator in scrollback does not trigger Working",
-			content:        "-- INSERT --\n⏺ running task\n" + strings.Repeat("filler line\n", 20) + "❯ \n",
-			wantStatus:     session.StatusIdle,
-			wantIsClaudeCode: true,
-		},
-		{
-			name:           "Esc to cancel excluded from isWaiting so working indicator wins",
-			content:        "-- INSERT --\n⏺ running task\nEsc to cancel\n",
-			wantStatus:     session.StatusWorking,
-			wantIsClaudeCode: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			gotStatus, gotIsCC := detectStatusFromContent(tt.content)
-			if gotStatus != tt.wantStatus {
-				t.Errorf("detectStatusFromContent() status = %v, want %v", gotStatus, tt.wantStatus)
-			}
-			if gotIsCC != tt.wantIsClaudeCode {
-				t.Errorf("detectStatusFromContent() isClaudeCode = %v, want %v", gotIsCC, tt.wantIsClaudeCode)
 			}
 		})
 	}
@@ -410,32 +246,6 @@ func TestScanPanes_InvalidWindowIndex(t *testing.T) {
 	result := ScanPanes("test-session", "abc")
 	if result != nil {
 		t.Error("expected nil for invalid window index")
-	}
-}
-
-// --- isSeparatorLine ---
-
-func TestIsSeparatorLine(t *testing.T) {
-	tests := []struct {
-		name string
-		line string
-		want bool
-	}{
-		{"all box-drawing chars", "────────────", true},
-		{"single box-drawing char", "─", true},
-		{"empty string", "", false},
-		{"mixed chars", "─a─", false},
-		{"regular dashes", "------------", false},
-		{"spaces", "   ", false},
-		{"box-drawing with trailing space", "────── ", false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := isSeparatorLine(tt.line)
-			if got != tt.want {
-				t.Errorf("isSeparatorLine(%q) = %v, want %v", tt.line, got, tt.want)
-			}
-		})
 	}
 }
 
@@ -780,204 +590,214 @@ func TestDeduplicateWindowName(t *testing.T) {
 	}
 }
 
-// --- detectStatusWithHooksForSession (mocked) ---
+// --- contentChanged ---
 
-// withMockedDeps sets up mocked getClaudeStatusFn and hasActiveChildrenFn for a test,
-// restoring the originals when the test completes.
-func withMockedDeps(t *testing.T, statusFn func(string, string, string) string, childrenFn func(string, string, string) bool) {
+func resetPaneHashes(t *testing.T) {
 	t.Helper()
-	origStatus := getClaudeStatusFn
-	origChildren := hasActiveChildrenFn
-	getClaudeStatusFn = statusFn
-	hasActiveChildrenFn = childrenFn
+	paneContentHashesMu.Lock()
+	orig := paneContentHashes
+	paneContentHashes = map[string]uint64{}
+	paneContentHashesMu.Unlock()
 	t.Cleanup(func() {
-		getClaudeStatusFn = origStatus
-		hasActiveChildrenFn = origChildren
+		paneContentHashesMu.Lock()
+		paneContentHashes = orig
+		paneContentHashesMu.Unlock()
 	})
 }
 
-func TestDetectStatusWithHooks_Tier1IdleFallsThrough(t *testing.T) {
+func TestContentChanged(t *testing.T) {
+	resetPaneHashes(t)
+
+	key := "test:0.0"
+
+	// First call — no previous hash, returns false
+	if contentChanged(key, "hello") {
+		t.Error("first call should return false")
+	}
+
+	// Same content — returns false
+	if contentChanged(key, "hello") {
+		t.Error("same content should return false")
+	}
+
+	// Different content — returns true
+	if !contentChanged(key, "world") {
+		t.Error("different content should return true")
+	}
+
+	// Same new content — returns false
+	if contentChanged(key, "world") {
+		t.Error("same content should return false")
+	}
+}
+
+func TestClearPaneHash(t *testing.T) {
+	resetPaneHashes(t)
+
+	key := paneKey("test", "0", "0")
+	contentChanged(key, "hello")
+	ClearPaneHash("test", "0", "0")
+
+	// After clear, first call returns false again
+	if contentChanged(key, "hello") {
+		t.Error("after clear, first call should return false")
+	}
+
+	// Clearing a non-existent key is a no-op (no panic).
+	ClearPaneHash("nonexistent", "99", "99")
+}
+
+// --- detectStatusWithHooksForSession (mocked) ---
+
+// withMockedDeps sets up mocked dependencies for a test,
+// restoring the originals when the test completes.
+func withMockedDeps(t *testing.T,
+	statusFn func(string, string, string) string,
+	childrenFn func(string, string, string) bool,
+	hashChangedFn func(string, string) bool,
+) {
+	t.Helper()
+	origStatus := getClaudeStatusFn
+	origChildren := hasActiveChildrenFn
+	origHash := contentChangedFn
+	getClaudeStatusFn = statusFn
+	hasActiveChildrenFn = childrenFn
+	contentChangedFn = hashChangedFn
+	t.Cleanup(func() {
+		getClaudeStatusFn = origStatus
+		hasActiveChildrenFn = origChildren
+		contentChangedFn = origHash
+	})
+}
+
+// Hash changed -> Working (regardless of content patterns)
+func TestDetect_HashChanged_Working(t *testing.T) {
 	withMockedDeps(t,
-		func(_, _, _ string) string { return "idle" },
+		func(_, _, _ string) string { return "" },
 		func(_, _, _ string) bool { return false },
+		func(_ string, _ string) bool { return true },
 	)
-	// Hook says "idle" and pane content confirms idle (no working indicators) → idle.
 	content := "-- INSERT --\nsome output\n❯ "
 	st, isCC := detectStatusWithHooksForSession(content, "clux", "0", "0")
-	if st != session.StatusIdle {
-		t.Errorf("expected StatusIdle, got %v", st)
-	}
-	if !isCC {
-		t.Error("expected isClaudeCode=true")
-	}
+	assert(t, st == session.StatusWorking, "expected Working, got %v", st)
+	assert(t, isCC, "expected isClaudeCode=true")
 }
 
-func TestDetectStatusWithHooks_Tier1IdleOverriddenByWorkingContent(t *testing.T) {
+// Hash stable + waiting pattern -> Waiting
+func TestDetect_HashStable_WaitingPattern(t *testing.T) {
 	withMockedDeps(t,
-		func(_, _, _ string) string { return "idle" },
+		func(_, _, _ string) string { return "" },
 		func(_, _, _ string) bool { return false },
+		func(_ string, _ string) bool { return false },
 	)
-	// Hook says "idle" but pane shows working indicators → working.
-	content := "-- INSERT --\n⏺ Bash(go test ./...)\n❯ "
+	content := "-- INSERT --\nDo you want to proceed?\n❯ "
 	st, isCC := detectStatusWithHooksForSession(content, "clux", "0", "0")
-	if st != session.StatusWorking {
-		t.Errorf("expected StatusWorking, got %v", st)
-	}
-	if !isCC {
-		t.Error("expected isClaudeCode=true")
-	}
+	assert(t, st == session.StatusWaiting, "expected Waiting, got %v", st)
+	assert(t, isCC, "expected isClaudeCode=true")
 }
 
-func TestDetectStatusWithHooks_Tier1WaitingReturnsImmediately(t *testing.T) {
+// Hash stable + active children -> Working (safety net)
+func TestDetect_HashStable_ActiveChildren_Working(t *testing.T) {
 	withMockedDeps(t,
-		func(_, _, _ string) string { return "waiting" },
-		func(_, _, _ string) bool { t.Error("hasActiveChildren should not be called"); return false },
-	)
-	content := "-- INSERT --\nDo you want to proceed?"
-	st, isCC := detectStatusWithHooksForSession(content, "clux", "0", "0")
-	if st != session.StatusWaiting {
-		t.Errorf("expected StatusWaiting, got %v", st)
-	}
-	if !isCC {
-		t.Error("expected isClaudeCode=true")
-	}
-}
-
-func TestDetectStatusWithHooks_Tier1WorkingOverriddenByTier3Idle(t *testing.T) {
-	// Tier1 says "working" but tier3 content shows idle → tier3 overrides to idle
-	withMockedDeps(t,
-		func(_, _, _ string) string { return "working" },
-		func(_, _, _ string) bool { return false },
-	)
-	content := "-- INSERT --\nsome output\n❯ "
-	st, isCC := detectStatusWithHooksForSession(content, "clux", "0", "0")
-	if st != session.StatusIdle {
-		t.Errorf("expected StatusIdle (tier3 override), got %v", st)
-	}
-	if !isCC {
-		t.Error("expected isClaudeCode=true")
-	}
-}
-
-func TestDetectStatusWithHooks_Tier2ActiveChildrenReturnsWorking(t *testing.T) {
-	withMockedDeps(t,
-		func(_, _, _ string) string { return "" }, // no hook
-		func(_, _, _ string) bool { return true },  // has children
+		func(_, _, _ string) string { return "" },
+		func(_, _, _ string) bool { return true },
+		func(_ string, _ string) bool { return false },
 	)
 	content := "-- INSERT --\nsome output"
 	st, isCC := detectStatusWithHooksForSession(content, "clux", "0", "0")
-	if st != session.StatusWorking {
-		t.Errorf("expected StatusWorking from tier2, got %v", st)
-	}
-	if !isCC {
-		t.Error("expected isClaudeCode=true")
-	}
+	assert(t, st == session.StatusWorking, "expected Working, got %v", st)
+	assert(t, isCC, "expected isClaudeCode=true")
 }
 
-func TestDetectStatusWithHooks_Tier3WaitingFromContent(t *testing.T) {
+// Hash stable + no waiting + no children -> Idle
+func TestDetect_HashStable_NoWaiting_NoChildren_Idle(t *testing.T) {
 	withMockedDeps(t,
 		func(_, _, _ string) string { return "" },
 		func(_, _, _ string) bool { return false },
+		func(_ string, _ string) bool { return false },
 	)
-	content := "-- INSERT --\nDo you want to proceed?"
+	content := "-- INSERT --\nsome output\n❯ "
 	st, isCC := detectStatusWithHooksForSession(content, "clux", "0", "0")
-	if st != session.StatusWaiting {
-		t.Errorf("expected StatusWaiting from tier3, got %v", st)
-	}
-	if !isCC {
-		t.Error("expected isClaudeCode=true")
-	}
+	assert(t, st == session.StatusIdle, "expected Idle, got %v", st)
+	assert(t, isCC, "expected isClaudeCode=true")
 }
 
-func TestDetectStatusWithHooks_Tier3IdleFromContent(t *testing.T) {
+// Hook says "waiting" -> Waiting immediately
+func TestDetect_HookWaiting_Immediate(t *testing.T) {
 	withMockedDeps(t,
-		func(_, _, _ string) string { return "" },
-		func(_, _, _ string) bool { return false },
+		func(_, _, _ string) string { return "waiting" },
+		func(_, _, _ string) bool { t.Error("should not be called"); return false },
+		func(_ string, _ string) bool { t.Error("should not be called"); return false },
 	)
-	content := "-- INSERT --\nsome text\n❯ "
+	content := "-- INSERT --\nsome output"
 	st, isCC := detectStatusWithHooksForSession(content, "clux", "0", "0")
-	if st != session.StatusIdle {
-		t.Errorf("expected StatusIdle from tier3, got %v", st)
-	}
-	if !isCC {
-		t.Error("expected isClaudeCode=true")
-	}
+	assert(t, st == session.StatusWaiting, "expected Waiting, got %v", st)
+	assert(t, isCC, "expected isClaudeCode=true")
 }
 
-func TestDetectStatusWithHooks_Tier3WorkingOverridesIdle(t *testing.T) {
-	// Working indicators in pane should win even though > prompt is also present.
-	withMockedDeps(t,
-		func(_, _, _ string) string { return "" },
-		func(_, _, _ string) bool { return false },
-	)
-	content := "-- INSERT --\n⏺ Bash(git diff --stat)\n* Implementing features.. (2m 21s)\n>\n-- INSERT --"
-	st, isCC := detectStatusWithHooksForSession(content, "clux", "0", "0")
-	if st != session.StatusWorking {
-		t.Errorf("expected StatusWorking from tier3, got %v", st)
-	}
-	if !isCC {
-		t.Error("expected isClaudeCode=true")
-	}
-}
-
-func TestDetectStatusWithHooks_Tier1IdleFallbackWhenTier3Unknown(t *testing.T) {
-	// Tier1 says "idle", tier3 can't determine → should use tier1 idle
+// Hook says "idle" -> ignored, hash takes priority
+func TestDetect_HookIdle_Ignored_HashChanged(t *testing.T) {
 	withMockedDeps(t,
 		func(_, _, _ string) string { return "idle" },
 		func(_, _, _ string) bool { return false },
+		func(_ string, _ string) bool { return true },
 	)
-	content := "-- INSERT --\nsome unrecognized output"
+	content := "-- INSERT --\nsome output\n❯ "
 	st, isCC := detectStatusWithHooksForSession(content, "clux", "0", "0")
-	if st != session.StatusIdle {
-		t.Errorf("expected StatusIdle (tier1 fallback), got %v", st)
-	}
-	if !isCC {
-		t.Error("expected isClaudeCode=true")
-	}
+	assert(t, st == session.StatusWorking, "expected Working (hash changed despite hook idle), got %v", st)
+	assert(t, isCC, "expected isClaudeCode=true")
 }
 
-func TestDetectStatusWithHooks_Tier1WorkingFallbackWhenTier3Unknown(t *testing.T) {
-	// Tier1 says "working", tier3 can't determine → should use tier1 working
-	withMockedDeps(t,
-		func(_, _, _ string) string { return "working" },
-		func(_, _, _ string) bool { return false },
-	)
-	content := "-- INSERT --\nsome unrecognized output"
-	st, isCC := detectStatusWithHooksForSession(content, "clux", "0", "0")
-	if st != session.StatusWorking {
-		t.Errorf("expected StatusWorking (tier1 fallback), got %v", st)
-	}
-	if !isCC {
-		t.Error("expected isClaudeCode=true")
-	}
-}
-
-func TestDetectStatusWithHooks_NotClaudeCode(t *testing.T) {
+// Not Claude Code -> Unknown
+func TestDetect_NotClaudeCode(t *testing.T) {
 	withMockedDeps(t,
 		func(_, _, _ string) string { return "" },
 		func(_, _, _ string) bool { return false },
+		func(_ string, _ string) bool { return false },
 	)
 	content := "regular shell output"
 	st, isCC := detectStatusWithHooksForSession(content, "clux", "0", "0")
-	if st != session.StatusUnknown {
-		t.Errorf("expected StatusUnknown, got %v", st)
-	}
-	if isCC {
-		t.Error("expected isClaudeCode=false")
-	}
+	assert(t, st == session.StatusUnknown, "expected Unknown, got %v", st)
+	assert(t, !isCC, "expected isClaudeCode=false")
 }
 
-func TestDetectStatusWithHooks_NoHookNoChildrenUnknownContent(t *testing.T) {
+// Hook says "working" -> not trusted, falls through to hash
+func TestDetect_HookWorking_NotTrusted_HashStable_Idle(t *testing.T) {
+	withMockedDeps(t,
+		func(_, _, _ string) string { return "working" },
+		func(_, _, _ string) bool { return false },
+		func(_ string, _ string) bool { return false },
+	)
+	content := "-- INSERT --\nsome output\n❯ "
+	st, isCC := detectStatusWithHooksForSession(content, "clux", "0", "0")
+	assert(t, st == session.StatusIdle, "expected Idle (hook working not trusted, hash stable), got %v", st)
+	assert(t, isCC, "expected isClaudeCode=true")
+}
+
+// Hash stable + no waiting pattern + no children + Claude Code present -> Idle (not Unknown)
+func TestDetect_HashStable_ClaudeCodeNoPattern_Idle(t *testing.T) {
 	withMockedDeps(t,
 		func(_, _, _ string) string { return "" },
 		func(_, _, _ string) bool { return false },
+		func(_ string, _ string) bool { return false },
 	)
-	content := "-- INSERT --\nsome unrecognized stuff"
+	content := "-- INSERT --\nsome unrecognized output"
 	st, isCC := detectStatusWithHooksForSession(content, "clux", "0", "0")
-	if st != session.StatusUnknown {
-		t.Errorf("expected StatusUnknown, got %v", st)
-	}
-	if !isCC {
-		t.Error("expected isClaudeCode=true")
-	}
+	assert(t, st == session.StatusIdle, "expected Idle (hash stable, Claude Code present), got %v", st)
+	assert(t, isCC, "expected isClaudeCode=true")
+}
+
+// Old waiting indicator in scrollback does not affect hash-based detection
+func TestDetect_OldWaitingInScrollback_HashStable_Idle(t *testing.T) {
+	withMockedDeps(t,
+		func(_, _, _ string) string { return "" },
+		func(_, _, _ string) bool { return false },
+		func(_ string, _ string) bool { return false },
+	)
+	// "Do you want to proceed?" is in scrollback (more than 15 lines up),
+	// so bottomContent won't include it.
+	content := "-- INSERT --\nDo you want to proceed?\n" + strings.Repeat("filler line\n", 20) + "some output\n"
+	st, isCC := detectStatusWithHooksForSession(content, "clux", "0", "0")
+	assert(t, st == session.StatusIdle, "expected Idle (old waiting in scrollback), got %v", st)
+	assert(t, isCC, "expected isClaudeCode=true")
 }
