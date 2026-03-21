@@ -951,7 +951,7 @@ func debugLog(msg string) {
 		return
 	}
 	debugFileOnce.Do(func() {
-		f, err := os.OpenFile("/tmp/clux-debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		f, err := os.OpenFile("/tmp/clux-debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 		if err != nil {
 			return
 		}

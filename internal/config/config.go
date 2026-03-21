@@ -81,7 +81,7 @@ func (c *Config) Save() error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(c, "", "  ")
@@ -89,7 +89,7 @@ func (c *Config) Save() error {
 		return err
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
 		return err
 	}
 	if err := os.Rename(tmp, path); err != nil {
