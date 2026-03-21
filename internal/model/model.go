@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"charm.land/bubbles/v2/textinput"
@@ -254,22 +255,27 @@ func fetchPreviewCmdForSessionWithOffset(s session.Session, scrollOffset, height
 
 func fetchDashboardPreviews(sessions []session.Session) tea.Cmd {
 	return func() tea.Msg {
-		result := make(map[int]string)
-		max := len(sessions)
-		for i := 0; i < max; i++ {
-			s := sessions[i]
-			sessionName := tmux.SessionName
-			if s.External && s.SessionName != "" {
-				sessionName = s.SessionName
-			}
-			paneIndex := resolvePaneIndex(s.PaneIndex)
-			content, err := tmux.CapturePaneForSession(sessionName, s.WindowIndex, paneIndex)
-			if err != nil {
-				result[i] = ""
-			} else {
-				result[i] = content
-			}
+		result := make(map[int]string, len(sessions))
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+		for i, s := range sessions {
+			wg.Add(1)
+			go func(idx int, s session.Session) {
+				defer wg.Done()
+				sessionName := tmux.SessionName
+				if s.External && s.SessionName != "" {
+					sessionName = s.SessionName
+				}
+				paneIndex := resolvePaneIndex(s.PaneIndex)
+				content, err := tmux.CapturePaneForSession(sessionName, s.WindowIndex, paneIndex)
+				mu.Lock()
+				if err == nil {
+					result[idx] = content
+				}
+				mu.Unlock()
+			}(i, s)
 		}
+		wg.Wait()
 		return dashPreviewsMsg(result)
 	}
 }
