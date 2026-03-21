@@ -24,8 +24,10 @@ func main() {
 			cmdList()
 		case "dashboard":
 			cmdDashboard()
+		case "setup":
+			cmdSetup()
 		default:
-			fmt.Fprintf(os.Stderr, "Unknown command: %s\nUsage: clux [add|remove|list|dashboard]\n", os.Args[1])
+			fmt.Fprintf(os.Stderr, "Unknown command: %s\nUsage: clux [add|remove|list|dashboard|setup]\n", os.Args[1])
 			os.Exit(1)
 		}
 		return
