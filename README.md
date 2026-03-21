@@ -7,7 +7,7 @@ A lightweight TUI for managing multiple Claude Code instances as tmux windows. V
 - **Session list** — See all Claude Code sessions with status, name, git branch, and working directory
 - **Status detection** — Three-tier detection (tmux hook → process tree → content hash) accurately identifies Working (🔄), Waiting (⚠️), Idle (✅), and Unknown (❓) states
 - **Preview panel** — Live ANSI-colored preview of the selected session's output with scrollback support
-- **Dashboard** — Grid view showing live previews of all sessions simultaneously, with pagination and focus mode
+- **Dashboard** — Grid view showing live previews of all sessions simultaneously, with pagination support
 - **Broadcast** — Send the same prompt to multiple repositories at once
 - **Grouping** — Group sessions by repository for organized display
 - **External sessions** — Monitor Claude Code running in other tmux sessions
@@ -50,7 +50,6 @@ Run `clux setup` to configure your environment:
 | `j` / `k` / `↑` / `↓` | Navigate |
 | `n` | New session (select from `ghq list`) |
 | `K` | Kill / unregister session |
-| `y` | Approve waiting prompt (sends `y` + Enter) |
 | `p` | Toggle preview panel |
 | `Ctrl+U` / `Ctrl+D` | Scroll preview up / down |
 | `d` | Switch to dashboard view |
@@ -58,7 +57,6 @@ Run `clux setup` to configure your environment:
 | `g` | Toggle grouping by repository |
 | `a` | Add external session |
 | `/` | Filter sessions |
-| `R` | Force refresh |
 | `q` / `Esc` | Quit |
 
 ### Dashboard
@@ -67,10 +65,9 @@ Run `clux setup` to configure your environment:
 |-----|--------|
 | `h` / `j` / `k` / `l` / arrows | Navigate grid |
 | `Enter` | Attach to focused session |
-| `f` | Toggle focus mode (full-screen preview) |
 | `F` | Open dashboard as full-screen tmux popup |
 | `[` / `]` | Previous / next page |
-| `y` / `K` / `n` / `b` / `/` | Same as list view |
+| `K` / `n` / `b` / `/` | Same as list view |
 | `d` / `Esc` | Return to list view |
 | `q` | Quit |
 

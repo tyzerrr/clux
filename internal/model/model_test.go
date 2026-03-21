@@ -261,15 +261,6 @@ func TestModeList_NSetsNewSession(t *testing.T) {
 	}
 }
 
-func TestModeList_RReturnsCmd(t *testing.T) {
-	m := testModel(testSessions)
-	msg := tea.KeyPressMsg{Code: 'R', Text: "R", ShiftedCode: 'R', Mod: tea.ModShift}
-	_, cmd := m.updateList(msg)
-	if cmd == nil {
-		t.Error("expected non-nil cmd from R key")
-	}
-}
-
 func TestModeList_SlashSetsFilterMode(t *testing.T) {
 	m := testModel(testSessions)
 	msg := tea.KeyPressMsg{Code: '/', Text: "/"}
@@ -1166,34 +1157,6 @@ func TestModeList_ASwitchesToAddExternal(t *testing.T) {
 	}
 }
 
-// --- ModeList key 'y' (approve waiting) ---
-
-func TestModeList_YApproveWaiting(t *testing.T) {
-	sessions := []session.Session{
-		{Name: "waiting-session", Status: session.StatusWaiting, WindowIndex: "0"},
-	}
-	m := testModel(sessions)
-	m.cursor = 0
-	msg := tea.KeyPressMsg{Code: 'y', Text: "y"}
-	_, cmd := m.updateList(msg)
-	if cmd == nil {
-		t.Error("expected non-nil cmd when approving waiting session")
-	}
-}
-
-func TestModeList_YOnNonWaitingDoesNothing(t *testing.T) {
-	sessions := []session.Session{
-		{Name: "idle-session", Status: session.StatusIdle, WindowIndex: "0"},
-	}
-	m := testModel(sessions)
-	m.cursor = 0
-	msg := tea.KeyPressMsg{Code: 'y', Text: "y"}
-	_, cmd := m.updateList(msg)
-	if cmd != nil {
-		t.Error("expected nil cmd when y pressed on non-waiting session")
-	}
-}
-
 // --- ModeAddExternal tests ---
 
 func TestModeAddExternal_EscGoesBackToList(t *testing.T) {
@@ -2010,45 +1973,6 @@ func TestDashCols_WithTwoSessions(t *testing.T) {
 	}
 }
 
-func TestDashboard_FocusModeToggle(t *testing.T) {
-	m := testModel(testSessions)
-	m.mode = ModeDashboard
-	m.width = 160
-	m.height = 50
-	m.dashCursor = 0
-
-	// Press f to enter focus mode
-	result, _ := m.updateDashboard(tea.KeyPressMsg{Code: 'f', Text: "f"})
-	rm := result.(Model)
-	if !rm.dashFocused {
-		t.Error("expected dashFocused=true after f")
-	}
-
-	// Press f again to exit focus mode
-	result2, _ := rm.updateDashboard(tea.KeyPressMsg{Code: 'f', Text: "f"})
-	rm2 := result2.(Model)
-	if rm2.dashFocused {
-		t.Error("expected dashFocused=false after second f")
-	}
-}
-
-func TestDashboard_EscExitsFocusMode(t *testing.T) {
-	m := testModel(testSessions)
-	m.mode = ModeDashboard
-	m.width = 160
-	m.height = 50
-	m.dashFocused = true
-
-	result, _ := m.updateDashboard(tea.KeyPressMsg{Code: tea.KeyEscape})
-	rm := result.(Model)
-	if rm.dashFocused {
-		t.Error("expected dashFocused=false after Esc")
-	}
-	if rm.mode != ModeDashboard {
-		t.Errorf("expected mode to remain ModeDashboard after Esc from focus, got %v", rm.mode)
-	}
-}
-
 func TestDashboard_Pagination_NextPage(t *testing.T) {
 	// Create enough sessions to require pagination
 	sessions := make([]session.Session, 20)
@@ -2111,28 +2035,6 @@ func TestDashboard_Pagination_PrevPage_AtStart(t *testing.T) {
 	rm := result.(Model)
 	if rm.dashPageOffset != 0 {
 		t.Errorf("expected dashPageOffset=0 (no change), got %d", rm.dashPageOffset)
-	}
-}
-
-func TestDashboard_ViewFocusMode(t *testing.T) {
-	m := testModel(testSessions)
-	m.mode = ModeDashboard
-	m.width = 80
-	m.height = 24
-	m.dashFocused = true
-	m.dashCursor = 0
-	m.dashPreviews = map[int]string{0: "preview content here"}
-
-	view := m.viewDashboard(&strings.Builder{})
-	// The focused session is filtered[dashPageOffset + dashCursor] = filtered[0]
-	// DisplayName() returns Summary if non-empty, else Name
-	focusedSession := m.filtered[0]
-	expectedDisplay := focusedSession.DisplayName()
-	if !strings.Contains(view, expectedDisplay) {
-		t.Errorf("focus mode view should contain display name %q, got:\n%s", expectedDisplay, view)
-	}
-	if !strings.Contains(view, "exit-focus") {
-		t.Error("focus mode help bar should mention exit-focus")
 	}
 }
 

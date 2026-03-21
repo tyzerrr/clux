@@ -107,7 +107,6 @@ type Model struct {
 	dashCursor     int            // index into m.filtered for focused cell
 	dashPreviews   map[int]string // windowIndex -> pane content for each session
 	dashPageOffset int            // index of first displayed item in dashboard
-	dashFocused    bool           // true when in single-session focus mode
 	dashboardOnly  bool           // when true, Esc/q quits the app (popup mode)
 
 	// Grouping mode
@@ -894,30 +893,6 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.mode = ModeConfirmKill
 		}
 
-	case "y":
-		if len(m.filtered) > 0 {
-			s := m.filtered[m.cursor]
-			if s.Status != session.StatusWaiting {
-				break
-			}
-			sessionName := tmux.SessionName
-			if s.External && s.SessionName != "" {
-				sessionName = s.SessionName
-			}
-			windowIndex := s.WindowIndex
-			paneIndex := resolvePaneIndex(s.PaneIndex)
-			return m, func() tea.Msg {
-				if err := tmux.SendKeys(sessionName, windowIndex, paneIndex, "y"); err != nil {
-					return errMsg(err)
-				}
-				return fetchSessionsCmdWithExternals(m.cfg)()
-			}
-		}
-
-	case "R":
-		tmux.ClearAllPaneCache()
-		return m, fetchSessionsCmdWithExternals(m.cfg)
-
 	case "p":
 		m.previewEnabled = !m.previewEnabled
 		if m.previewEnabled && len(m.filtered) > 0 {
@@ -932,7 +907,6 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.mode = ModeDashboard
 		m.dashCursor = 0
 		m.dashPageOffset = 0
-		m.dashFocused = false
 		m.previewScrollOffset = 0
 		m.dashPreviews = make(map[int]string)
 		maxVisible := m.dashMaxVisible()
@@ -1190,10 +1164,6 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.String() {
 	case "esc", "d":
-		if m.dashFocused {
-			m.dashFocused = false
-			return m, nil
-		}
 		if m.dashboardOnly {
 			return m, tea.Quit
 		}
@@ -1209,15 +1179,8 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			_ = tmux.DisplayPopup("clux", "dashboard")
 		}()
 		return m, nil
-	case "f":
-		if pageItems > 0 {
-			m.dashFocused = !m.dashFocused
-		}
 	case "]":
 		// Next page
-		if m.dashFocused {
-			m.dashFocused = false
-		}
 		nextOffset := m.dashPageOffset + maxVisible
 		if nextOffset < len(m.filtered) {
 			m.dashPageOffset = nextOffset
@@ -1227,9 +1190,6 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	case "[":
 		// Previous page
-		if m.dashFocused {
-			m.dashFocused = false
-		}
 		prevOffset := m.dashPageOffset - maxVisible
 		if prevOffset < 0 {
 			prevOffset = 0
@@ -1241,23 +1201,14 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, fetchDashboardPreviews(pageSessions)
 		}
 	case "h", "left":
-		if m.dashFocused {
-			m.dashFocused = false
-		}
 		if m.dashCursor%cols > 0 {
 			m.dashCursor--
 		}
 	case "l", "right":
-		if m.dashFocused {
-			m.dashFocused = false
-		}
 		if m.dashCursor%cols < cols-1 && m.dashCursor+1 < pageItems {
 			m.dashCursor++
 		}
 	case "k", "up", "ctrl+p":
-		if m.dashFocused {
-			m.dashFocused = false
-		}
 		if m.dashCursor-cols >= 0 {
 			m.dashCursor -= cols
 		} else if m.dashPageOffset > 0 {
@@ -1272,9 +1223,6 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, fetchDashboardPreviews(pageSessions)
 		}
 	case "j", "down", "ctrl+n":
-		if m.dashFocused {
-			m.dashFocused = false
-		}
 		if m.dashCursor+cols < pageItems {
 			m.dashCursor += cols
 		} else if m.dashPageOffset+maxVisible < len(m.filtered) {
@@ -1299,26 +1247,6 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return tea.QuitMsg{}
 			}
 		}
-	case "y":
-		if pageItems > 0 && m.dashPageOffset+m.dashCursor < len(m.filtered) {
-			s := m.filtered[m.dashPageOffset+m.dashCursor]
-			if s.Status != session.StatusWaiting {
-				break
-			}
-			sessionName := tmux.SessionName
-			if s.External && s.SessionName != "" {
-				sessionName = s.SessionName
-			}
-			windowIndex := s.WindowIndex
-			paneIndex := resolvePaneIndex(s.PaneIndex)
-			return m, func() tea.Msg {
-				if err := tmux.SendKeys(sessionName, windowIndex, paneIndex, "y"); err != nil {
-					return errMsg(err)
-				}
-				return fetchSessionsCmdWithExternals(m.cfg)()
-			}
-		}
-
 	case "K":
 		if len(m.filtered) > 0 && m.dashPageOffset+m.dashCursor < len(m.filtered) {
 			s := m.filtered[m.dashPageOffset+m.dashCursor]
@@ -2209,56 +2137,6 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 		pageItems = 0
 	}
 
-	// Focus mode: full-screen view of one session
-	if m.dashFocused && pageItems > 0 && m.dashPageOffset+m.dashCursor < len(m.filtered) {
-		s := m.filtered[m.dashPageOffset+m.dashCursor]
-		icon := s.Status.Icon()
-		statusStr := statusStyle(s.Status).Render(s.Status.String())
-		displayName := s.DisplayName()
-		branch := s.Branch
-		dir := shortenDir(s.Dir)
-		header := fmt.Sprintf("%s %s  %s", icon, statusStr, displayName)
-		if branch != "" {
-			header += "  [" + branch + "]"
-		}
-		if dir != "" {
-			header += "  " + styleDir.Render(dir)
-		}
-		b.WriteString(styleHeader.Render(header))
-		b.WriteString("\n")
-		b.WriteString(strings.Repeat("─", m.width))
-		b.WriteString("\n")
-
-		// Preview content filling remaining height
-		headerLines := 2 // header + separator
-		helpLines := 1
-		availableLines := m.height - headerLines - helpLines
-		if availableLines < 1 {
-			availableLines = 1
-		}
-		preview := m.dashPreviews[m.dashCursor]
-		lines := strings.Split(preview, "\n")
-		for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
-			lines = lines[:len(lines)-1]
-		}
-		start := len(lines) - availableLines
-		if start < 0 {
-			start = 0
-		}
-		displayLines := lines[start:]
-		for _, line := range displayLines {
-			b.WriteString(line)
-			b.WriteString("\n")
-		}
-		// Pad remaining lines
-		for i := len(displayLines); i < availableLines; i++ {
-			b.WriteString("\n")
-		}
-
-		b.WriteString(styleHelpBar.Render("Esc:back  f:exit-focus  hjkl:navigate  q:quit"))
-		return b.String()
-	}
-
 	// Normal dashboard view
 	totalSessions := len(m.filtered)
 	rows := (pageItems + cols - 1) / cols
@@ -2434,7 +2312,7 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 
 	// Help bar
 	b.WriteString("\n")
-	b.WriteString(styleHelpBar.Render("↵:attach  K:kill  n:new  /:filter  b:broadcast  f:focus  F:fullscreen  [/]:page  hjkl:navigate  Esc/d:back  q:quit"))
+	b.WriteString(styleHelpBar.Render("↵:attach  K:kill  n:new  /:filter  b:broadcast  F:fullscreen  [/]:page  hjkl:navigate  Esc/d:back  q:quit"))
 
 	return b.String()
 }
