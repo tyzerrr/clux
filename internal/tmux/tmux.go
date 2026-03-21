@@ -197,6 +197,29 @@ func capturePanesConcurrently(sessionName string, panes []windowInfo) []captureR
 	return results
 }
 
+// detectPaneMetadata detects status first, then fetches summary and git branch
+// concurrently only when the pane is running Claude Code.
+func detectPaneMetadata(content, sessionName, windowIndex, paneIndex, dir string) (session.Status, bool, string, string) {
+	status, isClaudeCode := detectStatusWithHooksForSession(content, sessionName, windowIndex, paneIndex)
+	if !isClaudeCode {
+		return status, false, "", ""
+	}
+	var summary, branch string
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		summary = getWindowSummaryForSession(sessionName, windowIndex, paneIndex)
+	}()
+	go func() {
+		defer wg.Done()
+		branch = getGitBranch(dir)
+	}()
+	// Each goroutine writes to a distinct variable; wg.Wait() provides the required happens-before guarantee.
+	wg.Wait()
+	return status, true, summary, branch
+}
+
 // parseListPanesOutput parses the tab-separated output of tmux list-panes
 // with format "#{window_index}\t#{pane_index}\t#{window_name}\t#{pane_current_path}".
 func parseListPanesOutput(output string) []windowInfo {
@@ -264,9 +287,7 @@ func ListWindows() ([]session.Session, error) {
 			}
 		}
 
-		status, isClaudeCode := detectStatusWithHooksForSession(content, SessionName, w.index, w.paneIndex)
-		summary := getWindowSummaryForSession(SessionName, w.index, w.paneIndex)
-		branch := getGitBranch(w.dir)
+		status, isClaudeCode, summary, branch := detectPaneMetadata(content, SessionName, w.index, w.paneIndex, w.dir)
 		setCachedResult(key, paneDetectResult{
 			status:       status,
 			isClaudeCode: isClaudeCode,
@@ -387,9 +408,7 @@ func ScanPanes(sessionName, windowIndex string) []session.Session {
 			}
 		}
 
-		status, isClaudeCode := detectStatusWithHooksForSession(content, sessionName, windowIndex, p.paneIndex)
-		summary := getWindowSummaryForSession(sessionName, windowIndex, p.paneIndex)
-		branch := getGitBranch(p.dir)
+		status, isClaudeCode, summary, branch := detectPaneMetadata(content, sessionName, windowIndex, p.paneIndex, p.dir)
 		setCachedResult(key, paneDetectResult{
 			status:       status,
 			isClaudeCode: isClaudeCode,
@@ -910,19 +929,15 @@ func hasActiveChildrenForSession(sessionName, windowIndex, paneIndex string) boo
 	if panePID == "" {
 		return false
 	}
-	// Find direct children of the pane shell (e.g., the node process).
 	childOut, err := exec.Command("pgrep", "-P", panePID).Output()
 	if err != nil {
 		return false
 	}
-	children := strings.Split(strings.TrimSpace(string(childOut)), "\n")
-	for _, child := range children {
-		child = strings.TrimSpace(child)
-		if child == "" {
+	for _, child := range strings.Split(strings.TrimSpace(string(childOut)), "\n") {
+		if child = strings.TrimSpace(child); child == "" {
 			continue
 		}
-		// Check if this child has its own children (tool processes).
-		if err := exec.Command("pgrep", "-P", child).Run(); err == nil {
+		if exec.Command("pgrep", "-P", child).Run() == nil {
 			return true
 		}
 	}
