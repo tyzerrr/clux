@@ -572,9 +572,11 @@ func switchToBase(baseTarget, windowIndex string) error {
 // running Claude Code directly. The window closes automatically when Claude Code exits.
 // After creation, it switches the client to a grouped session so multiple clients can
 // independently view different windows.
-func CreateWindow(name, dir string) error {
+func CreateWindow(name, dir string, args ...string) error {
 	name = sanitizeWindowName(name)
-	out, err := exec.Command("tmux", "new-window", "-a", "-t", SessionName, "-n", name, "-c", dir, "-P", "-F", "#{window_index}", "claude").Output()
+	tmuxArgs := []string{"new-window", "-a", "-t", SessionName, "-n", name, "-c", dir, "-P", "-F", "#{window_index}"}
+	tmuxArgs = append(tmuxArgs, append([]string{"claude"}, args...)...)
+	out, err := exec.Command("tmux", tmuxArgs...).Output()
 	if err != nil {
 		return fmt.Errorf("creating window %q: %w", name, err)
 	}
@@ -594,9 +596,11 @@ func CreateWindow(name, dir string) error {
 // CreateWindowSilent creates a new window in the clux session with the given name and directory,
 // running Claude Code directly, without switching the client to the new window.
 // Returns the new window's index.
-func CreateWindowSilent(name, dir string) (string, error) {
+func CreateWindowSilent(name, dir string, args ...string) (string, error) {
 	name = sanitizeWindowName(name)
-	out, err := exec.Command("tmux", "new-window", "-d", "-a", "-t", SessionName, "-n", name, "-c", dir, "-P", "-F", "#{window_index}", "claude").Output()
+	tmuxArgs := []string{"new-window", "-d", "-a", "-t", SessionName, "-n", name, "-c", dir, "-P", "-F", "#{window_index}"}
+	tmuxArgs = append(tmuxArgs, append([]string{"claude"}, args...)...)
+	out, err := exec.Command("tmux", tmuxArgs...).Output()
 	if err != nil {
 		return "", fmt.Errorf("creating window %q: %w", name, err)
 	}

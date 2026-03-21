@@ -31,7 +31,6 @@ const (
 	ModeDashboard
 	ModeBroadcastSelect // ghq repo multi-select for broadcast
 	ModeBroadcastPrompt // prompt/skill input for broadcast
-	ModeBroadcastWait   // waiting for sessions to become idle before sending
 )
 
 // Custom message types.
@@ -46,31 +45,18 @@ type (
 	externalWindowsMsg  []tmux.ExternalWindowInfo
 	externalAddedMsg    struct{} // session registered successfully
 	dashPreviewsMsg     map[int]string
-	broadcastGhqDirsMsg        []string          // ghq dirs for broadcast select (separate from newSession)
-	newSessionCreatedWithPromptMsg struct { // window created; store pending prompt
-		windowIndex string
-		prompt      string
-	}
-	broadcastReadyMsg struct{} // all broadcast targets are idle; send the prompt
-	broadcastTargetsUpdatedMsg []broadcastTarget // updated ready flags from poll
-	broadcastTimeoutMsg        struct{}          // waiting exceeded 120s; abort broadcast
-	ghqRootMsg                 string            // cached ghq root path
+	broadcastGhqDirsMsg []string // ghq dirs for broadcast select (separate from newSession)
+	ghqRootMsg          string   // cached ghq root path
 )
 
-// broadcastTargetsResolvedMsg is returned after resolving broadcast targets.
-// It carries both the resolved window targets and any directory errors encountered.
-type broadcastTargetsResolvedMsg struct {
-	targets []broadcastTarget
-	errors  []string
+// broadcastCompletedMsg is returned after all broadcast windows have been created.
+type broadcastCompletedMsg struct {
+	errors []string
 }
 
-// broadcastTarget holds the resolved target for a broadcast send.
+// broadcastTarget holds the directory for a broadcast send.
 type broadcastTarget struct {
-	dir         string
-	windowIndex string
-	paneIndex   string // tmux pane index within the window
-	sessionName string // tmux session name; empty means clux session
-	ready       bool   // true once the session reaches Idle status
+	dir string
 }
 
 // Model is the main Bubble Tea model for Clux.
@@ -101,11 +87,6 @@ type Model struct {
 	// New session prompt
 	newSessionPromptInput textinput.Model
 	selectedRepoDir       string // repo selected in ModeNewSession, used in ModeNewSessionPrompt
-
-	// Pending prompt for newly created session
-	pendingPrompt         string    // prompt to send when session becomes Idle
-	pendingPromptTarget   string    // window index of the target session
-	pendingPromptDeadline time.Time // deadline after which pending prompt is abandoned
 
 	// Preview mode
 	previewEnabled      bool   // toggle state, default false
@@ -140,8 +121,6 @@ type Model struct {
 	broadcastCursor      int                // cursor in broadcastFiltered
 	broadcastPromptInput textinput.Model    // prompt text input
 	broadcastTargets     []broadcastTarget  // resolved targets after selection
-	broadcastPrompt      string             // the prompt being sent (saved when entering wait)
-	broadcastStartTime   time.Time          // when ModeBroadcastWait was entered
 	broadcastErrors      []string           // dir validation errors collected during resolution
 }
 
@@ -657,39 +636,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// Check if there's a pending prompt to send to a newly created session.
-		if m.pendingPrompt != "" && m.pendingPromptTarget != "" {
-			// Check if the deadline has passed.
-			if !m.pendingPromptDeadline.IsZero() && time.Now().After(m.pendingPromptDeadline) {
-				m = m.clearPendingPrompt()
-				m.err = fmt.Errorf("pending prompt timed out: session did not become idle within 120s")
-			} else {
-				targetFound := false
-				for _, s := range m.sessions {
-					if s.WindowIndex == m.pendingPromptTarget {
-						targetFound = true
-						if s.Status == session.StatusIdle {
-							prompt := m.pendingPrompt
-							target := m.pendingPromptTarget
-							m = m.clearPendingPrompt()
-							cmds = append(cmds, func() tea.Msg {
-								_ = tmux.SendKeysLiteral(tmux.SessionName, target, "0", prompt)
-								return fetchSessionsCmdWithExternals(m.cfg)()
-							})
-							break
-						}
-					}
-				}
-				// If target window was not found in sessions, check if the tmux
-				// window still exists (it may not be recognized as Claude Code yet
-				// during startup).
-				if !targetFound && !tmux.WindowExistsFn(m.pendingPromptTarget) {
-					m = m.clearPendingPrompt()
-					m.err = fmt.Errorf("pending prompt cancelled: target window no longer exists")
-				}
-			}
-		}
-
 		if len(cmds) > 0 {
 			return m, tea.Batch(cmds...)
 		}
@@ -730,20 +676,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			pageSessions := m.filtered[m.dashPageOffset : m.dashPageOffset+pageItems]
 			cmds := []tea.Cmd{fetchSessionsCmdWithExternals(m.cfg), doTick(), fetchDashboardPreviews(pageSessions)}
 			return m, tea.Batch(cmds...)
-		} else if m.mode == ModeBroadcastWait {
-			return m, tea.Batch(doTick(), m.checkBroadcastTargetsCmd())
-		}
-		// If there's a pending prompt, keep polling sessions even in other modes.
-		if m.pendingPrompt != "" && m.pendingPromptTarget != "" {
-			return m, tea.Batch(doTick(), fetchSessionsCmdWithExternals(m.cfg))
 		}
 		return m, doTick()
-
-	case newSessionCreatedWithPromptMsg:
-		m.pendingPrompt = msg.prompt
-		m.pendingPromptTarget = msg.windowIndex
-		m.pendingPromptDeadline = time.Now().Add(120 * time.Second)
-		return m, fetchSessionsCmdWithExternals(m.cfg)
 
 	case windowKilledMsg:
 		return m, fetchSessionsCmdWithExternals(m.cfg)
@@ -767,47 +701,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.broadcastCursor = 0
 		return m, nil
 
-	case broadcastReadyMsg:
-		// All targets are idle; send the prompt to each.
-		targets := m.broadcastTargets
-		prompt := m.broadcastPrompt
-		m.broadcastTargets = nil
-		m.broadcastPrompt = ""
+	case broadcastCompletedMsg:
 		m.mode = ModeList
-		cfg := m.cfg
-		return m, func() tea.Msg {
-			for _, t := range targets {
-				sn := tmux.SessionName
-				if t.sessionName != "" {
-					sn = t.sessionName
-				}
-				_ = tmux.SendKeysLiteral(sn, t.windowIndex, resolvePaneIndex(t.paneIndex), prompt)
-			}
-			return fetchSessionsCmdWithExternals(cfg)()
-		}
-
-	case broadcastTargetsResolvedMsg:
-		m.broadcastTargets = msg.targets
 		m.broadcastErrors = msg.errors
-		if len(m.broadcastTargets) == 0 {
-			m.mode = ModeList
-			return m, nil
-		}
-		m.mode = ModeBroadcastWait
-		m.broadcastStartTime = time.Now()
-		return m, tea.Batch(doTick(), m.checkBroadcastTargetsCmd())
-
-	case broadcastTargetsUpdatedMsg:
-		m.broadcastTargets = []broadcastTarget(msg)
-		return m, nil
-
-	case broadcastTimeoutMsg:
-		m.broadcastTargets = nil
-		m.broadcastPrompt = ""
-		m.broadcastErrors = nil
-		m.mode = ModeList
-		m.err = fmt.Errorf("Broadcast timed out: some sessions did not become idle")
-		return m, nil
+		return m, fetchSessionsCmdWithExternals(m.cfg)
 
 	case ghqRootMsg:
 		m.ghqRoot = string(msg)
@@ -847,8 +744,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateBroadcastSelect(msg)
 		case ModeBroadcastPrompt:
 			return m.updateBroadcastPrompt(msg)
-		case ModeBroadcastWait:
-			return m.updateBroadcastWait(msg)
 		}
 
 	case tea.PasteMsg:
@@ -1110,14 +1005,6 @@ func (m Model) clearConfirm() Model {
 	return m
 }
 
-// clearPendingPrompt resets all pending-prompt fields.
-func (m Model) clearPendingPrompt() Model {
-	m.pendingPrompt = ""
-	m.pendingPromptTarget = ""
-	m.pendingPromptDeadline = time.Time{}
-	return m
-}
-
 func (m Model) updateFilter(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "enter":
@@ -1212,14 +1099,13 @@ func (m Model) updateNewSessionPrompt(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 			}
 		}
 
-		// Create window silently and store pending prompt
+		// With prompt — create window with prompt as arg
 		name := tmux.GenerateWindowName(dir)
 		return m, func() tea.Msg {
-			newIdx, err := tmux.CreateWindowSilent(name, dir)
-			if err != nil {
+			if err := tmux.CreateWindow(name, dir, prompt); err != nil {
 				return errMsg(err)
 			}
-			return newSessionCreatedWithPromptMsg{windowIndex: newIdx, prompt: prompt}
+			return tea.QuitMsg{}
 		}
 
 	case "esc":
@@ -1544,35 +1430,22 @@ func (m Model) updateBroadcastPrompt(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.broadcastPromptInput.Blur()
-		m.broadcastPrompt = prompt
-
-		// Always create new windows for each target dir.
 		targets := m.broadcastTargets
+		m.broadcastTargets = nil
+		m.broadcastErrors = nil
 		return m, func() tea.Msg {
-			resolved := make([]broadcastTarget, 0, len(targets))
 			var dirErrors []string
 			for _, t := range targets {
-				// Validate the directory before attempting to create a window.
 				if err := tmux.ValidateDir(t.dir); err != nil {
 					dirErrors = append(dirErrors, fmt.Sprintf("%s: %v", t.dir, err))
 					continue
 				}
-				// Always create a new window for this dir without switching the client.
 				name := tmux.GenerateWindowName(t.dir)
-				newIdx, err := tmux.CreateWindowSilent(name, t.dir)
-				if err != nil {
+				if _, err := tmux.CreateWindowSilent(name, t.dir, prompt); err != nil {
 					dirErrors = append(dirErrors, fmt.Sprintf("%s: %v", t.dir, err))
-					continue
 				}
-				resolved = append(resolved, broadcastTarget{
-					dir:         t.dir,
-					windowIndex: newIdx,
-					paneIndex:   "0",
-					sessionName: "",
-					ready:       false,
-				})
 			}
-			return broadcastTargetsResolvedMsg{targets: resolved, errors: dirErrors}
+			return broadcastCompletedMsg{errors: dirErrors}
 		}
 
 	case "esc":
@@ -1584,65 +1457,6 @@ func (m Model) updateBroadcastPrompt(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.broadcastPromptInput, cmd = m.broadcastPromptInput.Update(msg)
 		return m, cmd
-	}
-}
-
-func (m Model) updateBroadcastWait(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "esc":
-		// Cancel broadcast.
-		m.broadcastTargets = nil
-		m.broadcastPrompt = ""
-		m.mode = ModeList
-		return m, nil
-	}
-	return m, nil
-}
-
-// checkBroadcastTargetsCmd returns a command that checks whether all broadcast targets
-// are idle. If all are ready, it returns broadcastReadyMsg; otherwise it updates the
-// ready flags and returns broadcastTargetsUpdatedMsg. Returns broadcastTimeoutMsg if
-// the wait has exceeded 120 seconds.
-func (m Model) checkBroadcastTargetsCmd() tea.Cmd {
-	targets := m.broadcastTargets
-	startTime := m.broadcastStartTime
-	return func() tea.Msg {
-		// Timeout: if waiting more than 120 seconds, abort.
-		if time.Since(startTime) > 120*time.Second {
-			return broadcastTimeoutMsg{}
-		}
-
-		graceExceeded := time.Since(startTime) >= 30*time.Second
-		allReady := true
-		updated := make([]broadcastTarget, len(targets))
-		for i, t := range targets {
-			if graceExceeded {
-				// After 30s, force-ready all targets regardless of status.
-				// Claude Code should have started by then; if not, SendKeys is a no-op.
-				t.ready = true
-			} else {
-				paneIdx := resolvePaneIndex(t.paneIndex)
-				sn := t.sessionName
-				if sn == "" {
-					sn = tmux.SessionName
-				}
-				st, isClaudeCode := tmux.GetWindowStatus(sn, t.windowIndex, paneIdx)
-				if isClaudeCode {
-					t.ready = st == session.StatusIdle
-				} else {
-					t.ready = false
-				}
-			}
-			updated[i] = t
-			if !t.ready {
-				allReady = false
-			}
-		}
-		if allReady && len(updated) > 0 {
-			return broadcastReadyMsg{}
-		}
-		// Return updated targets as a special message.
-		return broadcastTargetsUpdatedMsg(updated)
 	}
 }
 
@@ -2101,10 +1915,6 @@ func (m Model) View() tea.View {
 
 	if m.mode == ModeBroadcastPrompt {
 		return m.viewWithOverlay(m.viewBroadcastPrompt)
-	}
-
-	if m.mode == ModeBroadcastWait {
-		return newView(m.viewBroadcastWait(&b))
 	}
 
 	// Build helpbar first (spans full width at bottom).
@@ -2716,45 +2526,6 @@ func (m Model) viewBroadcastPrompt(b *strings.Builder) (string, *overlayCursor) 
 
 	cur := &overlayCursor{x: 1 + textInputCursorX(m.broadcastPromptInput), y: cursorY}
 	return renderOverlayBox(b.String(), overlayWidth), cur
-}
-
-func (m Model) viewBroadcastWait(b *strings.Builder) string {
-	total := len(m.broadcastTargets)
-	ready := 0
-	for _, t := range m.broadcastTargets {
-		if t.ready {
-			ready++
-		}
-	}
-
-	b.WriteString(styleHeader.Render("Broadcast — Waiting for Sessions"))
-	b.WriteString("\n\n")
-	b.WriteString(fmt.Sprintf("  Waiting for sessions to become idle... (%d/%d ready)\n\n", ready, total))
-
-	for _, t := range m.broadcastTargets {
-		status := "waiting..."
-		if t.ready {
-			status = styleWorking.Render("idle")
-		}
-		b.WriteString(fmt.Sprintf("  %s  %s\n", status, styleDir.Render(shortenDir(t.dir))))
-	}
-
-	if len(m.broadcastErrors) > 0 {
-		b.WriteString("\n")
-		b.WriteString(styleError.Render("  Errors:"))
-		b.WriteString("\n")
-		for _, e := range m.broadcastErrors {
-			b.WriteString(styleError.Render("  • " + e))
-			b.WriteString("\n")
-		}
-	}
-
-	b.WriteString("\n")
-	b.WriteString(styleDir.Render(fmt.Sprintf("  Prompt: %s", m.broadcastPrompt)))
-	b.WriteString("\n\n")
-	b.WriteString(styleHelpBar.Render("Esc:cancel"))
-
-	return b.String()
 }
 
 func (m Model) viewConfirmKill(b *strings.Builder) string {
