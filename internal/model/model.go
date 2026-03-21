@@ -660,7 +660,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tickMsg:
-		if m.mode == ModeList || m.mode == ModeFilter {
+		switch m.mode { //nolint:exhaustive
+		case ModeList, ModeFilter:
 			cmds := []tea.Cmd{fetchSessionsCmdWithExternals(m.cfg), doTick()}
 			if m.previewEnabled && len(m.filtered) > 0 {
 				if m.previewScrollOffset > 0 {
@@ -670,7 +671,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			return m, tea.Batch(cmds...)
-		} else if m.mode == ModeDashboard {
+		case ModeDashboard:
 			pageItems := len(m.filtered) - m.dashPageOffset
 			maxVisible := m.dashMaxVisible()
 			if pageItems > maxVisible {
@@ -682,8 +683,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			pageSessions := m.filtered[m.dashPageOffset : m.dashPageOffset+pageItems]
 			cmds := []tea.Cmd{fetchSessionsCmdWithExternals(m.cfg), doTick(), fetchDashboardPreviews(pageSessions)}
 			return m, tea.Batch(cmds...)
+		default:
+			return m, doTick()
 		}
-		return m, doTick()
 
 	case windowKilledMsg:
 		return m, fetchSessionsCmdWithExternals(m.cfg)
@@ -2010,9 +2012,7 @@ func (m Model) View() tea.View {
 				start = 0
 			}
 			displayLines := previewContentLines[start:]
-			for _, line := range displayLines {
-				rightLines = append(rightLines, line)
-			}
+			rightLines = append(rightLines, displayLines...)
 			// Pad to fill remaining height
 			for i := len(displayLines); i < ph; i++ {
 				rightLines = append(rightLines, "")
@@ -2108,7 +2108,7 @@ func (m Model) viewNewSession(b *strings.Builder) (string, *overlayCursor) {
 			if i == m.newSessionCursor {
 				b.WriteString(styleSelected.Render(fmt.Sprintf(" > %s", dir)))
 			} else {
-				b.WriteString(fmt.Sprintf("   %s", dir))
+				fmt.Fprintf(b, "   %s", dir)
 			}
 			b.WriteString("\n")
 		}
@@ -2129,7 +2129,7 @@ func (m Model) viewNewSessionPrompt(b *strings.Builder) (string, *overlayCursor)
 
 	b.WriteString(styleOverlayTitle.Render("New Session — Initial Prompt"))
 	b.WriteString("\n\n")
-	b.WriteString(fmt.Sprintf(" Repository: %s\n\n", styleDir.Render(shortenDir(m.selectedRepoDir))))
+	fmt.Fprintf(b, " Repository: %s\n\n", styleDir.Render(shortenDir(m.selectedRepoDir)))
 	b.WriteString(" ")
 	b.WriteString(m.newSessionPromptInput.View())
 	b.WriteString("\n\n")
@@ -2487,7 +2487,7 @@ func (m Model) viewBroadcastSelect(b *strings.Builder) (string, *overlayCursor) 
 			if i == m.broadcastCursor {
 				b.WriteString(styleSelected.Render(fmt.Sprintf(" > %s %s", checkmark, dir)))
 			} else {
-				b.WriteString(fmt.Sprintf("   %s %s", checkmark, dir))
+				fmt.Fprintf(b, "   %s %s", checkmark, dir)
 			}
 			b.WriteString("\n")
 		}
@@ -2513,7 +2513,7 @@ func (m Model) viewBroadcastPrompt(b *strings.Builder) (string, *overlayCursor) 
 	// Line 0: title, line 1: blank (\n\n)
 	cursorY := 2
 	for _, t := range m.broadcastTargets {
-		b.WriteString(fmt.Sprintf("  • %s\n", styleDir.Render(shortenDir(t.dir))))
+		fmt.Fprintf(b, "  • %s\n", styleDir.Render(shortenDir(t.dir)))
 		cursorY++ // one line per target
 	}
 	b.WriteString("\n")
@@ -2545,9 +2545,9 @@ func (m Model) viewConfirmKill(b *strings.Builder) (string, *overlayCursor) {
 	b.WriteString("\n\n")
 
 	if m.confirmExternal {
-		b.WriteString(fmt.Sprintf("Unregister external session %q? (y/n)", m.confirmTarget))
+		fmt.Fprintf(b, "Unregister external session %q? (y/n)", m.confirmTarget)
 	} else {
-		b.WriteString(fmt.Sprintf("Kill session %q? (y/n)", m.confirmTarget))
+		fmt.Fprintf(b, "Kill session %q? (y/n)", m.confirmTarget)
 	}
 	b.WriteString("\n\n")
 

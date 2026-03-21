@@ -976,7 +976,7 @@ func debugLog(msg string) {
 		return
 	}
 	ts := time.Now().Format("2006-01-02 15:04:05")
-	fmt.Fprintf(debugFile, "%s %s\n", ts, msg)
+	_, _ = fmt.Fprintf(debugFile, "%s %s\n", ts, msg)
 }
 
 // detectStatusWithHooksForSession determines status using a hash-based change detection

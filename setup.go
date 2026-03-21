@@ -164,7 +164,7 @@ func setupClaudeMDAt(path string) setupResult {
 		return setupError
 	}
 	if _, err := f.WriteString(cluxSummaryBlock); err != nil {
-		f.Close()
+		_ = f.Close()
 		fmt.Fprintf(os.Stderr, "[✗] Failed to append to %s: %v\n", path, err)
 		return setupError
 	}

@@ -122,8 +122,8 @@ func TestValidateDir_FileNotDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp file: %v", err)
 	}
-	f.Close()
-	defer os.Remove(f.Name())
+	_ = f.Close()
+	defer func() { _ = os.Remove(f.Name()) }()
 
 	err = ValidateDir(f.Name())
 	if err == nil {
