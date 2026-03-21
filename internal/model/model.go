@@ -2246,6 +2246,7 @@ func (m Model) View() tea.View {
 			b.WriteString(left)
 			b.WriteString(sep)
 			b.WriteString(right)
+			b.WriteString("\x1b[0m")
 			b.WriteString("\n")
 		}
 
