@@ -1890,7 +1890,7 @@ func (m Model) View() tea.View {
 	var b strings.Builder
 
 	if m.mode == ModeConfirmKill {
-		return newView(m.viewConfirmKill(&b))
+		return m.viewWithOverlay(m.viewConfirmKill)
 	}
 
 	if m.mode == ModeNewSession {
@@ -2127,12 +2127,12 @@ func (m Model) viewNewSessionPrompt(b *strings.Builder) (string, *overlayCursor)
 	b.WriteString(" ")
 	b.WriteString(m.newSessionPromptInput.View())
 	b.WriteString("\n\n")
-	b.WriteString(styleHelpBar.Render("↵:create  ↵(empty):skip prompt  Esc:cancel"))
-
 	if m.err != nil {
-		b.WriteString("\n\n")
 		b.WriteString(styleError.Render("Error: " + m.err.Error()))
+		b.WriteString("\n\n")
 	}
+
+	b.WriteString(styleHelpBar.Render("↵:create  ↵(empty):skip prompt  Esc:cancel"))
 
 	// Line 0: title, line 1: blank (\n\n), line 2: " Repository: ...", line 3: blank (\n\n), line 4: " " + input
 	cur := &overlayCursor{x: 1 + textInputCursorX(m.newSessionPromptInput), y: 4}
@@ -2528,20 +2528,33 @@ func (m Model) viewBroadcastPrompt(b *strings.Builder) (string, *overlayCursor) 
 	return renderOverlayBox(b.String(), overlayWidth), cur
 }
 
-func (m Model) viewConfirmKill(b *strings.Builder) string {
+func (m Model) viewConfirmKill(b *strings.Builder) (string, *overlayCursor) {
+	overlayWidth := m.overlayWidth(40, 50, 60)
+
+	if m.confirmExternal {
+		b.WriteString(styleOverlayTitle.Render("Unregister Session"))
+	} else {
+		b.WriteString(styleOverlayTitle.Render("Kill Session"))
+	}
+	b.WriteString("\n\n")
+
+	if m.confirmExternal {
+		b.WriteString(fmt.Sprintf("Unregister external session %q? (y/n)", m.confirmTarget))
+	} else {
+		b.WriteString(fmt.Sprintf("Kill session %q? (y/n)", m.confirmTarget))
+	}
+	b.WriteString("\n\n")
+
 	if m.err != nil {
 		b.WriteString(styleError.Render("Error: " + m.err.Error()))
 		b.WriteString("\n\n")
 	}
+
 	if m.confirmExternal {
-		b.WriteString(fmt.Sprintf("Unregister external session %q? (y/n)", m.confirmTarget))
-		b.WriteString("\n\n")
 		b.WriteString(styleHelpBar.Render("y:unregister  n/Esc:cancel"))
 	} else {
-		b.WriteString(fmt.Sprintf("Kill session %q? (y/n)", m.confirmTarget))
-		b.WriteString("\n\n")
 		b.WriteString(styleHelpBar.Render("y:kill  n/Esc:cancel"))
 	}
 
-	return b.String()
+	return renderOverlayBox(b.String(), overlayWidth), nil
 }
