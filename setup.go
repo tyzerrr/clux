@@ -134,7 +134,12 @@ func setupPostToolUseHookAt(settingsPath string) setupResult {
 }
 
 func setupClaudeMD() setupResult {
-	return setupClaudeMDAt("CLAUDE.md")
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[✗] Failed to determine home directory: %v\n", err)
+		return setupError
+	}
+	return setupClaudeMDAt(filepath.Join(homeDir, ".claude", "CLAUDE.md"))
 }
 
 func setupClaudeMDAt(path string) setupResult {
@@ -145,16 +150,20 @@ func setupClaudeMDAt(path string) setupResult {
 			return setupError
 		}
 		// File doesn't exist — create it
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			fmt.Fprintf(os.Stderr, "[✗] Failed to create directory for %s: %v\n", path, err)
+			return setupError
+		}
 		if err := os.WriteFile(path, []byte(strings.TrimLeft(cluxSummaryBlock, "\n")), 0o644); err != nil {
 			fmt.Fprintf(os.Stderr, "[✗] Failed to create %s: %v\n", path, err)
 			return setupError
 		}
-		fmt.Println("[✓] @clux-summary instruction added to ./CLAUDE.md")
+		fmt.Printf("[✓] @clux-summary instruction added to %s\n", path)
 		return setupSuccess
 	}
 
 	if strings.Contains(string(data), "@clux-summary") {
-		fmt.Println("[-] @clux-summary instruction already configured in ./CLAUDE.md")
+		fmt.Printf("[-] @clux-summary instruction already configured in %s\n", path)
 		return setupSkipped
 	}
 
@@ -174,7 +183,7 @@ func setupClaudeMDAt(path string) setupResult {
 		return setupError
 	}
 
-	fmt.Println("[✓] @clux-summary instruction added to ./CLAUDE.md")
+	fmt.Printf("[✓] @clux-summary instruction added to %s\n", path)
 	return setupSuccess
 }
 

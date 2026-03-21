@@ -35,10 +35,10 @@ Then press `Prefix` + `Ctrl-C` in any tmux window to launch clux.
 
 ### Setup (optional)
 
-Run `clux setup` in your project directory to:
+Run `clux setup` to configure your environment:
 
-- Add a Claude Code `PostToolUse` hook for instant Waiting status detection
-- Append `@clux-summary` instructions to `./CLAUDE.md`
+- Add a Claude Code `PostToolUse` hook to `~/.claude/settings.json` for instant Waiting status detection
+- Append `@clux-summary` instructions to `~/.claude/CLAUDE.md`
 
 ## Keybindings
 
