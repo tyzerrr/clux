@@ -28,10 +28,19 @@ go install github.com/tanaka0325/clux@latest
 Add this to your `~/.tmux.conf`:
 
 ```tmux
+# No prefix needed — press Ctrl-. directly to launch clux
+bind-key -T root C-. display-popup -E -w80% -h80% "clux"
+```
+
+Then press `Ctrl-.` in any tmux window to launch clux instantly (no prefix key required).
+
+Alternatively, if you prefer a prefix-based binding:
+
+```tmux
 bind-key C-c display-popup -E -w80% -h80% "clux"
 ```
 
-Then press `Prefix` + `Ctrl-C` in any tmux window to launch clux.
+This requires `Prefix` + `Ctrl-C` to launch.
 
 ### Setup (optional)
 
