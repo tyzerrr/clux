@@ -9,6 +9,9 @@ import (
 	"strings"
 )
 
+const tmuxConfBinding = `bind-key C-c display-popup -E -w80% -h80% "clux"`
+const tmuxConfBlock = "\n# clux\n" + tmuxConfBinding + "\n"
+
 const cluxSummaryBlock = `
 ## clux
 
@@ -32,10 +35,11 @@ func cmdSetup() {
 
 	r1 := setupPostToolUseHook()
 	r2 := setupClaudeMD()
+	r3 := setupTmuxConf()
 
 	fmt.Println()
 
-	if r1 == setupError || r2 == setupError {
+	if r1 == setupError || r2 == setupError || r3 == setupError {
 		fmt.Println("Setup finished with errors.")
 		os.Exit(1)
 	}
@@ -184,6 +188,54 @@ func setupClaudeMDAt(path string) setupResult {
 	}
 
 	fmt.Printf("[✓] @clux-summary instruction added to %s\n", path)
+	return setupSuccess
+}
+
+func setupTmuxConf() setupResult {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[✗] Failed to determine home directory: %v\n", err)
+		return setupError
+	}
+	return setupTmuxConfAt(filepath.Join(homeDir, ".tmux.conf"))
+}
+
+func setupTmuxConfAt(path string) setupResult {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			fmt.Fprintf(os.Stderr, "[✗] Failed to read %s: %v\n", path, err)
+			return setupError
+		}
+		if err := os.WriteFile(path, []byte(strings.TrimLeft(tmuxConfBlock, "\n")), 0o644); err != nil {
+			fmt.Fprintf(os.Stderr, "[✗] Failed to create %s: %v\n", path, err)
+			return setupError
+		}
+		fmt.Printf("[✓] tmux key binding added to %s\n", path)
+		return setupSuccess
+	}
+
+	if strings.Contains(string(data), tmuxConfBinding) {
+		fmt.Printf("[-] tmux key binding already configured in %s\n", path)
+		return setupSkipped
+	}
+
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[✗] Failed to open %s for appending: %v\n", path, err)
+		return setupError
+	}
+	if _, err := f.WriteString(tmuxConfBlock); err != nil {
+		_ = f.Close()
+		fmt.Fprintf(os.Stderr, "[✗] Failed to append to %s: %v\n", path, err)
+		return setupError
+	}
+	if err := f.Close(); err != nil {
+		fmt.Fprintf(os.Stderr, "[✗] Failed to close %s: %v\n", path, err)
+		return setupError
+	}
+
+	fmt.Printf("[✓] tmux key binding added to %s\n", path)
 	return setupSuccess
 }
 

@@ -288,3 +288,59 @@ func TestSetupClaudeMD_AlreadyConfigured(t *testing.T) {
 		t.Fatalf("expected setupSkipped, got %d", result)
 	}
 }
+
+func TestSetupTmuxConf_FreshInstall(t *testing.T) {
+	dir := t.TempDir()
+	tmuxConfPath := filepath.Join(dir, ".tmux.conf")
+
+	result := setupTmuxConfAt(tmuxConfPath)
+	if result != setupSuccess {
+		t.Fatalf("expected setupSuccess, got %d", result)
+	}
+
+	data, err := os.ReadFile(tmuxConfPath)
+	if err != nil {
+		t.Fatalf("failed to read .tmux.conf: %v", err)
+	}
+	if !strings.Contains(string(data), tmuxConfBinding) {
+		t.Error(".tmux.conf does not contain tmux key binding")
+	}
+}
+
+func TestSetupTmuxConf_AppendToExisting(t *testing.T) {
+	dir := t.TempDir()
+	tmuxConfPath := filepath.Join(dir, ".tmux.conf")
+	if err := os.WriteFile(tmuxConfPath, []byte("set -g mouse on\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result := setupTmuxConfAt(tmuxConfPath)
+	if result != setupSuccess {
+		t.Fatalf("expected setupSuccess, got %d", result)
+	}
+
+	data, err := os.ReadFile(tmuxConfPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	if !strings.HasPrefix(content, "set -g mouse on") {
+		t.Error("existing content was not preserved")
+	}
+	if !strings.Contains(content, tmuxConfBinding) {
+		t.Error("tmux key binding was not appended")
+	}
+}
+
+func TestSetupTmuxConf_AlreadyConfigured(t *testing.T) {
+	dir := t.TempDir()
+	tmuxConfPath := filepath.Join(dir, ".tmux.conf")
+	if err := os.WriteFile(tmuxConfPath, []byte("set -g mouse on\n"+tmuxConfBinding+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result := setupTmuxConfAt(tmuxConfPath)
+	if result != setupSkipped {
+		t.Fatalf("expected setupSkipped, got %d", result)
+	}
+}
