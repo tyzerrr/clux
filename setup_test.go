@@ -344,3 +344,31 @@ func TestSetupTmuxConf_AlreadyConfigured(t *testing.T) {
 		t.Fatalf("expected setupSkipped, got %d", result)
 	}
 }
+
+func TestSetupTmuxConf_MigratesOldBinding(t *testing.T) {
+	dir := t.TempDir()
+	tmuxConfPath := filepath.Join(dir, ".tmux.conf")
+	if err := os.WriteFile(tmuxConfPath, []byte("set -g mouse on\n# clux\n"+tmuxConfBindingOld+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result := setupTmuxConfAt(tmuxConfPath)
+	if result != setupSuccess {
+		t.Fatalf("expected setupSuccess, got %d", result)
+	}
+
+	data, err := os.ReadFile(tmuxConfPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	if strings.Contains(content, tmuxConfBindingOld) {
+		t.Error("old binding should have been replaced")
+	}
+	if !strings.Contains(content, tmuxConfBinding) {
+		t.Error("new binding should be present")
+	}
+	if !strings.HasPrefix(content, "set -g mouse on") {
+		t.Error("existing content was not preserved")
+	}
+}

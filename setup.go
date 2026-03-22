@@ -9,7 +9,8 @@ import (
 	"strings"
 )
 
-const tmuxConfBinding = `bind-key C-c display-popup -E -w80% -h80% "clux"`
+const tmuxConfBinding = `bind-key -T root C-. display-popup -E -w80% -h80% "clux"`
+const tmuxConfBindingOld = `bind-key C-c display-popup -E -w80% -h80% "clux"`
 const tmuxConfBlock = "\n# clux\n" + tmuxConfBinding + "\n"
 
 const cluxSummaryBlock = `
@@ -218,6 +219,17 @@ func setupTmuxConfAt(path string) setupResult {
 	if strings.Contains(string(data), tmuxConfBinding) {
 		fmt.Printf("[-] tmux key binding already configured in %s\n", path)
 		return setupSkipped
+	}
+
+	// Migrate old prefix-based binding to new prefix-free binding
+	if strings.Contains(string(data), tmuxConfBindingOld) {
+		updated := strings.ReplaceAll(string(data), tmuxConfBindingOld, tmuxConfBinding)
+		if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
+			fmt.Fprintf(os.Stderr, "[✗] Failed to write %s: %v\n", path, err)
+			return setupError
+		}
+		fmt.Printf("[✓] tmux key binding updated in %s\n", path)
+		return setupSuccess
 	}
 
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o644)
