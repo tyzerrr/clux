@@ -45,38 +45,6 @@ func TestDisplayName(t *testing.T) {
 	}
 }
 
-func TestDisplayName_ExternalSession(t *testing.T) {
-	tests := []struct {
-		name    string
-		session Session
-		want    string
-	}{
-		{
-			"External with SessionName",
-			Session{Name: "win-name", External: true, SessionName: "mysess", WindowIndex: "3"},
-			"mysess:3",
-		},
-		{
-			"External with empty SessionName falls back to Name",
-			Session{Name: "win-name", External: true, SessionName: "", WindowIndex: "3"},
-			"win-name",
-		},
-		{
-			"External with Summary takes priority",
-			Session{Name: "win-name", Summary: "my task", External: true, SessionName: "mysess", WindowIndex: "3"},
-			"my task",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := tt.session.DisplayName()
-			if got != tt.want {
-				t.Errorf("DisplayName() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestStatusString(t *testing.T) {
 	tests := []struct {
 		name   string

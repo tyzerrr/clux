@@ -28,7 +28,6 @@ const (
 	ModeNewSession
 	ModeNewSessionPrompt // prompt input for new session
 	ModeConfirmKill
-	ModeAddExternal
 	ModeDashboard
 	ModeBroadcastSelect // ghq repo multi-select for broadcast
 	ModeBroadcastPrompt // prompt/skill input for broadcast
@@ -41,10 +40,7 @@ type (
 	tickMsg             time.Time
 	ghqDirsMsg          []string
 	windowKilledMsg     struct{}
-	sessionUnregistered struct{} // external session unregistered from config
-	previewMsg          string   // pane content for preview
-	externalWindowsMsg  []tmux.ExternalWindowInfo
-	externalAddedMsg    struct{} // session registered successfully
+	previewMsg          string // pane content for preview
 	dashPreviewsMsg     map[int]string
 	broadcastGhqDirsMsg []string // ghq dirs for broadcast select (separate from newSession)
 	ghqRootMsg          string   // cached ghq root path
@@ -70,14 +66,13 @@ type Model struct {
 	height      int
 	err         error
 	filterInput textinput.Model
-	cfg         *config.Config // persistent config for external sessions
+	cfg         *config.Config // persistent config
 
 	// Confirm kill mode
 	confirmTarget      string // window name for display
 	confirmWindowIndex string // window index for tmux command
 	confirmPaneIndex   string // pane index for tmux command
-	confirmExternal    bool   // true if confirming unregister (not kill)
-	confirmSessionName string // tmux session name for external sessions
+	confirmSessionName string // tmux session name
 
 	// New session mode
 	repoDirs         []string // all dirs from ghq
@@ -93,12 +88,6 @@ type Model struct {
 	previewEnabled      bool   // toggle state, default false
 	previewContent      string // captured pane content for selected session
 	previewScrollOffset int    // lines scrolled up from bottom; 0 = live view
-
-	// Add external session mode
-	externalWindows    []tmux.ExternalWindowInfo // all available windows
-	filteredExtWindows []tmux.ExternalWindowInfo // filtered by search
-	addExtInput        textinput.Model
-	addExtCursor       int
 
 	// Status change tracking for bell notification
 	prevStatuses map[string]session.Status
@@ -138,10 +127,6 @@ func New() Model {
 	npi.Placeholder = "Enter prompt (optional, Enter to skip)..."
 	npi.CharLimit = 512
 
-	ai := textinput.New()
-	ai.Placeholder = "Search session:window..."
-	ai.CharLimit = 64
-
 	bci := textinput.New()
 	bci.Placeholder = "Search repository..."
 	bci.CharLimit = 64
@@ -160,7 +145,6 @@ func New() Model {
 		filterInput:          ti,
 		newSessionInput:      ni,
 		newSessionPromptInput: npi,
-		addExtInput:          ai,
 		broadcastInput:       bci,
 		broadcastPromptInput: bpi,
 		cfg:                  cfg,
@@ -196,18 +180,12 @@ func (m Model) GroupEnabled() bool            { return m.groupEnabled }
 
 // --- Command functions ---
 
-func fetchSessionsCmdWithExternals(cfg *config.Config) func() tea.Msg {
-	return func() tea.Msg {
-		sessions, err := tmux.ListWindows()
-		if err != nil {
-			return errMsg(err)
-		}
-		if cfg != nil && len(cfg.ExternalSessions) > 0 {
-			ext := tmux.ListExternalWindows(cfg.ExternalSessions)
-			sessions = append(sessions, ext...)
-		}
-		return sessionsMsg(sessions)
+func fetchSessionsCmd() tea.Msg {
+	sessions, err := tmux.ListWindows()
+	if err != nil {
+		return errMsg(err)
 	}
+	return sessionsMsg(sessions)
 }
 
 func doTick() tea.Cmd {
@@ -224,9 +202,9 @@ func doImmediateTick() tea.Cmd {
 
 func fetchPreviewCmdForSession(s session.Session) tea.Cmd {
 	return func() tea.Msg {
-		sessionName := tmux.SessionName
-		if s.External && s.SessionName != "" {
-			sessionName = s.SessionName
+		sessionName := s.SessionName
+		if sessionName == "" {
+			sessionName = tmux.SessionName
 		}
 		paneIndex := resolvePaneIndex(s.PaneIndex)
 		content, err := tmux.CapturePaneForSession(sessionName, s.WindowIndex, paneIndex)
@@ -239,9 +217,9 @@ func fetchPreviewCmdForSession(s session.Session) tea.Cmd {
 
 func fetchPreviewCmdForSessionWithOffset(s session.Session, scrollOffset, height int) tea.Cmd {
 	return func() tea.Msg {
-		sessionName := tmux.SessionName
-		if s.External && s.SessionName != "" {
-			sessionName = s.SessionName
+		sessionName := s.SessionName
+		if sessionName == "" {
+			sessionName = tmux.SessionName
 		}
 		paneIndex := resolvePaneIndex(s.PaneIndex)
 		content, err := tmux.CapturePaneForSessionWithOffset(sessionName, s.WindowIndex, paneIndex, scrollOffset, height)
@@ -261,9 +239,9 @@ func fetchDashboardPreviews(sessions []session.Session) tea.Cmd {
 			wg.Add(1)
 			go func(idx int, s session.Session) {
 				defer wg.Done()
-				sessionName := tmux.SessionName
-				if s.External && s.SessionName != "" {
-					sessionName = s.SessionName
+				sessionName := s.SessionName
+				if sessionName == "" {
+					sessionName = tmux.SessionName
 				}
 				paneIndex := resolvePaneIndex(s.PaneIndex)
 				content, err := tmux.CapturePaneForSession(sessionName, s.WindowIndex, paneIndex)
@@ -424,31 +402,6 @@ func ringBell() tea.Cmd {
 	return tea.Println("\a")
 }
 
-func fetchExternalWindowsCmd() tea.Msg {
-	windows, err := tmux.ListAllWindows()
-	if err != nil {
-		return errMsg(err)
-	}
-	return externalWindowsMsg(windows)
-}
-
-// filterExtWindows does fuzzy matching on "session:index windowname dir" combined.
-func filterExtWindows(windows []tmux.ExternalWindowInfo, query string) []tmux.ExternalWindowInfo {
-	if query == "" {
-		return windows
-	}
-	combined := make([]string, len(windows))
-	for i, w := range windows {
-		combined[i] = w.Session + ":" + w.WindowIndex + " " + w.WindowName + " " + w.Dir
-	}
-	matches := fuzzy.Find(query, combined)
-	result := make([]tmux.ExternalWindowInfo, len(matches))
-	for i, m := range matches {
-		result[i] = windows[m.Index]
-	}
-	return result
-}
-
 func filterDirs(dirs []string, query string) []string {
 	if query == "" {
 		return dirs
@@ -489,9 +442,6 @@ func fetchGhqRoot() tea.Msg {
 
 // groupKey returns the group key for a session based on its Dir.
 func groupKey(s session.Session, ghqRoot string) string {
-	if s.External {
-		return "External"
-	}
 	dir := s.Dir
 	// Strip worktree paths to group by base repo.
 	if idx := strings.Index(dir, "/.claude/worktrees/"); idx >= 0 {
@@ -560,11 +510,12 @@ func groupedSessionRows(groups []sessionGroup) int {
 
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
-		fetchSessionsCmdWithExternals(m.cfg),
+		fetchSessionsCmd,
 		doImmediateTick(),
 		fetchGhqRoot,
 	)
 }
+
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -661,7 +612,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		switch m.mode { //nolint:exhaustive
 		case ModeList, ModeFilter:
-			cmds := []tea.Cmd{fetchSessionsCmdWithExternals(m.cfg), doTick()}
+			cmds := []tea.Cmd{fetchSessionsCmd, doTick()}
 			if m.previewEnabled && len(m.filtered) > 0 {
 				if m.previewScrollOffset > 0 {
 					cmds = append(cmds, fetchPreviewCmdForSessionWithOffset(m.filtered[m.cursor], m.previewScrollOffset, previewHeight(m)))
@@ -680,17 +631,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				pageItems = 0
 			}
 			pageSessions := m.filtered[m.dashPageOffset : m.dashPageOffset+pageItems]
-			cmds := []tea.Cmd{fetchSessionsCmdWithExternals(m.cfg), doTick(), fetchDashboardPreviews(pageSessions)}
+			cmds := []tea.Cmd{fetchSessionsCmd, doTick(), fetchDashboardPreviews(pageSessions)}
 			return m, tea.Batch(cmds...)
 		default:
 			return m, doTick()
 		}
 
 	case windowKilledMsg:
-		return m, fetchSessionsCmdWithExternals(m.cfg)
-
-	case sessionUnregistered:
-		return m, fetchSessionsCmdWithExternals(m.cfg)
+		return m, fetchSessionsCmd
 
 	case ghqDirsMsg:
 		m.repoDirs = []string(msg)
@@ -711,21 +659,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case broadcastCompletedMsg:
 		m.mode = ModeList
 		m.broadcastErrors = msg.errors
-		return m, fetchSessionsCmdWithExternals(m.cfg)
+		return m, fetchSessionsCmd
 
 	case ghqRootMsg:
 		m.ghqRoot = string(msg)
-		return m, nil
-
-	case externalWindowsMsg:
-		m.externalWindows = []tmux.ExternalWindowInfo(msg)
-		filtered := filterExtWindows(m.externalWindows, m.addExtInput.Value())
-		m.filteredExtWindows = excludeRegistered(filtered, m.cfg)
-		if len(m.filteredExtWindows) == 0 {
-			m.addExtCursor = 0
-		} else if m.addExtCursor >= len(m.filteredExtWindows) {
-			m.addExtCursor = len(m.filteredExtWindows) - 1
-		}
 		return m, nil
 
 	case tea.KeyPressMsg:
@@ -743,8 +680,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateNewSessionPrompt(msg)
 		case ModeConfirmKill:
 			return m.updateConfirmKill(msg)
-		case ModeAddExternal:
-			return m.updateAddExternal(msg)
 		case ModeDashboard:
 			return m.updateDashboard(msg)
 		case ModeBroadcastSelect:
@@ -777,16 +712,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case ModeNewSessionPrompt:
 			var cmd tea.Cmd
 			m.newSessionPromptInput, cmd = m.newSessionPromptInput.Update(msg)
-			return m, cmd
-
-		case ModeAddExternal:
-			var cmd tea.Cmd
-			m.addExtInput, cmd = m.addExtInput.Update(msg)
-			allFiltered := filterExtWindows(m.externalWindows, m.addExtInput.Value())
-			m.filteredExtWindows = excludeRegistered(allFiltered, m.cfg)
-			if m.addExtCursor >= len(m.filteredExtWindows) {
-				m.addExtCursor = 0
-			}
 			return m, cmd
 
 		case ModeBroadcastSelect:
@@ -846,9 +771,9 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		if len(m.filtered) > 0 {
 			s := m.filtered[m.cursor]
-			sessionName := tmux.SessionName
-			if s.External && s.SessionName != "" {
-				sessionName = s.SessionName
+			sessionName := s.SessionName
+			if sessionName == "" {
+				sessionName = tmux.SessionName
 			}
 			windowIndex := s.WindowIndex
 			paneIndex := resolvePaneIndex(s.PaneIndex)
@@ -873,21 +798,12 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 
-	case "a":
-		m.mode = ModeAddExternal
-		m.err = nil
-		m.addExtInput.SetValue("")
-		m.addExtCursor = 0
-		cmds := []tea.Cmd{m.addExtInput.Focus(), fetchExternalWindowsCmd}
-		return m, tea.Batch(cmds...)
-
 	case "K":
 		if len(m.filtered) > 0 {
 			s := m.filtered[m.cursor]
 			m.confirmTarget = s.DisplayName()
 			m.confirmWindowIndex = s.WindowIndex
 			m.confirmPaneIndex = resolvePaneIndex(s.PaneIndex)
-			m.confirmExternal = s.External
 			m.confirmSessionName = s.SessionName
 			m.err = nil
 			m.mode = ModeConfirmKill
@@ -948,22 +864,7 @@ func (m Model) updateConfirmKill(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "y":
 		windowIndex := m.confirmWindowIndex
-		isExternal := m.confirmExternal
-		extSessionName := m.confirmSessionName
-		cfg := m.cfg
 		m = m.clearConfirm()
-		if isExternal {
-			// Unregister external session (don't kill the window).
-			return m, func() tea.Msg {
-				if err := cfg.Remove(extSessionName, windowIndex); err != nil {
-					return errMsg(err)
-				}
-				if err := cfg.Save(); err != nil {
-					return errMsg(err)
-				}
-				return sessionUnregistered{}
-			}
-		}
 		return m, func() tea.Msg {
 			if err := tmux.KillWindow(windowIndex); err != nil {
 				return errMsg(err)
@@ -981,7 +882,6 @@ func (m Model) clearConfirm() Model {
 	m.confirmTarget = ""
 	m.confirmWindowIndex = ""
 	m.confirmPaneIndex = ""
-	m.confirmExternal = false
 	m.confirmSessionName = ""
 	m.mode = ModeList
 	return m
@@ -1102,55 +1002,6 @@ func (m Model) updateNewSessionPrompt(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 	}
 }
 
-func (m Model) updateAddExternal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "enter":
-		if len(m.filteredExtWindows) > 0 {
-			ext := m.filteredExtWindows[m.addExtCursor]
-			if err := m.cfg.Add(ext.Session, ext.WindowIndex); err != nil {
-				m.err = err
-				return m, nil
-			}
-			if err := m.cfg.Save(); err != nil {
-				m.err = err
-				return m, nil
-			}
-			m.mode = ModeList
-			m.addExtInput.Blur()
-			return m, fetchSessionsCmdWithExternals(m.cfg)
-		}
-		return m, nil
-
-	case "esc":
-		m.mode = ModeList
-		m.addExtInput.Blur()
-		return m, nil
-
-	case "up", "ctrl+k", "ctrl+p":
-		if len(m.filteredExtWindows) > 0 {
-			m.addExtCursor = (m.addExtCursor - 1 + len(m.filteredExtWindows)) % len(m.filteredExtWindows)
-		}
-		return m, nil
-
-	case "down", "ctrl+j", "ctrl+n":
-		if len(m.filteredExtWindows) > 0 {
-			m.addExtCursor = (m.addExtCursor + 1) % len(m.filteredExtWindows)
-		}
-		return m, nil
-
-	default:
-		var cmd tea.Cmd
-		m.addExtInput, cmd = m.addExtInput.Update(msg)
-		// Re-filter; also exclude already-registered windows.
-		allFiltered := filterExtWindows(m.externalWindows, m.addExtInput.Value())
-		m.filteredExtWindows = excludeRegistered(allFiltered, m.cfg)
-		if m.addExtCursor >= len(m.filteredExtWindows) {
-			m.addExtCursor = 0
-		}
-		return m, cmd
-	}
-}
-
 func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	cols := m.dashCols()
 	maxVisible := m.dashMaxVisible()
@@ -1227,9 +1078,9 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		if pageItems > 0 && m.dashPageOffset+m.dashCursor < len(m.filtered) {
 			s := m.filtered[m.dashPageOffset+m.dashCursor]
-			sessionName := tmux.SessionName
-			if s.External && s.SessionName != "" {
-				sessionName = s.SessionName
+			sessionName := s.SessionName
+			if sessionName == "" {
+				sessionName = tmux.SessionName
 			}
 			paneIndex := resolvePaneIndex(s.PaneIndex)
 			return m, func() tea.Msg {
@@ -1245,7 +1096,6 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.confirmTarget = s.DisplayName()
 			m.confirmWindowIndex = s.WindowIndex
 			m.confirmPaneIndex = resolvePaneIndex(s.PaneIndex)
-			m.confirmExternal = s.External
 			m.confirmSessionName = s.SessionName
 			m.err = nil
 			m.mode = ModeConfirmKill
@@ -1394,24 +1244,6 @@ func resolvePaneIndex(p string) string {
 		return "0"
 	}
 	return p
-}
-
-// excludeRegistered removes windows that are already registered in cfg.
-func excludeRegistered(windows []tmux.ExternalWindowInfo, cfg *config.Config) []tmux.ExternalWindowInfo {
-	if cfg == nil || len(cfg.ExternalSessions) == 0 {
-		return windows
-	}
-	registered := make(map[string]bool, len(cfg.ExternalSessions))
-	for _, es := range cfg.ExternalSessions {
-		registered[es.Session+":"+es.Window] = true
-	}
-	var out []tmux.ExternalWindowInfo
-	for _, w := range windows {
-		if !registered[w.Session+":"+w.WindowIndex] {
-			out = append(out, w)
-		}
-	}
-	return out
 }
 
 // dashCols returns the number of columns for the dashboard grid based on terminal width and session count.
@@ -1829,10 +1661,6 @@ func (m Model) View() tea.View {
 		return m.viewWithOverlay(m.viewNewSessionPrompt)
 	}
 
-	if m.mode == ModeAddExternal {
-		return m.viewWithOverlay(m.viewAddExternal)
-	}
-
 	if m.mode == ModeDashboard {
 		return newView(m.viewDashboard(&b))
 	}
@@ -1855,7 +1683,7 @@ func (m Model) View() tea.View {
 			previewLabel = "p:preview  Ctrl+U/D:scroll"
 		}
 		groupLabel := "g:group"
-		helpBar = styleHelpBar.Render("↵:attach  n:new  a:add-external  b:broadcast  K:kill  " + previewLabel + "  " + groupLabel + "  d:dashboard  /:filter  q:quit")
+		helpBar = styleHelpBar.Render("↵:attach  n:new  b:broadcast  K:kill  " + previewLabel + "  " + groupLabel + "  d:dashboard  /:filter  q:quit")
 	}
 
 	showPreviewPanel := m.previewEnabled && len(m.filtered) > 0 && m.width >= 80
@@ -2062,59 +1890,6 @@ func (m Model) viewNewSessionPrompt(b *strings.Builder) (string, *overlayCursor)
 
 	// Line 0: title, line 1: blank (\n\n), line 2: " Repository: ...", line 3: blank (\n\n), line 4: " " + input
 	cur := &overlayCursor{x: 1 + textInputCursorX(m.newSessionPromptInput), y: 4}
-	return renderOverlayBox(b.String(), overlayWidth), cur
-}
-
-func (m Model) viewAddExternal(b *strings.Builder) (string, *overlayCursor) {
-	overlayWidth, overlayHeight := m.overlayListDims()
-
-	cursorY := 0
-	if m.err != nil {
-		b.WriteString(styleError.Render("Error: " + m.err.Error()))
-		b.WriteString("\n")
-		cursorY += 2 // error line + \n
-	}
-	b.WriteString(styleOverlayTitle.Render("Add External Session"))
-	b.WriteString("\n\n")
-	cursorY += 2 // title + blank line from \n\n
-	b.WriteString(" ")
-	b.WriteString(m.addExtInput.View())
-	b.WriteString("\n\n")
-
-	listHeight := overlayListHeight(overlayHeight)
-
-	if len(m.filteredExtWindows) == 0 {
-		b.WriteString(styleHelpBar.Render(" No external windows found."))
-	} else {
-		maxShow := listHeight
-		offset := 0
-		if m.addExtCursor >= maxShow {
-			offset = m.addExtCursor - maxShow + 1
-		}
-		end := offset + maxShow
-		if end > len(m.filteredExtWindows) {
-			end = len(m.filteredExtWindows)
-		}
-		for i := offset; i < end; i++ {
-			w := m.filteredExtWindows[i]
-			dir := styleDir.Render(shortenDir(w.Dir))
-			row := fmt.Sprintf(" %s:%s  %-20s  %s", w.Session, w.WindowIndex, w.WindowName, dir)
-			if i == m.addExtCursor {
-				b.WriteString(styleSelected.Render(row))
-			} else {
-				b.WriteString(row)
-			}
-			b.WriteString("\n")
-		}
-		if end < len(m.filteredExtWindows) {
-			b.WriteString(styleHelpBar.Render(fmt.Sprintf("   ... and %d more", len(m.filteredExtWindows)-end)))
-		}
-	}
-
-	b.WriteString("\n\n")
-	b.WriteString(styleHelpBar.Render("↵:add  Esc:cancel  ↑/↓:navigate"))
-
-	cur := &overlayCursor{x: 1 + textInputCursorX(m.addExtInput), y: cursorY}
 	return renderOverlayBox(b.String(), overlayWidth), cur
 }
 
@@ -2407,18 +2182,10 @@ func (m Model) viewBroadcastPrompt(b *strings.Builder) (string, *overlayCursor) 
 func (m Model) viewConfirmKill(b *strings.Builder) (string, *overlayCursor) {
 	overlayWidth := m.overlayWidth(40, 50, 60)
 
-	if m.confirmExternal {
-		b.WriteString(styleOverlayTitle.Render("Unregister Session"))
-	} else {
-		b.WriteString(styleOverlayTitle.Render("Kill Session"))
-	}
+	b.WriteString(styleOverlayTitle.Render("Kill Session"))
 	b.WriteString("\n\n")
 
-	if m.confirmExternal {
-		fmt.Fprintf(b, "Unregister external session %q? (y/n)", m.confirmTarget)
-	} else {
-		fmt.Fprintf(b, "Kill session %q? (y/n)", m.confirmTarget)
-	}
+	fmt.Fprintf(b, "Kill session %q? (y/n)", m.confirmTarget)
 	b.WriteString("\n\n")
 
 	if m.err != nil {
@@ -2426,11 +2193,7 @@ func (m Model) viewConfirmKill(b *strings.Builder) (string, *overlayCursor) {
 		b.WriteString("\n\n")
 	}
 
-	if m.confirmExternal {
-		b.WriteString(styleHelpBar.Render("y:unregister  n/Esc:cancel"))
-	} else {
-		b.WriteString(styleHelpBar.Render("y:kill  n/Esc:cancel"))
-	}
+	b.WriteString(styleHelpBar.Render("y:kill  n/Esc:cancel"))
 
 	return renderOverlayBox(b.String(), overlayWidth), nil
 }

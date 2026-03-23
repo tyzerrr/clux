@@ -214,20 +214,6 @@ func TestSwitchWindow_InvalidPaneIndex(t *testing.T) {
 	}
 }
 
-func TestScanPanes_EmptySessionName(t *testing.T) {
-	result := ScanPanes("", "0")
-	if result != nil {
-		t.Error("expected nil for empty session name")
-	}
-}
-
-func TestScanPanes_InvalidWindowIndex(t *testing.T) {
-	result := ScanPanes("test-session", "abc")
-	if result != nil {
-		t.Error("expected nil for invalid window index")
-	}
-}
-
 // --- validatePaneTarget ---
 
 func TestValidatePaneTarget(t *testing.T) {
@@ -405,126 +391,6 @@ func TestParseListPanesOutput_FieldValues(t *testing.T) {
 	}
 }
 
-// --- parseScanPanesOutput ---
-
-func TestParseScanPanesOutput(t *testing.T) {
-	tests := []struct {
-		name        string
-		output      string
-		windowIndex string
-		want        int
-	}{
-		{
-			"normal output",
-			"0\teditor\t/home\n1\tshell\t/tmp\n",
-			"5",
-			2,
-		},
-		{
-			"empty output",
-			"",
-			"0",
-			0,
-		},
-		{
-			"invalid pane index skipped",
-			"abc\teditor\t/home\n0\tshell\t/tmp\n",
-			"0",
-			1,
-		},
-		{
-			"malformed line skipped",
-			"0\teditor\n1\tshell\t/tmp\n",
-			"0",
-			1,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := parseScanPanesOutput(tt.output, tt.windowIndex)
-			if len(got) != tt.want {
-				t.Errorf("parseScanPanesOutput() returned %d items, want %d", len(got), tt.want)
-			}
-			// All results should have the provided windowIndex
-			for _, w := range got {
-				if w.index != tt.windowIndex {
-					t.Errorf("windowIndex = %q, want %q", w.index, tt.windowIndex)
-				}
-			}
-		})
-	}
-}
-
-// --- parseListAllWindowsOutput ---
-
-func TestParseListAllWindowsOutput(t *testing.T) {
-	tests := []struct {
-		name   string
-		output string
-		want   int
-	}{
-		{
-			"normal output excludes clux session",
-			"main\t0\teditor\t/home\nclux\t1\tshell\t/tmp\nwork\t2\tdev\t/src\n",
-			2,
-		},
-		{
-			"empty output",
-			"",
-			0,
-		},
-		{
-			"only clux session",
-			"clux\t0\teditor\t/home\nclux\t1\tshell\t/tmp\n",
-			0,
-		},
-		{
-			"invalid window index skipped",
-			"main\tabc\teditor\t/home\nmain\t1\tshell\t/tmp\n",
-			1,
-		},
-		{
-			"valid line with malformed line",
-			"main\t0\teditor\t/home\nwork\t1\tshell\t/tmp\n",
-			2,
-		},
-		{
-			"all malformed lines skipped",
-			"main\t0\n1\tshell\t/tmp\n",
-			0,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := parseListAllWindowsOutput(tt.output)
-			if len(got) != tt.want {
-				t.Errorf("parseListAllWindowsOutput() returned %d items, want %d", len(got), tt.want)
-			}
-		})
-	}
-}
-
-func TestParseListAllWindowsOutput_FieldValues(t *testing.T) {
-	output := "dev-session\t3\tmy-editor\t/home/user/code\n"
-	got := parseListAllWindowsOutput(output)
-	if len(got) != 1 {
-		t.Fatalf("expected 1 result, got %d", len(got))
-	}
-	w := got[0]
-	if w.Session != "dev-session" {
-		t.Errorf("Session = %q, want %q", w.Session, "dev-session")
-	}
-	if w.WindowIndex != "3" {
-		t.Errorf("WindowIndex = %q, want %q", w.WindowIndex, "3")
-	}
-	if w.WindowName != "my-editor" {
-		t.Errorf("WindowName = %q, want %q", w.WindowName, "my-editor")
-	}
-	if w.Dir != "/home/user/code" {
-		t.Errorf("Dir = %q, want %q", w.Dir, "/home/user/code")
-	}
-}
-
 // --- deduplicateWindowName ---
 
 func TestDeduplicateWindowName(t *testing.T) {
@@ -641,22 +507,18 @@ func withMockedDeps(t *testing.T,
 	statusFn func(string, string, string) string,
 	childrenFn func(string, string, string) bool,
 	hashChangedFn func(string, string) bool,
-	ccProcessFn func(string, string, string) bool,
 ) {
 	t.Helper()
 	origStatus := getClaudeStatusFn
 	origChildren := hasActiveChildrenFn
 	origHash := contentChangedFn
-	origCCProcess := isClaudeCodeProcessFn
 	getClaudeStatusFn = statusFn
 	hasActiveChildrenFn = childrenFn
 	contentChangedFn = hashChangedFn
-	isClaudeCodeProcessFn = ccProcessFn
 	t.Cleanup(func() {
 		getClaudeStatusFn = origStatus
 		hasActiveChildrenFn = origChildren
 		contentChangedFn = origHash
-		isClaudeCodeProcessFn = origCCProcess
 	})
 }
 
@@ -666,12 +528,10 @@ func TestDetect_HashChanged_Working(t *testing.T) {
 		func(_, _, _ string) string { return "" },
 		func(_, _, _ string) bool { return false },
 		func(_ string, _ string) bool { return true },
-		func(_, _, _ string) bool { return true },
 	)
 	content := "-- INSERT --\nsome output\n❯ "
-	st, isCC := detectStatusWithHooksForSession(content, "clux", "0", "0")
+	st := detectStatusWithHooksForSession(content, "clux", "0", "0")
 	assert(t, st == session.StatusWorking, "expected Working, got %v", st)
-	assert(t, isCC, "expected isClaudeCode=true")
 }
 
 // Hash stable + waiting pattern -> Waiting
@@ -680,12 +540,10 @@ func TestDetect_HashStable_WaitingPattern(t *testing.T) {
 		func(_, _, _ string) string { return "" },
 		func(_, _, _ string) bool { return false },
 		func(_ string, _ string) bool { return false },
-		func(_, _, _ string) bool { return true },
 	)
 	content := "-- INSERT --\nDo you want to proceed?\n❯ "
-	st, isCC := detectStatusWithHooksForSession(content, "clux", "0", "0")
+	st := detectStatusWithHooksForSession(content, "clux", "0", "0")
 	assert(t, st == session.StatusWaiting, "expected Waiting, got %v", st)
-	assert(t, isCC, "expected isClaudeCode=true")
 }
 
 // Hash stable + active children -> Working (safety net)
@@ -694,12 +552,10 @@ func TestDetect_HashStable_ActiveChildren_Working(t *testing.T) {
 		func(_, _, _ string) string { return "" },
 		func(_, _, _ string) bool { return true },
 		func(_ string, _ string) bool { return false },
-		func(_, _, _ string) bool { return true },
 	)
 	content := "-- INSERT --\nsome output"
-	st, isCC := detectStatusWithHooksForSession(content, "clux", "0", "0")
+	st := detectStatusWithHooksForSession(content, "clux", "0", "0")
 	assert(t, st == session.StatusWorking, "expected Working, got %v", st)
-	assert(t, isCC, "expected isClaudeCode=true")
 }
 
 // Hash stable + no waiting + no children -> Idle
@@ -708,12 +564,10 @@ func TestDetect_HashStable_NoWaiting_NoChildren_Idle(t *testing.T) {
 		func(_, _, _ string) string { return "" },
 		func(_, _, _ string) bool { return false },
 		func(_ string, _ string) bool { return false },
-		func(_, _, _ string) bool { return true },
 	)
 	content := "-- INSERT --\nsome output\n❯ "
-	st, isCC := detectStatusWithHooksForSession(content, "clux", "0", "0")
+	st := detectStatusWithHooksForSession(content, "clux", "0", "0")
 	assert(t, st == session.StatusIdle, "expected Idle, got %v", st)
-	assert(t, isCC, "expected isClaudeCode=true")
 }
 
 // Hook says "waiting" -> Waiting immediately
@@ -722,12 +576,10 @@ func TestDetect_HookWaiting_Immediate(t *testing.T) {
 		func(_, _, _ string) string { return "waiting" },
 		func(_, _, _ string) bool { t.Error("should not be called"); return false },
 		func(_ string, _ string) bool { t.Error("should not be called"); return false },
-		func(_, _, _ string) bool { t.Error("should not be called"); return true },
 	)
 	content := "-- INSERT --\nsome output"
-	st, isCC := detectStatusWithHooksForSession(content, "clux", "0", "0")
+	st := detectStatusWithHooksForSession(content, "clux", "0", "0")
 	assert(t, st == session.StatusWaiting, "expected Waiting, got %v", st)
-	assert(t, isCC, "expected isClaudeCode=true")
 }
 
 // Hook says "idle" -> ignored, hash takes priority
@@ -736,26 +588,10 @@ func TestDetect_HookIdle_Ignored_HashChanged(t *testing.T) {
 		func(_, _, _ string) string { return "idle" },
 		func(_, _, _ string) bool { return false },
 		func(_ string, _ string) bool { return true },
-		func(_, _, _ string) bool { return true },
 	)
 	content := "-- INSERT --\nsome output\n❯ "
-	st, isCC := detectStatusWithHooksForSession(content, "clux", "0", "0")
+	st := detectStatusWithHooksForSession(content, "clux", "0", "0")
 	assert(t, st == session.StatusWorking, "expected Working (hash changed despite hook idle), got %v", st)
-	assert(t, isCC, "expected isClaudeCode=true")
-}
-
-// Not Claude Code process -> Unknown
-func TestDetect_NotClaudeCode(t *testing.T) {
-	withMockedDeps(t,
-		func(_, _, _ string) string { return "" },
-		func(_, _, _ string) bool { return false },
-		func(_ string, _ string) bool { return false },
-		func(_, _, _ string) bool { return false },
-	)
-	content := "any content here"
-	st, isCC := detectStatusWithHooksForSession(content, "clux", "0", "0")
-	assert(t, st == session.StatusUnknown, "expected Unknown, got %v", st)
-	assert(t, !isCC, "expected isClaudeCode=false")
 }
 
 // Hook says "working" -> not trusted, falls through to hash
@@ -764,12 +600,10 @@ func TestDetect_HookWorking_NotTrusted_HashStable_Idle(t *testing.T) {
 		func(_, _, _ string) string { return "working" },
 		func(_, _, _ string) bool { return false },
 		func(_ string, _ string) bool { return false },
-		func(_, _, _ string) bool { return true },
 	)
 	content := "-- INSERT --\nsome output\n❯ "
-	st, isCC := detectStatusWithHooksForSession(content, "clux", "0", "0")
+	st := detectStatusWithHooksForSession(content, "clux", "0", "0")
 	assert(t, st == session.StatusIdle, "expected Idle (hook working not trusted, hash stable), got %v", st)
-	assert(t, isCC, "expected isClaudeCode=true")
 }
 
 // Hash stable + no waiting pattern + no children + Claude Code present -> Idle (not Unknown)
@@ -778,12 +612,10 @@ func TestDetect_HashStable_ClaudeCodeNoPattern_Idle(t *testing.T) {
 		func(_, _, _ string) string { return "" },
 		func(_, _, _ string) bool { return false },
 		func(_ string, _ string) bool { return false },
-		func(_, _, _ string) bool { return true },
 	)
 	content := "-- INSERT --\nsome unrecognized output"
-	st, isCC := detectStatusWithHooksForSession(content, "clux", "0", "0")
+	st := detectStatusWithHooksForSession(content, "clux", "0", "0")
 	assert(t, st == session.StatusIdle, "expected Idle (hash stable, Claude Code present), got %v", st)
-	assert(t, isCC, "expected isClaudeCode=true")
 }
 
 // Old waiting indicator in scrollback does not affect hash-based detection
@@ -792,14 +624,12 @@ func TestDetect_OldWaitingInScrollback_HashStable_Idle(t *testing.T) {
 		func(_, _, _ string) string { return "" },
 		func(_, _, _ string) bool { return false },
 		func(_ string, _ string) bool { return false },
-		func(_, _, _ string) bool { return true },
 	)
 	// "Do you want to proceed?" is in scrollback (more than 15 lines up),
 	// so bottomContent won't include it.
 	content := "-- INSERT --\nDo you want to proceed?\n" + strings.Repeat("filler line\n", 20) + "some output\n"
-	st, isCC := detectStatusWithHooksForSession(content, "clux", "0", "0")
+	st := detectStatusWithHooksForSession(content, "clux", "0", "0")
 	assert(t, st == session.StatusIdle, "expected Idle (old waiting in scrollback), got %v", st)
-	assert(t, isCC, "expected isClaudeCode=true")
 }
 
 // --- CapturePaneForSessionWithOffset validation ---
@@ -891,10 +721,9 @@ func TestGetSetCachedResult(t *testing.T) {
 
 	// Set and retrieve
 	expected := paneDetectResult{
-		status:       session.StatusWorking,
-		isClaudeCode: true,
-		branch:       "main",
-		summary:      "test summary",
+		status:  session.StatusWorking,
+		branch:  "main",
+		summary: "test summary",
 	}
 	setCachedResult(key, expected)
 
@@ -904,9 +733,6 @@ func TestGetSetCachedResult(t *testing.T) {
 	}
 	if got.status != expected.status {
 		t.Errorf("status = %v, want %v", got.status, expected.status)
-	}
-	if got.isClaudeCode != expected.isClaudeCode {
-		t.Errorf("isClaudeCode = %v, want %v", got.isClaudeCode, expected.isClaudeCode)
 	}
 	if got.branch != expected.branch {
 		t.Errorf("branch = %q, want %q", got.branch, expected.branch)
@@ -924,8 +750,8 @@ func TestClearAllPaneCache(t *testing.T) {
 	// Populate both caches
 	contentChanged("a:0.0", "content-a")
 	contentChanged("b:1.0", "content-b")
-	setCachedResult("a:0.0", paneDetectResult{status: session.StatusWorking, isClaudeCode: true})
-	setCachedResult("b:1.0", paneDetectResult{status: session.StatusIdle, isClaudeCode: true})
+	setCachedResult("a:0.0", paneDetectResult{status: session.StatusWorking})
+	setCachedResult("b:1.0", paneDetectResult{status: session.StatusIdle})
 
 	ClearAllPaneCache()
 
@@ -952,7 +778,7 @@ func TestClearPaneHash_AlsoClearsDetectCache(t *testing.T) {
 	resetPaneHashes(t)
 
 	contentChanged("sess:0.0", "content")
-	setCachedResult("sess:0.0", paneDetectResult{status: session.StatusIdle, isClaudeCode: true, branch: "main"})
+	setCachedResult("sess:0.0", paneDetectResult{status: session.StatusIdle, branch: "main"})
 
 	ClearPaneHash("sess", "0", "0")
 
@@ -969,9 +795,9 @@ func TestClearPaneHashByPrefix_AlsoClearsDetectCache(t *testing.T) {
 	contentChanged("clux:5.0", "content1")
 	contentChanged("clux:5.1", "content2")
 	contentChanged("clux:6.0", "content3")
-	setCachedResult("clux:5.0", paneDetectResult{status: session.StatusWorking, isClaudeCode: true})
-	setCachedResult("clux:5.1", paneDetectResult{status: session.StatusIdle, isClaudeCode: true})
-	setCachedResult("clux:6.0", paneDetectResult{status: session.StatusWaiting, isClaudeCode: true})
+	setCachedResult("clux:5.0", paneDetectResult{status: session.StatusWorking})
+	setCachedResult("clux:5.1", paneDetectResult{status: session.StatusIdle})
+	setCachedResult("clux:6.0", paneDetectResult{status: session.StatusWaiting})
 
 	clearPaneHashByPrefix("clux:5.")
 
@@ -1003,6 +829,215 @@ func TestWindowExists_InvalidIndex(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if WindowExists(tt.index) {
 				t.Errorf("WindowExists(%q) = true, want false", tt.index)
+			}
+		})
+	}
+}
+
+// --- parseProcessList ---
+
+func TestParseProcessList(t *testing.T) {
+	tests := []struct {
+		name   string
+		output string
+		want   int
+	}{
+		{
+			"normal output",
+			"  123   1 /usr/bin/bash\n  456 123 /usr/local/bin/claude\n  789 456 /usr/bin/node\n",
+			3,
+		},
+		{
+			"empty output",
+			"",
+			0,
+		},
+		{
+			"malformed line skipped",
+			"  123   1 /usr/bin/bash\nabc\n  789 456 /usr/bin/node\n",
+			2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseProcessList(tt.output)
+			if len(got) != tt.want {
+				t.Errorf("parseProcessList() returned %d items, want %d", len(got), tt.want)
+			}
+		})
+	}
+}
+
+func TestParseProcessList_FieldValues(t *testing.T) {
+	output := "  456 123 /usr/local/bin/claude\n"
+	got := parseProcessList(output)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(got))
+	}
+	p := got[0]
+	if p.pid != 456 {
+		t.Errorf("pid = %d, want 456", p.pid)
+	}
+	if p.ppid != 123 {
+		t.Errorf("ppid = %d, want 123", p.ppid)
+	}
+	if p.comm != "claude" {
+		t.Errorf("comm = %q, want %q", p.comm, "claude")
+	}
+}
+
+// --- buildProcessMaps ---
+
+func TestBuildProcessMaps(t *testing.T) {
+	procs := []processInfo{
+		{pid: 1, ppid: 0, comm: "init"},
+		{pid: 100, ppid: 1, comm: "bash"},
+		{pid: 200, ppid: 100, comm: "claude"},
+		{pid: 300, ppid: 200, comm: "node"},
+	}
+	commByPID, childrenByPID := buildProcessMaps(procs)
+
+	if commByPID[100] != "bash" {
+		t.Errorf("commByPID[100] = %q, want %q", commByPID[100], "bash")
+	}
+	if commByPID[200] != "claude" {
+		t.Errorf("commByPID[200] = %q, want %q", commByPID[200], "claude")
+	}
+	if len(childrenByPID[100]) != 1 || childrenByPID[100][0] != 200 {
+		t.Errorf("childrenByPID[100] = %v, want [200]", childrenByPID[100])
+	}
+}
+
+// --- paneHasClaude ---
+
+func TestPaneHasClaude(t *testing.T) {
+	procs := []processInfo{
+		{pid: 100, ppid: 1, comm: "bash"},
+		{pid: 200, ppid: 100, comm: "claude"},
+		{pid: 300, ppid: 1, comm: "vim"},
+		{pid: 400, ppid: 300, comm: "node"},
+		{pid: 500, ppid: 0, comm: "claude"}, // claude is pane_pid itself
+	}
+	commByPID, childrenByPID := buildProcessMaps(procs)
+
+	tests := []struct {
+		name    string
+		panePID int
+		want    bool
+	}{
+		{"child is claude", 100, true},
+		{"no claude child", 300, false},
+		{"pane_pid is claude", 500, true},
+		{"nonexistent pid", 999, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := paneHasClaude(tt.panePID, commByPID, childrenByPID)
+			if got != tt.want {
+				t.Errorf("paneHasClaude(%d) = %v, want %v", tt.panePID, got, tt.want)
+			}
+		})
+	}
+}
+
+// --- parsePaneListOutput ---
+
+func TestParsePaneListOutput(t *testing.T) {
+	tests := []struct {
+		name   string
+		output string
+		want   int
+	}{
+		{
+			"normal output",
+			"12345\tdev\t0\t0\teditor\t/home/user\n67890\twork\t1\t0\tshell\t/tmp\n",
+			2,
+		},
+		{
+			"empty output",
+			"",
+			0,
+		},
+		{
+			"malformed line skipped",
+			"12345\tdev\t0\t0\teditor\t/home\nbadline\n67890\twork\t1\t0\tshell\t/tmp\n",
+			2,
+		},
+		{
+			"invalid window index skipped",
+			"12345\tdev\tabc\t0\teditor\t/home\n67890\twork\t1\t0\tshell\t/tmp\n",
+			1,
+		},
+		{
+			"invalid pane index skipped",
+			"12345\tdev\t0\tabc\teditor\t/home\n67890\twork\t1\t0\tshell\t/tmp\n",
+			1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parsePaneListOutput(tt.output)
+			if len(got) != tt.want {
+				t.Errorf("parsePaneListOutput() returned %d items, want %d", len(got), tt.want)
+			}
+		})
+	}
+}
+
+func TestParsePaneListOutput_FieldValues(t *testing.T) {
+	output := "12345\tdev-session\t3\t1\tmy-window\t/home/user/code\n"
+	got := parsePaneListOutput(output)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(got))
+	}
+	p := got[0]
+	if p.panePID != 12345 {
+		t.Errorf("panePID = %d, want 12345", p.panePID)
+	}
+	if p.sessionName != "dev-session" {
+		t.Errorf("sessionName = %q, want %q", p.sessionName, "dev-session")
+	}
+	if p.windowIndex != "3" {
+		t.Errorf("windowIndex = %q, want %q", p.windowIndex, "3")
+	}
+	if p.paneIndex != "1" {
+		t.Errorf("paneIndex = %q, want %q", p.paneIndex, "1")
+	}
+	if p.windowName != "my-window" {
+		t.Errorf("windowName = %q, want %q", p.windowName, "my-window")
+	}
+	if p.dir != "/home/user/code" {
+		t.Errorf("dir = %q, want %q", p.dir, "/home/user/code")
+	}
+}
+
+// --- isAncestorOf ---
+
+func TestIsAncestorOf(t *testing.T) {
+	// Process tree: 1 -> 100 -> 200 -> 300
+	childrenByPID := map[int][]int{
+		1:   {100},
+		100: {200},
+		200: {300},
+	}
+
+	tests := []struct {
+		name      string
+		ancestor  int
+		target    int
+		want      bool
+	}{
+		{"direct child", 100, 200, true},
+		{"grandchild", 100, 300, true},
+		{"not ancestor", 200, 100, false},
+		{"same pid", 100, 100, false},
+		{"nonexistent", 999, 100, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isAncestorOf(tt.ancestor, tt.target, childrenByPID)
+			if got != tt.want {
+				t.Errorf("isAncestorOf(%d, %d) = %v, want %v", tt.ancestor, tt.target, got, tt.want)
 			}
 		})
 	}

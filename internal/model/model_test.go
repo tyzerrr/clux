@@ -8,9 +8,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/tanaka0325/clux/internal/config"
 	"github.com/tanaka0325/clux/internal/session"
-	"github.com/tanaka0325/clux/internal/tmux"
 )
 
 // testModel creates a Model with test sessions set in both sessions and filtered.
@@ -990,76 +988,6 @@ func TestStatusSummary_AllSame(t *testing.T) {
 	}
 }
 
-// --- excludeRegistered tests ---
-
-func TestExcludeRegistered_NilConfig(t *testing.T) {
-	windows := []tmux.ExternalWindowInfo{
-		{Session: "s1", WindowIndex: "1"},
-	}
-	result := excludeRegistered(windows, nil)
-	if len(result) != 1 {
-		t.Errorf("expected 1 window, got %d", len(result))
-	}
-}
-
-func TestExcludeRegistered_EmptyConfig(t *testing.T) {
-	windows := []tmux.ExternalWindowInfo{
-		{Session: "s1", WindowIndex: "1"},
-	}
-	result := excludeRegistered(windows, &config.Config{})
-	if len(result) != 1 {
-		t.Errorf("expected 1 window, got %d", len(result))
-	}
-}
-
-func TestExcludeRegistered_FiltersRegistered(t *testing.T) {
-	windows := []tmux.ExternalWindowInfo{
-		{Session: "s1", WindowIndex: "1"},
-		{Session: "s2", WindowIndex: "2"},
-		{Session: "s3", WindowIndex: "3"},
-	}
-	cfg := &config.Config{
-		ExternalSessions: []config.ExternalSession{
-			{Session: "s1", Window: "1"},
-			{Session: "s3", Window: "3"},
-		},
-	}
-	result := excludeRegistered(windows, cfg)
-	if len(result) != 1 {
-		t.Fatalf("expected 1 window, got %d", len(result))
-	}
-	if result[0].Session != "s2" {
-		t.Errorf("expected s2, got %s", result[0].Session)
-	}
-}
-
-// --- filterExtWindows tests ---
-
-func TestFilterExtWindows_EmptyQuery(t *testing.T) {
-	windows := []tmux.ExternalWindowInfo{
-		{Session: "s1", WindowIndex: "1", WindowName: "win1", Dir: "/tmp"},
-		{Session: "s2", WindowIndex: "2", WindowName: "win2", Dir: "/home"},
-	}
-	result := filterExtWindows(windows, "")
-	if len(result) != 2 {
-		t.Errorf("expected 2 windows, got %d", len(result))
-	}
-}
-
-func TestFilterExtWindows_MatchesQuery(t *testing.T) {
-	windows := []tmux.ExternalWindowInfo{
-		{Session: "alpha", WindowIndex: "1", WindowName: "win1", Dir: "/tmp"},
-		{Session: "beta", WindowIndex: "2", WindowName: "win2", Dir: "/home"},
-	}
-	result := filterExtWindows(windows, "alpha")
-	if len(result) == 0 {
-		t.Fatal("expected at least one match")
-	}
-	if result[0].Session != "alpha" {
-		t.Errorf("expected alpha, got %s", result[0].Session)
-	}
-}
-
 // --- dashCols tests ---
 
 func TestDashCols(t *testing.T) {
@@ -1142,68 +1070,6 @@ func TestModeList_DSwitchesToDashboard(t *testing.T) {
 	}
 	if rm.dashCursor != 0 {
 		t.Errorf("expected dashCursor=0, got %d", rm.dashCursor)
-	}
-}
-
-// --- ModeList key 'a' (add external) ---
-
-func TestModeList_ASwitchesToAddExternal(t *testing.T) {
-	m := testModel(testSessions)
-	msg := tea.KeyPressMsg{Code: 'a', Text: "a"}
-	result, _ := m.updateList(msg)
-	rm := result.(Model)
-	if rm.mode != ModeAddExternal {
-		t.Errorf("expected ModeAddExternal, got %v", rm.mode)
-	}
-}
-
-// --- ModeAddExternal tests ---
-
-func TestModeAddExternal_EscGoesBackToList(t *testing.T) {
-	m := New()
-	m.mode = ModeAddExternal
-	m.cfg = &config.Config{}
-	msg := tea.KeyPressMsg{Code: tea.KeyEscape}
-	result, _ := m.updateAddExternal(msg)
-	rm := result.(Model)
-	if rm.mode != ModeList {
-		t.Errorf("expected ModeList, got %v", rm.mode)
-	}
-}
-
-func TestModeAddExternal_UpDownMovesCursor(t *testing.T) {
-	m := New()
-	m.mode = ModeAddExternal
-	m.cfg = &config.Config{}
-	m.filteredExtWindows = []tmux.ExternalWindowInfo{
-		{Session: "s1", WindowIndex: "1"},
-		{Session: "s2", WindowIndex: "2"},
-		{Session: "s3", WindowIndex: "3"},
-	}
-	m.addExtCursor = 0
-
-	// Down
-	msg := tea.KeyPressMsg{Code: tea.KeyDown}
-	result, _ := m.updateAddExternal(msg)
-	rm := result.(Model)
-	if rm.addExtCursor != 1 {
-		t.Errorf("expected addExtCursor=1, got %d", rm.addExtCursor)
-	}
-
-	// Up
-	msg = tea.KeyPressMsg{Code: tea.KeyUp}
-	result, _ = rm.updateAddExternal(msg)
-	rm = result.(Model)
-	if rm.addExtCursor != 0 {
-		t.Errorf("expected addExtCursor=0, got %d", rm.addExtCursor)
-	}
-
-	// Up wraps
-	msg = tea.KeyPressMsg{Code: tea.KeyUp}
-	result, _ = rm.updateAddExternal(msg)
-	rm = result.(Model)
-	if rm.addExtCursor != 2 {
-		t.Errorf("expected addExtCursor=2 (wrap), got %d", rm.addExtCursor)
 	}
 }
 
@@ -1551,33 +1417,6 @@ func TestUpdate_PreviewMsg(t *testing.T) {
 	}
 }
 
-func TestUpdate_ExternalWindowsMsg(t *testing.T) {
-	m := New()
-	m.mode = ModeAddExternal
-	windows := []tmux.ExternalWindowInfo{
-		{Session: "main", WindowIndex: "1", WindowName: "editor", Dir: "/home"},
-		{Session: "work", WindowIndex: "2", WindowName: "shell", Dir: "/tmp"},
-	}
-	result, _ := m.Update(externalWindowsMsg(windows))
-	rm := result.(Model)
-	if len(rm.externalWindows) != 2 {
-		t.Errorf("expected 2 external windows, got %d", len(rm.externalWindows))
-	}
-	if len(rm.filteredExtWindows) != 2 {
-		t.Errorf("expected 2 filtered windows, got %d", len(rm.filteredExtWindows))
-	}
-}
-
-func TestUpdate_ExternalAddedMsg(t *testing.T) {
-	m := New()
-	m.mode = ModeAddExternal
-	result, cmd := m.Update(externalAddedMsg{})
-	rm := result.(Model)
-	// externalAddedMsg is not handled in Update — check it doesn't panic
-	_ = rm
-	_ = cmd
-}
-
 func TestUpdate_DashPreviewsMsg(t *testing.T) {
 	m := testModel(testSessions)
 	m.mode = ModeDashboard
@@ -1589,14 +1428,6 @@ func TestUpdate_DashPreviewsMsg(t *testing.T) {
 	}
 	if rm.dashPreviews[0] != "content0" {
 		t.Errorf("expected dashPreviews[0]='content0', got %q", rm.dashPreviews[0])
-	}
-}
-
-func TestUpdate_SessionUnregistered(t *testing.T) {
-	m := testModel(testSessions)
-	_, cmd := m.Update(sessionUnregistered{})
-	if cmd == nil {
-		t.Error("expected non-nil cmd to refresh sessions")
 	}
 }
 
@@ -1654,24 +1485,6 @@ func TestUpdate_BroadcastCompletedMsg_WithErrors(t *testing.T) {
 // ====================================================================
 // View rendering tests
 // ====================================================================
-
-func TestView_ModeAddExternal(t *testing.T) {
-	m := New()
-	m.mode = ModeAddExternal
-	m.width = 80
-	m.height = 24
-	m.externalWindows = []tmux.ExternalWindowInfo{
-		{Session: "main", WindowIndex: "1", WindowName: "editor", Dir: "/home"},
-	}
-	m.filteredExtWindows = m.externalWindows
-	out := m.View().Content
-	if !strings.Contains(out, "Add External") && !strings.Contains(out, "external") && !strings.Contains(out, "Register") {
-		// Check for any expected content - the view should render something
-		if out == "" {
-			t.Error("expected non-empty view for ModeAddExternal")
-		}
-	}
-}
 
 func TestView_ModeDashboard(t *testing.T) {
 	m := testModel(testSessions)
@@ -2139,14 +1952,6 @@ func TestGroupKey_WithoutGhqRoot(t *testing.T) {
 	key := groupKey(s, "")
 	if key != "to/project" {
 		t.Errorf("expected 'to/project', got %q", key)
-	}
-}
-
-func TestGroupKey_External(t *testing.T) {
-	s := session.Session{External: true, Dir: "/any/dir"}
-	key := groupKey(s, "/some/root/")
-	if key != "External" {
-		t.Errorf("expected 'External', got %q", key)
 	}
 }
 
