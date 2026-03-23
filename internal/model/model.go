@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"sort"
@@ -283,8 +284,21 @@ func fetchDashboardPreviews(sessions []session.Session) tea.Cmd {
 	}
 }
 
+const ghqCmdTimeout = 5 * time.Second
+
+// ghqCommand creates an exec.Cmd for a ghq subcommand with a timeout context.
+// The returned CancelFunc must be called by the caller to release context resources.
+func ghqCommand(args ...string) (*exec.Cmd, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(context.Background(), ghqCmdTimeout)
+	cmd := exec.CommandContext(ctx, "ghq", args...)
+	cmd.WaitDelay = ghqCmdTimeout
+	return cmd, cancel
+}
+
 func listGhqDirs() ([]string, error) {
-	out, err := exec.Command("ghq", "list", "-p").Output()
+	cmd, cancel := ghqCommand("list", "-p")
+	out, err := cmd.Output()
+	cancel()
 	if err != nil {
 		return nil, fmt.Errorf("ghq list: %w", err)
 	}
@@ -480,7 +494,9 @@ type indexedSession struct {
 }
 
 func fetchGhqRoot() tea.Msg {
-	out, err := exec.Command("ghq", "root").Output()
+	cmd, cancel := ghqCommand("root")
+	out, err := cmd.Output()
+	cancel()
 	if err != nil {
 		return ghqRootMsg("")
 	}
