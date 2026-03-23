@@ -235,12 +235,34 @@ func fetchPreviewCmdForSessionWithOffset(s session.Session, scrollOffset, height
 	}
 }
 
-func fetchDashboardPreviews(sessions []session.Session) tea.Cmd {
+func fetchDashboardPreviewWithOffset(s session.Session, tileIdx, scrollOffset, height int) tea.Cmd {
 	return func() tea.Msg {
+		sessionName := s.SessionName
+		if sessionName == "" {
+			sessionName = tmux.SessionName
+		}
+		paneIndex := resolvePaneIndex(s.PaneIndex)
+		content, err := tmux.CapturePaneForSessionWithOffset(sessionName, s.WindowIndex, paneIndex, scrollOffset, height)
+		if err != nil {
+			return dashPreviewsMsg(map[int]string{tileIdx: ""})
+		}
+		return dashPreviewsMsg(map[int]string{tileIdx: content})
+	}
+}
+
+func fetchDashboardPreviews(sessions []session.Session, skipIdx ...int) tea.Cmd {
+	return func() tea.Msg {
+		skip := -1
+		if len(skipIdx) > 0 {
+			skip = skipIdx[0]
+		}
 		result := make(map[int]string, len(sessions))
 		var mu sync.Mutex
 		var wg sync.WaitGroup
 		for i, s := range sessions {
+			if i == skip {
+				continue
+			}
 			wg.Add(1)
 			go func(idx int, s session.Session) {
 				defer wg.Done()
@@ -645,7 +667,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				pageItems = 0
 			}
 			pageSessions := m.filtered[m.dashPageOffset : m.dashPageOffset+pageItems]
-			cmds := []tea.Cmd{fetchSessionsCmd, doTick(), fetchDashboardPreviews(pageSessions)}
+			cmds := []tea.Cmd{fetchSessionsCmd, doTick()}
+			if m.previewScrollOffset > 0 && m.dashCursor < len(pageSessions) {
+				cmds = append(cmds, fetchDashboardPreviews(pageSessions, m.dashCursor))
+				cmds = append(cmds, fetchDashboardPreviewWithOffset(pageSessions[m.dashCursor], m.dashCursor, m.previewScrollOffset, dashTilePreviewHeight(m)))
+			} else {
+				cmds = append(cmds, fetchDashboardPreviews(pageSessions))
+			}
 			return m, tea.Batch(cmds...)
 		default:
 			return m, doTick()
@@ -1036,16 +1064,32 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "q":
 		return m, tea.Quit
+	case "ctrl+u":
+		if pageItems > 0 && m.dashPageOffset+m.dashCursor < len(m.filtered) && dashTilePreviewHeight(m) > 0 {
+			m.previewScrollOffset += dashPreviewScrollStep(m)
+			s := m.filtered[m.dashPageOffset+m.dashCursor]
+			return m, fetchDashboardPreviewWithOffset(s, m.dashCursor, m.previewScrollOffset, dashTilePreviewHeight(m))
+		}
 	case "ctrl+d":
+		if pageItems > 0 && m.dashPageOffset+m.dashCursor < len(m.filtered) && dashTilePreviewHeight(m) > 0 {
+			m.previewScrollOffset -= dashPreviewScrollStep(m)
+			if m.previewScrollOffset < 0 {
+				m.previewScrollOffset = 0
+			}
+			s := m.filtered[m.dashPageOffset+m.dashCursor]
+			return m, fetchDashboardPreviewWithOffset(s, m.dashCursor, m.previewScrollOffset, dashTilePreviewHeight(m))
+		}
+	case "]":
 		// Next page
 		nextOffset := m.dashPageOffset + maxVisible
 		if nextOffset < len(m.filtered) {
 			m.dashPageOffset = nextOffset
 			m.dashCursor = 0
+			m.previewScrollOffset = 0
 			pageSessions := m.filtered[m.dashPageOffset : m.dashPageOffset+min(m.dashMaxVisible(), len(m.filtered)-m.dashPageOffset)]
 			return m, fetchDashboardPreviews(pageSessions)
 		}
-	case "ctrl+u":
+	case "[":
 		// Previous page
 		prevOffset := m.dashPageOffset - maxVisible
 		if prevOffset < 0 {
@@ -1054,20 +1098,24 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if prevOffset != m.dashPageOffset {
 			m.dashPageOffset = prevOffset
 			m.dashCursor = 0
+			m.previewScrollOffset = 0
 			pageSessions := m.filtered[m.dashPageOffset : m.dashPageOffset+min(m.dashMaxVisible(), len(m.filtered)-m.dashPageOffset)]
 			return m, fetchDashboardPreviews(pageSessions)
 		}
 	case "h", "left":
 		if m.dashCursor%cols > 0 {
 			m.dashCursor--
+			m.previewScrollOffset = 0
 		}
 	case "l", "right":
 		if m.dashCursor%cols < cols-1 && m.dashCursor+1 < pageItems {
 			m.dashCursor++
+			m.previewScrollOffset = 0
 		}
 	case "k", "up", "ctrl+p":
 		if m.dashCursor-cols >= 0 {
 			m.dashCursor -= cols
+			m.previewScrollOffset = 0
 		} else if m.dashPageOffset > 0 {
 			// Go to previous page
 			prevOffset := m.dashPageOffset - maxVisible
@@ -1076,16 +1124,19 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			m.dashPageOffset = prevOffset
 			m.dashCursor = 0
+			m.previewScrollOffset = 0
 			pageSessions := m.filtered[m.dashPageOffset : m.dashPageOffset+min(m.dashMaxVisible(), len(m.filtered)-m.dashPageOffset)]
 			return m, fetchDashboardPreviews(pageSessions)
 		}
 	case "j", "down", "ctrl+n":
 		if m.dashCursor+cols < pageItems {
 			m.dashCursor += cols
+			m.previewScrollOffset = 0
 		} else if m.dashPageOffset+maxVisible < len(m.filtered) {
 			// Go to next page
 			m.dashPageOffset += maxVisible
 			m.dashCursor = 0
+			m.previewScrollOffset = 0
 			pageSessions := m.filtered[m.dashPageOffset : m.dashPageOffset+min(m.dashMaxVisible(), len(m.filtered)-m.dashPageOffset)]
 			return m, fetchDashboardPreviews(pageSessions)
 		}
@@ -1309,9 +1360,55 @@ func previewHeight(m Model) int {
 	return h
 }
 
-// previewScrollStep returns the number of lines to scroll per Ctrl+U/D press.
+// previewScrollStep returns the number of lines to scroll per ctrl+u/d press.
 func previewScrollStep(m Model) int {
 	h := previewHeight(m)
+	if h < 2 {
+		return 1
+	}
+	return h / 2
+}
+
+// dashTilePreviewHeight returns the number of preview lines for the tile at the given cursor position.
+func dashTilePreviewHeight(m Model) int {
+	cols := m.dashCols()
+	maxVisible := m.dashMaxVisible()
+	pageItems := len(m.filtered) - m.dashPageOffset
+	if pageItems > maxVisible {
+		pageItems = maxVisible
+	}
+	if pageItems < 1 {
+		pageItems = 1
+	}
+	rows := (pageItems + cols - 1) / cols
+	if rows < 1 {
+		rows = 1
+	}
+	headerLines := 3
+	helpLines := 2
+	borderHeight := 2
+	availableHeight := m.height - headerLines - helpLines - (rows * (borderHeight + 1))
+	baseCellHeight := availableHeight / rows
+	heightRemainder := availableHeight % rows
+	if baseCellHeight < 5 {
+		baseCellHeight = 5
+		heightRemainder = 0
+	}
+	row := m.dashCursor / cols
+	rowCellHeight := baseCellHeight
+	if row < heightRemainder {
+		rowCellHeight++
+	}
+	previewLines := rowCellHeight - 2 // minus header line and separator
+	if previewLines < 1 {
+		return 1
+	}
+	return previewLines
+}
+
+// dashPreviewScrollStep returns the number of lines to scroll per ctrl+u/d press in dashboard.
+func dashPreviewScrollStep(m Model) int {
+	h := dashTilePreviewHeight(m)
 	if h < 2 {
 		return 1
 	}
@@ -1700,7 +1797,7 @@ func (m Model) View() tea.View {
 	} else {
 		previewLabel := "p:preview"
 		if m.previewEnabled {
-			previewLabel = "p:preview  Ctrl+U/D:scroll"
+			previewLabel = "p:preview  ctrl+u/d:scroll"
 		}
 		groupLabel := "g:group"
 		helpBar = styleHelpBar.Render("↵:attach  j/k/↑/↓:navigate  n:new  b:broadcast  K:kill  " + previewLabel + "  " + groupLabel + "  d:dashboard  /:filter  q/Esc:quit")
@@ -1891,7 +1988,7 @@ func (m Model) viewNewSession(b *strings.Builder) (string, *overlayCursor) {
 	}
 
 	b.WriteString("\n\n")
-	b.WriteString(styleHelpBar.Render("↵:select  Esc:cancel  ↑/↓/Ctrl+K/J:navigate"))
+	b.WriteString(styleHelpBar.Render("↵:select  Esc:cancel  ↑/↓/ctrl+k/j:navigate"))
 
 	cur := &overlayCursor{x: 1 + textInputCursorX(m.newSessionInput), y: cursorY}
 	return renderOverlayBox(b.String(), overlayWidth), cur
@@ -2106,7 +2203,7 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 
 	// Help bar
 	b.WriteString("\n")
-	b.WriteString(styleHelpBar.Render("↵:attach  K:kill  n:new  /:filter  b:broadcast  Ctrl+U/D:page  hjkl/↑↓←→:navigate  Esc/d:back  q:quit"))
+	b.WriteString(styleHelpBar.Render("↵:attach  K:kill  n:new  /:filter  b:broadcast  ctrl+u/d:scroll  [:prev ]:next  hjkl/↑↓←→:navigate  Esc/d:back  q:quit"))
 
 	return b.String()
 }
@@ -2169,7 +2266,7 @@ func (m Model) viewBroadcastSelect(b *strings.Builder) (string, *overlayCursor) 
 	}
 
 	b.WriteString("\n\n")
-	b.WriteString(styleHelpBar.Render("Space:toggle  ↵:confirm  Esc:cancel  ↑/↓/Ctrl+K/J:navigate"))
+	b.WriteString(styleHelpBar.Render("Space:toggle  ↵:confirm  Esc:cancel  ↑/↓/ctrl+k/j:navigate"))
 
 	cur := &overlayCursor{x: 1 + textInputCursorX(m.broadcastInput), y: cursorY}
 	return renderOverlayBox(b.String(), overlayWidth), cur
