@@ -20,6 +20,9 @@ import (
 // SessionName is the name of the dedicated clux tmux session.
 const SessionName = "clux"
 
+// claudeProcessName is the expected process name for Claude Code.
+const claudeProcessName = "claude"
+
 var (
 	validWindowIndex = regexp.MustCompile(`^\d+$`)
 	safeWindowName   = regexp.MustCompile(`[^a-zA-Z0-9_\-.]`)
@@ -273,7 +276,7 @@ func ListWindows() ([]session.Session, error) {
 
 		// If content hasn't changed and we have a cached result, reuse it.
 		if contentHashUnchanged(key, content) {
-			if cached, ok := getCachedResult(key); ok && cached.isClaudeCode {
+			if cached, ok := getCachedResult(key); ok && cached.isClaudeCode && isClaudeCodeProcessFn(SessionName, w.index, w.paneIndex) {
 				sessions = append(sessions, session.Session{
 					Name:        w.name,
 					Summary:     cached.summary,
@@ -392,7 +395,7 @@ func ScanPanes(sessionName, windowIndex string) []session.Session {
 
 		// If content hasn't changed and we have a cached result, reuse it.
 		if contentHashUnchanged(key, content) {
-			if cached, ok := getCachedResult(key); ok && cached.isClaudeCode {
+			if cached, ok := getCachedResult(key); ok && cached.isClaudeCode && isClaudeCodeProcessFn(sessionName, windowIndex, p.paneIndex) {
 				result = append(result, session.Session{
 					Name:        p.name,
 					Summary:     cached.summary,
@@ -897,9 +900,10 @@ func getClaudeStatusForSession(sessionName, windowIndex, paneIndex string) strin
 
 // Package-level function variables for dependency injection in tests.
 var (
-	getClaudeStatusFn   = getClaudeStatusForSession
-	hasActiveChildrenFn = hasActiveChildrenForSession
-	contentChangedFn    = contentChanged
+	getClaudeStatusFn     = getClaudeStatusForSession
+	hasActiveChildrenFn   = hasActiveChildrenForSession
+	contentChangedFn      = contentChanged
+	isClaudeCodeProcessFn = isClaudeCodeProcessForSession
 	// WindowExistsFn is the function used to check window existence.
 	// Exported so that other packages (e.g., model) can override it in tests.
 	WindowExistsFn = WindowExists
@@ -938,6 +942,35 @@ func hasActiveChildrenForSession(sessionName, windowIndex, paneIndex string) boo
 			continue
 		}
 		if exec.Command("pgrep", "-P", child).Run() == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// isClaudeCodeProcessForSession checks whether the pane's shell has a direct child process
+// named "claude", indicating that Claude Code is running in this pane.
+// Uses "pgrep -lP" to retrieve child PIDs and their command names in a single call.
+func isClaudeCodeProcessForSession(sessionName, windowIndex, paneIndex string) bool {
+	panePID := tmuxDisplayOption(sessionName, windowIndex, paneIndex, "#{pane_pid}")
+	if panePID == "" {
+		return false
+	}
+	out, err := exec.Command("pgrep", "-lP", panePID).Output()
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// pgrep -lP output format: "PID COMMAND_NAME"
+		parts := strings.SplitN(line, " ", 2)
+		if len(parts) < 2 {
+			continue
+		}
+		if filepath.Base(parts[1]) == claudeProcessName {
 			return true
 		}
 	}
@@ -993,8 +1026,8 @@ func detectStatusWithHooksForSession(content, sessionName, windowIndex, paneInde
 		}
 	}
 
-	// Require Claude Code presence in pane content.
-	if !hasClaudeCode(content) {
+	// Require Claude Code process in the pane's process tree.
+	if !isClaudeCodeProcessFn(sessionName, windowIndex, paneIndex) {
 		return session.StatusUnknown, false
 	}
 
@@ -1020,23 +1053,6 @@ func detectStatusWithHooksForSession(content, sessionName, windowIndex, paneInde
 
 	debugLogf("[%s] -> final=idle", key)
 	return session.StatusIdle, true
-}
-
-// hasClaudeCode checks whether the pane content looks like Claude Code is running.
-// Some indicators intentionally overlap with isWaiting — this is by design so that
-// waiting prompts also serve as Claude Code detection signals.
-func hasClaudeCode(content string) bool {
-	indicators := []string{
-		"-- INSERT --",
-		"Do you want to proceed?",
-		"Esc to cancel",
-	}
-	for _, ind := range indicators {
-		if strings.Contains(content, ind) {
-			return true
-		}
-	}
-	return false
 }
 
 // isWaiting returns true when the pane appears to be showing a permission prompt.
@@ -1076,4 +1092,3 @@ func getGitBranch(dir string) string {
 func getWindowSummaryForSession(sessionName, windowIndex, paneIndex string) string {
 	return tmuxDisplayOption(sessionName, windowIndex, paneIndex, "#{@clux-summary}")
 }
-

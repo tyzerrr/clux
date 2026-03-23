@@ -16,31 +16,6 @@ func assert(t *testing.T, cond bool, format string, args ...any) {
 	}
 }
 
-// --- hasClaudeCode ---
-
-func TestHasClaudeCode(t *testing.T) {
-	tests := []struct {
-		name    string
-		content string
-		want    bool
-	}{
-		{"contains INSERT indicator", "some text\n-- INSERT --\nmore text", true},
-		{"contains Do you want to proceed", "Please confirm\nDo you want to proceed?\n", true},
-		{"contains Esc to cancel", "running...\nEsc to cancel\n", true},
-		{"no indicators", "just some regular shell output", false},
-		{"empty string", "", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := hasClaudeCode(tt.content)
-			if got != tt.want {
-				t.Errorf("hasClaudeCode(%q) = %v, want %v", tt.content, got, tt.want)
-			}
-		})
-	}
-}
-
 // --- isWaiting ---
 
 func TestIsWaiting(t *testing.T) {
@@ -666,18 +641,22 @@ func withMockedDeps(t *testing.T,
 	statusFn func(string, string, string) string,
 	childrenFn func(string, string, string) bool,
 	hashChangedFn func(string, string) bool,
+	ccProcessFn func(string, string, string) bool,
 ) {
 	t.Helper()
 	origStatus := getClaudeStatusFn
 	origChildren := hasActiveChildrenFn
 	origHash := contentChangedFn
+	origCCProcess := isClaudeCodeProcessFn
 	getClaudeStatusFn = statusFn
 	hasActiveChildrenFn = childrenFn
 	contentChangedFn = hashChangedFn
+	isClaudeCodeProcessFn = ccProcessFn
 	t.Cleanup(func() {
 		getClaudeStatusFn = origStatus
 		hasActiveChildrenFn = origChildren
 		contentChangedFn = origHash
+		isClaudeCodeProcessFn = origCCProcess
 	})
 }
 
@@ -687,6 +666,7 @@ func TestDetect_HashChanged_Working(t *testing.T) {
 		func(_, _, _ string) string { return "" },
 		func(_, _, _ string) bool { return false },
 		func(_ string, _ string) bool { return true },
+		func(_, _, _ string) bool { return true },
 	)
 	content := "-- INSERT --\nsome output\n❯ "
 	st, isCC := detectStatusWithHooksForSession(content, "clux", "0", "0")
@@ -700,6 +680,7 @@ func TestDetect_HashStable_WaitingPattern(t *testing.T) {
 		func(_, _, _ string) string { return "" },
 		func(_, _, _ string) bool { return false },
 		func(_ string, _ string) bool { return false },
+		func(_, _, _ string) bool { return true },
 	)
 	content := "-- INSERT --\nDo you want to proceed?\n❯ "
 	st, isCC := detectStatusWithHooksForSession(content, "clux", "0", "0")
@@ -713,6 +694,7 @@ func TestDetect_HashStable_ActiveChildren_Working(t *testing.T) {
 		func(_, _, _ string) string { return "" },
 		func(_, _, _ string) bool { return true },
 		func(_ string, _ string) bool { return false },
+		func(_, _, _ string) bool { return true },
 	)
 	content := "-- INSERT --\nsome output"
 	st, isCC := detectStatusWithHooksForSession(content, "clux", "0", "0")
@@ -726,6 +708,7 @@ func TestDetect_HashStable_NoWaiting_NoChildren_Idle(t *testing.T) {
 		func(_, _, _ string) string { return "" },
 		func(_, _, _ string) bool { return false },
 		func(_ string, _ string) bool { return false },
+		func(_, _, _ string) bool { return true },
 	)
 	content := "-- INSERT --\nsome output\n❯ "
 	st, isCC := detectStatusWithHooksForSession(content, "clux", "0", "0")
@@ -739,6 +722,7 @@ func TestDetect_HookWaiting_Immediate(t *testing.T) {
 		func(_, _, _ string) string { return "waiting" },
 		func(_, _, _ string) bool { t.Error("should not be called"); return false },
 		func(_ string, _ string) bool { t.Error("should not be called"); return false },
+		func(_, _, _ string) bool { t.Error("should not be called"); return true },
 	)
 	content := "-- INSERT --\nsome output"
 	st, isCC := detectStatusWithHooksForSession(content, "clux", "0", "0")
@@ -752,6 +736,7 @@ func TestDetect_HookIdle_Ignored_HashChanged(t *testing.T) {
 		func(_, _, _ string) string { return "idle" },
 		func(_, _, _ string) bool { return false },
 		func(_ string, _ string) bool { return true },
+		func(_, _, _ string) bool { return true },
 	)
 	content := "-- INSERT --\nsome output\n❯ "
 	st, isCC := detectStatusWithHooksForSession(content, "clux", "0", "0")
@@ -759,14 +744,15 @@ func TestDetect_HookIdle_Ignored_HashChanged(t *testing.T) {
 	assert(t, isCC, "expected isClaudeCode=true")
 }
 
-// Not Claude Code -> Unknown
+// Not Claude Code process -> Unknown
 func TestDetect_NotClaudeCode(t *testing.T) {
 	withMockedDeps(t,
 		func(_, _, _ string) string { return "" },
 		func(_, _, _ string) bool { return false },
 		func(_ string, _ string) bool { return false },
+		func(_, _, _ string) bool { return false },
 	)
-	content := "regular shell output"
+	content := "any content here"
 	st, isCC := detectStatusWithHooksForSession(content, "clux", "0", "0")
 	assert(t, st == session.StatusUnknown, "expected Unknown, got %v", st)
 	assert(t, !isCC, "expected isClaudeCode=false")
@@ -778,6 +764,7 @@ func TestDetect_HookWorking_NotTrusted_HashStable_Idle(t *testing.T) {
 		func(_, _, _ string) string { return "working" },
 		func(_, _, _ string) bool { return false },
 		func(_ string, _ string) bool { return false },
+		func(_, _, _ string) bool { return true },
 	)
 	content := "-- INSERT --\nsome output\n❯ "
 	st, isCC := detectStatusWithHooksForSession(content, "clux", "0", "0")
@@ -791,6 +778,7 @@ func TestDetect_HashStable_ClaudeCodeNoPattern_Idle(t *testing.T) {
 		func(_, _, _ string) string { return "" },
 		func(_, _, _ string) bool { return false },
 		func(_ string, _ string) bool { return false },
+		func(_, _, _ string) bool { return true },
 	)
 	content := "-- INSERT --\nsome unrecognized output"
 	st, isCC := detectStatusWithHooksForSession(content, "clux", "0", "0")
@@ -804,6 +792,7 @@ func TestDetect_OldWaitingInScrollback_HashStable_Idle(t *testing.T) {
 		func(_, _, _ string) string { return "" },
 		func(_, _, _ string) bool { return false },
 		func(_ string, _ string) bool { return false },
+		func(_, _, _ string) bool { return true },
 	)
 	// "Do you want to proceed?" is in scrollback (more than 15 lines up),
 	// so bottomContent won't include it.
