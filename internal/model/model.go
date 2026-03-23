@@ -1345,7 +1345,8 @@ func dashPreviewScrollStep(_ Model) int {
 	return 3
 }
 
-// dashMaxScrollOffset returns the maximum scroll offset based on cached preview content.
+// dashMaxScrollOffset returns the maximum scroll offset based on cached preview content
+// and the tile's preview line count (matching viewDashboard's calculation).
 func dashMaxScrollOffset(m Model) int {
 	if m.dashPreviews == nil {
 		return 0
@@ -1355,10 +1356,46 @@ func dashMaxScrollOffset(m Model) int {
 	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
 		lines = lines[:len(lines)-1]
 	}
-	if len(lines) <= 1 {
+
+	// Calculate rowPreviewLines matching viewDashboard logic.
+	cols := m.dashCols()
+	maxVisible := m.dashMaxVisible()
+	pageItems := len(m.filtered) - m.dashPageOffset
+	if pageItems > maxVisible {
+		pageItems = maxVisible
+	}
+	if pageItems < 1 {
+		pageItems = 1
+	}
+	rows := (pageItems + cols - 1) / cols
+	if rows < 1 {
+		rows = 1
+	}
+	headerLines := 3
+	helpLines := 2
+	borderHeight := 2
+	availableHeight := m.height - headerLines - helpLines - (rows * (borderHeight + 1))
+	baseCellHeight := availableHeight / rows
+	heightRemainder := availableHeight % rows
+	if baseCellHeight < 5 {
+		baseCellHeight = 5
+		heightRemainder = 0
+	}
+	row := m.dashCursor / cols
+	rowCellHeight := baseCellHeight
+	if row < heightRemainder {
+		rowCellHeight++
+	}
+	rowPreviewLines := rowCellHeight - 2
+	if rowPreviewLines < 1 {
+		rowPreviewLines = 1
+	}
+
+	maxScroll := len(lines) - rowPreviewLines
+	if maxScroll < 0 {
 		return 0
 	}
-	return len(lines)
+	return maxScroll
 }
 
 // --- View ---
