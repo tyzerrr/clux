@@ -7,12 +7,6 @@ import (
 	"path/filepath"
 )
 
-// ExternalSession represents a registered external tmux session:window.
-type ExternalSession struct {
-	Session string `json:"session"`
-	Window  string `json:"window"`
-}
-
 // NotificationConfig controls which status transitions trigger a bell notification.
 type NotificationConfig struct {
 	WorkingToIdle    *bool `json:"working_to_idle,omitempty"`
@@ -37,10 +31,9 @@ func (n *NotificationConfig) ShouldNotifyWorkingToWaiting() bool {
 
 // Config holds clux persistent configuration.
 type Config struct {
-	ExternalSessions []ExternalSession  `json:"external_sessions"`
-	PreviewDefault   bool               `json:"preview_default"`
-	Notifications    *NotificationConfig `json:"notifications,omitempty"`
-	GroupDefault     bool               `json:"group_default"`
+	PreviewDefault bool                `json:"preview_default"`
+	Notifications  *NotificationConfig `json:"notifications,omitempty"`
+	GroupDefault   bool                `json:"group_default"`
 }
 
 const configDir = ".config/clux"
@@ -97,29 +90,4 @@ func (c *Config) Save() error {
 		return err
 	}
 	return nil
-}
-
-// Add adds an external session. Returns error if already registered.
-func (c *Config) Add(session, window string) error {
-	for _, es := range c.ExternalSessions {
-		if es.Session == session && es.Window == window {
-			return fmt.Errorf("%s:%s is already registered", session, window)
-		}
-	}
-	c.ExternalSessions = append(c.ExternalSessions, ExternalSession{
-		Session: session,
-		Window:  window,
-	})
-	return nil
-}
-
-// Remove removes an external session. Returns error if not found.
-func (c *Config) Remove(session, window string) error {
-	for i, es := range c.ExternalSessions {
-		if es.Session == session && es.Window == window {
-			c.ExternalSessions = append(c.ExternalSessions[:i], c.ExternalSessions[i+1:]...)
-			return nil
-		}
-	}
-	return fmt.Errorf("%s:%s is not registered", session, window)
 }
