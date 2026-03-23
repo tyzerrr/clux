@@ -1171,14 +1171,6 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "q":
 		return m, tea.Quit
-	case "F":
-		if m.dashboardOnly {
-			return m, tea.Quit
-		}
-		go func() {
-			_ = tmux.DisplayPopup("clux", "dashboard")
-		}()
-		return m, nil
 	case "]":
 		// Next page
 		nextOffset := m.dashPageOffset + maxVisible
@@ -2312,7 +2304,7 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 
 	// Help bar
 	b.WriteString("\n")
-	b.WriteString(styleHelpBar.Render("↵:attach  K:kill  n:new  /:filter  b:broadcast  F:fullscreen  [/]:page  hjkl:navigate  Esc/d:back  q:quit"))
+	b.WriteString(styleHelpBar.Render("↵:attach  K:kill  n:new  /:filter  b:broadcast  [/]:page  hjkl:navigate  Esc/d:back  q:quit"))
 
 	return b.String()
 }

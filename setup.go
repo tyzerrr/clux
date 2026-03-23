@@ -9,8 +9,18 @@ import (
 	"strings"
 )
 
-const tmuxConfBinding = `bind-key -T root C-. display-popup -E -w80% -h80% "clux"`
+const tmuxConfBinding = `bind-key -T root C-. display-popup -E -w100% -h100% "clux"`
+
+// Old variants that need migration to tmuxConfBinding.
+// tmuxConfBindingOld is the original prefix-based binding (C-c with 80% size).
 const tmuxConfBindingOld = `bind-key C-c display-popup -E -w80% -h80% "clux"`
+
+// tmuxConfBindingOldNewKey is the new key (C-.) but with the old 80% size.
+const tmuxConfBindingOldNewKey = `bind-key -T root C-. display-popup -E -w80% -h80% "clux"`
+
+// tmuxConfBindingOldKeyNewSize is the old prefix-based key (C-c) with the new 100% size.
+const tmuxConfBindingOldKeyNewSize = `bind-key C-c display-popup -E -w100% -h100% "clux"`
+
 const tmuxConfBlock = "\n# clux\n" + tmuxConfBinding + "\n"
 
 const cluxSummaryBlock = `
@@ -221,15 +231,18 @@ func setupTmuxConfAt(path string) setupResult {
 		return setupSkipped
 	}
 
-	// Migrate old prefix-based binding to new prefix-free binding
-	if strings.Contains(string(data), tmuxConfBindingOld) {
-		updated := strings.ReplaceAll(string(data), tmuxConfBindingOld, tmuxConfBinding)
-		if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
-			fmt.Fprintf(os.Stderr, "[✗] Failed to write %s: %v\n", path, err)
-			return setupError
+	// Migrate any old variant to the current binding.
+	content := string(data)
+	for _, old := range []string{tmuxConfBindingOld, tmuxConfBindingOldNewKey, tmuxConfBindingOldKeyNewSize} {
+		if strings.Contains(content, old) {
+			updated := strings.ReplaceAll(content, old, tmuxConfBinding)
+			if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
+				fmt.Fprintf(os.Stderr, "[✗] Failed to write %s: %v\n", path, err)
+				return setupError
+			}
+			fmt.Printf("[✓] tmux key binding updated in %s\n", path)
+			return setupSuccess
 		}
-		fmt.Printf("[✓] tmux key binding updated in %s\n", path)
-		return setupSuccess
 	}
 
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o644)

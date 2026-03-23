@@ -372,3 +372,59 @@ func TestSetupTmuxConf_MigratesOldBinding(t *testing.T) {
 		t.Error("existing content was not preserved")
 	}
 }
+
+func TestSetupTmuxConf_MigratesNewKeyOldSize(t *testing.T) {
+	dir := t.TempDir()
+	tmuxConfPath := filepath.Join(dir, ".tmux.conf")
+	if err := os.WriteFile(tmuxConfPath, []byte("set -g mouse on\n# clux\n"+tmuxConfBindingOldNewKey+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result := setupTmuxConfAt(tmuxConfPath)
+	if result != setupSuccess {
+		t.Fatalf("expected setupSuccess, got %d", result)
+	}
+
+	data, err := os.ReadFile(tmuxConfPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	if strings.Contains(content, tmuxConfBindingOldNewKey) {
+		t.Error("old 80% new-key binding should have been replaced")
+	}
+	if !strings.Contains(content, tmuxConfBinding) {
+		t.Error("new binding should be present")
+	}
+	if !strings.HasPrefix(content, "set -g mouse on") {
+		t.Error("existing content was not preserved")
+	}
+}
+
+func TestSetupTmuxConf_MigratesOldKeyNewSize(t *testing.T) {
+	dir := t.TempDir()
+	tmuxConfPath := filepath.Join(dir, ".tmux.conf")
+	if err := os.WriteFile(tmuxConfPath, []byte("set -g mouse on\n# clux\n"+tmuxConfBindingOldKeyNewSize+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result := setupTmuxConfAt(tmuxConfPath)
+	if result != setupSuccess {
+		t.Fatalf("expected setupSuccess, got %d", result)
+	}
+
+	data, err := os.ReadFile(tmuxConfPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	if strings.Contains(content, tmuxConfBindingOldKeyNewSize) {
+		t.Error("old-key 100% binding should have been replaced")
+	}
+	if !strings.Contains(content, tmuxConfBinding) {
+		t.Error("new binding should be present")
+	}
+	if !strings.HasPrefix(content, "set -g mouse on") {
+		t.Error("existing content was not preserved")
+	}
+}

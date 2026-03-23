@@ -1071,13 +1071,6 @@ func getGitBranch(dir string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// DisplayPopup opens a tmux popup running the given command at full terminal size.
-func DisplayPopup(args ...string) error {
-	cmdArgs := []string{"display-popup", "-E", "-w", "100%", "-h", "100%"}
-	cmdArgs = append(cmdArgs, args...)
-	return exec.Command("tmux", cmdArgs...).Run()
-}
-
 // getWindowSummaryForSession retrieves the @clux-summary user option for a window in a given session.
 // Returns empty string if not set or on error.
 func getWindowSummaryForSession(sessionName, windowIndex, paneIndex string) string {

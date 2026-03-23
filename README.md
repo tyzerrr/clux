@@ -29,7 +29,7 @@ Add this to your `~/.tmux.conf`:
 
 ```tmux
 # No prefix needed — press Ctrl-. directly to launch clux
-bind-key -T root C-. display-popup -E -w80% -h80% "clux"
+bind-key -T root C-. display-popup -E -w100% -h100% "clux"
 ```
 
 Then press `Ctrl-.` in any tmux window to launch clux instantly (no prefix key required).
@@ -37,7 +37,7 @@ Then press `Ctrl-.` in any tmux window to launch clux instantly (no prefix key r
 Alternatively, if you prefer a prefix-based binding:
 
 ```tmux
-bind-key C-c display-popup -E -w80% -h80% "clux"
+bind-key C-c display-popup -E -w100% -h100% "clux"
 ```
 
 This requires `Prefix` + `Ctrl-C` to launch.
@@ -74,7 +74,6 @@ Run `clux setup` to configure your environment:
 |-----|--------|
 | `h` / `j` / `k` / `l` / arrows | Navigate grid |
 | `Enter` | Attach to focused session |
-| `F` | Open dashboard as full-screen tmux popup |
 | `[` / `]` | Previous / next page |
 | `K` / `n` / `b` / `/` | Same as list view |
 | `d` / `Esc` | Return to list view |
