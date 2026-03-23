@@ -1703,7 +1703,7 @@ func (m Model) View() tea.View {
 			previewLabel = "p:preview  Ctrl+U/D:scroll"
 		}
 		groupLabel := "g:group"
-		helpBar = styleHelpBar.Render("↵:attach  n:new  b:broadcast  K:kill  " + previewLabel + "  " + groupLabel + "  d:dashboard  /:filter  q:quit")
+		helpBar = styleHelpBar.Render("↵:attach  j/k/↑/↓:navigate  n:new  b:broadcast  K:kill  " + previewLabel + "  " + groupLabel + "  d:dashboard  /:filter  q/Esc:quit")
 	}
 
 	showPreviewPanel := m.previewEnabled && len(m.filtered) > 0 && m.width >= 80
@@ -1891,7 +1891,7 @@ func (m Model) viewNewSession(b *strings.Builder) (string, *overlayCursor) {
 	}
 
 	b.WriteString("\n\n")
-	b.WriteString(styleHelpBar.Render("↵:select  Esc:cancel  ↑/↓:navigate"))
+	b.WriteString(styleHelpBar.Render("↵:select  Esc:cancel  ↑/↓/Ctrl+K/J:navigate"))
 
 	cur := &overlayCursor{x: 1 + textInputCursorX(m.newSessionInput), y: cursorY}
 	return renderOverlayBox(b.String(), overlayWidth), cur
@@ -1956,9 +1956,6 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 
 	if pageItems == 0 {
 		b.WriteString("No sessions to display.\n")
-		b.WriteString("\n")
-		b.WriteString(styleHelpBar.Render("Esc:back  q:quit"))
-		return b.String()
 	}
 
 	// Calculate cell dimensions
@@ -2109,7 +2106,7 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 
 	// Help bar
 	b.WriteString("\n")
-	b.WriteString(styleHelpBar.Render("↵:attach  K:kill  n:new  /:filter  b:broadcast  [/]:page  hjkl:navigate  Esc/d:back  q:quit"))
+	b.WriteString(styleHelpBar.Render("↵:attach  K:kill  n:new  /:filter  b:broadcast  [/]:page  hjkl/↑↓←→:navigate  Esc/d:back  q:quit"))
 
 	return b.String()
 }
@@ -2172,7 +2169,7 @@ func (m Model) viewBroadcastSelect(b *strings.Builder) (string, *overlayCursor) 
 	}
 
 	b.WriteString("\n\n")
-	b.WriteString(styleHelpBar.Render("Space:toggle  ↵:confirm  Esc:cancel  ↑/↓:navigate"))
+	b.WriteString(styleHelpBar.Render("Space:toggle  ↵:confirm  Esc:cancel  ↑/↓/Ctrl+K/J:navigate"))
 
 	cur := &overlayCursor{x: 1 + textInputCursorX(m.broadcastInput), y: cursorY}
 	return renderOverlayBox(b.String(), overlayWidth), cur
