@@ -235,34 +235,12 @@ func fetchPreviewCmdForSessionWithOffset(s session.Session, scrollOffset, height
 	}
 }
 
-func fetchDashboardPreviewWithOffset(s session.Session, tileIdx, scrollOffset, height int) tea.Cmd {
+func fetchDashboardPreviews(sessions []session.Session) tea.Cmd {
 	return func() tea.Msg {
-		sessionName := s.SessionName
-		if sessionName == "" {
-			sessionName = tmux.SessionName
-		}
-		paneIndex := resolvePaneIndex(s.PaneIndex)
-		content, err := tmux.CapturePaneForSessionWithOffset(sessionName, s.WindowIndex, paneIndex, scrollOffset, height)
-		if err != nil {
-			return dashPreviewsMsg(map[int]string{tileIdx: ""})
-		}
-		return dashPreviewsMsg(map[int]string{tileIdx: content})
-	}
-}
-
-func fetchDashboardPreviews(sessions []session.Session, skipIdx ...int) tea.Cmd {
-	return func() tea.Msg {
-		skip := -1
-		if len(skipIdx) > 0 {
-			skip = skipIdx[0]
-		}
 		result := make(map[int]string, len(sessions))
 		var mu sync.Mutex
 		var wg sync.WaitGroup
 		for i, s := range sessions {
-			if i == skip {
-				continue
-			}
 			wg.Add(1)
 			go func(idx int, s session.Session) {
 				defer wg.Done()
@@ -667,13 +645,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				pageItems = 0
 			}
 			pageSessions := m.filtered[m.dashPageOffset : m.dashPageOffset+pageItems]
-			cmds := []tea.Cmd{fetchSessionsCmd, doTick()}
-			if m.previewScrollOffset > 0 && m.dashCursor < len(pageSessions) {
-				cmds = append(cmds, fetchDashboardPreviews(pageSessions, m.dashCursor))
-				cmds = append(cmds, fetchDashboardPreviewWithOffset(pageSessions[m.dashCursor], m.dashCursor, m.previewScrollOffset, dashTilePreviewHeight(m)))
-			} else {
-				cmds = append(cmds, fetchDashboardPreviews(pageSessions))
-			}
+			cmds := []tea.Cmd{fetchSessionsCmd, doTick(), fetchDashboardPreviews(pageSessions)}
 			return m, tea.Batch(cmds...)
 		default:
 			return m, doTick()
@@ -1065,19 +1037,15 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "q":
 		return m, tea.Quit
 	case "ctrl+u":
-		if pageItems > 0 && m.dashPageOffset+m.dashCursor < len(m.filtered) && dashTilePreviewHeight(m) > 0 {
+		if pageItems > 0 && m.dashPageOffset+m.dashCursor < len(m.filtered) {
 			m.previewScrollOffset += dashPreviewScrollStep(m)
-			s := m.filtered[m.dashPageOffset+m.dashCursor]
-			return m, fetchDashboardPreviewWithOffset(s, m.dashCursor, m.previewScrollOffset, dashTilePreviewHeight(m))
 		}
 	case "ctrl+d":
-		if pageItems > 0 && m.dashPageOffset+m.dashCursor < len(m.filtered) && dashTilePreviewHeight(m) > 0 {
+		if pageItems > 0 && m.dashPageOffset+m.dashCursor < len(m.filtered) {
 			m.previewScrollOffset -= dashPreviewScrollStep(m)
 			if m.previewScrollOffset < 0 {
 				m.previewScrollOffset = 0
 			}
-			s := m.filtered[m.dashPageOffset+m.dashCursor]
-			return m, fetchDashboardPreviewWithOffset(s, m.dashCursor, m.previewScrollOffset, dashTilePreviewHeight(m))
 		}
 	case "]":
 		// Next page
@@ -1369,50 +1337,9 @@ func previewScrollStep(m Model) int {
 	return h / 2
 }
 
-// dashTilePreviewHeight returns the number of preview lines for the tile at the given cursor position.
-func dashTilePreviewHeight(m Model) int {
-	cols := m.dashCols()
-	maxVisible := m.dashMaxVisible()
-	pageItems := len(m.filtered) - m.dashPageOffset
-	if pageItems > maxVisible {
-		pageItems = maxVisible
-	}
-	if pageItems < 1 {
-		pageItems = 1
-	}
-	rows := (pageItems + cols - 1) / cols
-	if rows < 1 {
-		rows = 1
-	}
-	headerLines := 3
-	helpLines := 2
-	borderHeight := 2
-	availableHeight := m.height - headerLines - helpLines - (rows * (borderHeight + 1))
-	baseCellHeight := availableHeight / rows
-	heightRemainder := availableHeight % rows
-	if baseCellHeight < 5 {
-		baseCellHeight = 5
-		heightRemainder = 0
-	}
-	row := m.dashCursor / cols
-	rowCellHeight := baseCellHeight
-	if row < heightRemainder {
-		rowCellHeight++
-	}
-	previewLines := rowCellHeight - 2 // minus header line and separator
-	if previewLines < 1 {
-		return 1
-	}
-	return previewLines
-}
-
 // dashPreviewScrollStep returns the number of lines to scroll per ctrl+u/d press in dashboard.
-func dashPreviewScrollStep(m Model) int {
-	h := dashTilePreviewHeight(m)
-	if h < 2 {
-		return 1
-	}
-	return h / 2
+func dashPreviewScrollStep(_ Model) int {
+	return 3
 }
 
 // --- View ---
@@ -2137,17 +2064,34 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 				preview = m.dashPreviews[localIdx]
 			}
 
-			// Get last N lines of preview
+			// Get last N lines of preview, applying scroll offset for selected tile
 			lines := strings.Split(preview, "\n")
 			// Remove trailing empty lines
 			for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
 				lines = lines[:len(lines)-1]
 			}
-			start := len(lines) - rowPreviewLines
+			scrollOff := 0
+			if localIdx == m.dashCursor {
+				scrollOff = m.previewScrollOffset
+				// Clamp to available scroll range
+				maxScroll := len(lines) - rowPreviewLines
+				if maxScroll < 0 {
+					maxScroll = 0
+				}
+				if scrollOff > maxScroll {
+					scrollOff = maxScroll
+					m.previewScrollOffset = scrollOff
+				}
+			}
+			start := len(lines) - rowPreviewLines - scrollOff
 			if start < 0 {
 				start = 0
 			}
-			displayPreview := lines[start:]
+			end := start + rowPreviewLines
+			if end > len(lines) {
+				end = len(lines)
+			}
+			displayPreview := lines[start:end]
 
 			// Build cell string
 			var cell strings.Builder
