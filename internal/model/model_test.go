@@ -523,6 +523,45 @@ func TestView_ModeListNoSessions(t *testing.T) {
 	}
 }
 
+func TestView_ConfigErrorWarning(t *testing.T) {
+	m := testModel(testSessions)
+	m.width = 120
+	m.height = 40
+	m.configErr = fmt.Errorf("bad config")
+	view := m.View().Content
+	if !strings.Contains(view, "config load failed") {
+		t.Error("expected view to contain config error warning")
+	}
+	if !strings.Contains(view, "bad config") {
+		t.Error("expected view to contain the error message")
+	}
+}
+
+func TestView_NoConfigErrorWarningWhenNil(t *testing.T) {
+	m := testModel(testSessions)
+	m.width = 120
+	m.height = 40
+	view := m.View().Content
+	if strings.Contains(view, "Warning: config load failed:") {
+		t.Error("expected view to NOT contain config error warning when configErr is nil")
+	}
+}
+
+func TestView_ModeDashboard_ConfigErrorWarning(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeDashboard
+	m.width = 120
+	m.height = 40
+	m.configErr = fmt.Errorf("bad config")
+	view := m.View().Content
+	if !strings.Contains(view, "config load failed") {
+		t.Error("expected dashboard view to contain config error warning")
+	}
+	if !strings.Contains(view, "bad config") {
+		t.Error("expected dashboard view to contain the error message")
+	}
+}
+
 func TestView_ModeConfirmKill(t *testing.T) {
 	m := testModel(testSessions)
 	m.mode = ModeConfirmKill

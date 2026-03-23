@@ -122,6 +122,9 @@ type Model struct {
 	broadcastPromptInput textinput.Model    // prompt text input
 	broadcastTargets     []broadcastTarget  // resolved targets after selection
 	broadcastErrors      []string           // dir validation errors collected during resolution
+
+	// Config loading
+	configErr error // non-nil if config file failed to load (app uses defaults)
 }
 
 // New creates and returns an initialized Model.
@@ -150,7 +153,7 @@ func New() Model {
 	bpi.Placeholder = "Prompt or skill to broadcast..."
 	bpi.CharLimit = 512
 
-	cfg, _ := config.Load()
+	cfg, configErr := config.Load()
 	if cfg == nil {
 		cfg = &config.Config{}
 	}
@@ -164,6 +167,7 @@ func New() Model {
 		broadcastInput:       bci,
 		broadcastPromptInput: bpi,
 		cfg:                  cfg,
+		configErr:            configErr,
 		previewEnabled:       cfg.PreviewDefault,
 		groupEnabled:         cfg.GroupDefault,
 		prevStatuses:         make(map[string]session.Status),
@@ -1485,6 +1489,7 @@ var (
 
 	styleWorking = lipgloss.NewStyle().Foreground(lipgloss.Color("2")) // green
 	styleWaiting = lipgloss.NewStyle().Foreground(lipgloss.Color("3")) // yellow
+	styleWarning = styleWaiting
 	styleIdle    = lipgloss.NewStyle().Foreground(lipgloss.Color("8")) // gray
 	styleUnknown = lipgloss.NewStyle().Foreground(lipgloss.Color("5")) // magenta
 
@@ -1877,6 +1882,11 @@ func (m Model) View() tea.View {
 		leftBuf.WriteString("\n\n")
 	}
 
+	if m.configErr != nil {
+		leftBuf.WriteString(styleWarning.Render("Warning: config load failed: " + m.configErr.Error() + " (using defaults)"))
+		leftBuf.WriteString("\n\n")
+	}
+
 	var groups []sessionGroup
 	if len(m.filtered) == 0 {
 		leftBuf.WriteString("No Claude Code sessions found. Start Claude Code in another tmux session.\n")
@@ -2148,6 +2158,11 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 	}
 	b.WriteString(styleHeader.Render(header))
 	b.WriteString("\n\n")
+
+	if m.configErr != nil {
+		b.WriteString(styleWarning.Render("Warning: config load failed: " + m.configErr.Error() + " (using defaults)"))
+		b.WriteString("\n\n")
+	}
 
 	if pageItems == 0 {
 		b.WriteString("No sessions to display.\n")
