@@ -440,21 +440,17 @@ func TestDeduplicateWindowName(t *testing.T) {
 
 func resetPaneHashes(t *testing.T) {
 	t.Helper()
-	paneContentHashesMu.Lock()
+	paneCacheMu.Lock()
 	orig := paneContentHashes
 	paneContentHashes = map[string]uint64{}
-	paneContentHashesMu.Unlock()
-	paneDetectCacheMu.Lock()
 	origDetect := paneDetectCache
 	paneDetectCache = map[string]paneDetectResult{}
-	paneDetectCacheMu.Unlock()
+	paneCacheMu.Unlock()
 	t.Cleanup(func() {
-		paneContentHashesMu.Lock()
+		paneCacheMu.Lock()
 		paneContentHashes = orig
-		paneContentHashesMu.Unlock()
-		paneDetectCacheMu.Lock()
 		paneDetectCache = origDetect
-		paneDetectCacheMu.Unlock()
+		paneCacheMu.Unlock()
 	})
 }
 
