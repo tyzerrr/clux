@@ -11,5 +11,8 @@ clux
 .claude/settings.local.json
 .claude/worktrees/
 
+# Environment
+.env*
+
 # OS
 .DS_Store

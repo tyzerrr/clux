@@ -2126,8 +2126,8 @@ func TestColumnWidthsForWidth(t *testing.T) {
 }
 
 func TestGroupKey_WithGhqRoot(t *testing.T) {
-	ghqRoot := "/Users/h-tanaka/go/src/"
-	s := session.Session{Dir: "/Users/h-tanaka/go/src/github.com/tanaka0325/clux"}
+	ghqRoot := "/home/user/go/src/"
+	s := session.Session{Dir: "/home/user/go/src/github.com/tanaka0325/clux"}
 	key := groupKey(s, ghqRoot)
 	if key != "github.com/tanaka0325/clux" {
 		t.Errorf("expected 'github.com/tanaka0325/clux', got %q", key)
@@ -2151,8 +2151,8 @@ func TestGroupKey_External(t *testing.T) {
 }
 
 func TestGroupKey_WorktreeStripping(t *testing.T) {
-	ghqRoot := "/Users/h-tanaka/go/src/"
-	s := session.Session{Dir: "/Users/h-tanaka/go/src/github.com/tanaka0325/clux/.claude/worktrees/agent-abc123"}
+	ghqRoot := "/home/user/go/src/"
+	s := session.Session{Dir: "/home/user/go/src/github.com/tanaka0325/clux/.claude/worktrees/agent-abc123"}
 	key := groupKey(s, ghqRoot)
 	if key != "github.com/tanaka0325/clux" {
 		t.Errorf("expected 'github.com/tanaka0325/clux', got %q", key)
@@ -2160,7 +2160,7 @@ func TestGroupKey_WorktreeStripping(t *testing.T) {
 }
 
 func TestGroupKey_DirNotUnderGhqRoot(t *testing.T) {
-	ghqRoot := "/Users/h-tanaka/go/src/"
+	ghqRoot := "/home/user/go/src/"
 	s := session.Session{Dir: "/opt/projects/my-app"}
 	key := groupKey(s, ghqRoot)
 	if key != "projects/my-app" {
