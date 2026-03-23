@@ -1036,7 +1036,7 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "q":
 		return m, tea.Quit
-	case "]":
+	case "ctrl+d":
 		// Next page
 		nextOffset := m.dashPageOffset + maxVisible
 		if nextOffset < len(m.filtered) {
@@ -1045,7 +1045,7 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			pageSessions := m.filtered[m.dashPageOffset : m.dashPageOffset+min(m.dashMaxVisible(), len(m.filtered)-m.dashPageOffset)]
 			return m, fetchDashboardPreviews(pageSessions)
 		}
-	case "[":
+	case "ctrl+u":
 		// Previous page
 		prevOffset := m.dashPageOffset - maxVisible
 		if prevOffset < 0 {
@@ -2106,7 +2106,7 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 
 	// Help bar
 	b.WriteString("\n")
-	b.WriteString(styleHelpBar.Render("↵:attach  K:kill  n:new  /:filter  b:broadcast  [/]:page  hjkl/↑↓←→:navigate  Esc/d:back  q:quit"))
+	b.WriteString(styleHelpBar.Render("↵:attach  K:kill  n:new  /:filter  b:broadcast  Ctrl+U/D:page  hjkl/↑↓←→:navigate  Esc/d:back  q:quit"))
 
 	return b.String()
 }

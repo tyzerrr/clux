@@ -1825,16 +1825,15 @@ func TestDashCols_WithTwoSessions(t *testing.T) {
 	}
 }
 
-func TestDashboard_Pagination_NextPage(t *testing.T) {
-	// Create enough sessions to require pagination
+func TestDashboard_Pagination_CtrlD_NextPage(t *testing.T) {
 	sessions := make([]session.Session, 20)
 	for i := range sessions {
 		sessions[i] = session.Session{Name: fmt.Sprintf("s%d", i), Status: session.StatusIdle, WindowIndex: fmt.Sprintf("%d", i)}
 	}
 	m := testModel(sessions)
 	m.mode = ModeDashboard
-	m.width = 80  // 1 col
-	m.height = 20 // limited height forces pagination
+	m.width = 80
+	m.height = 20
 	m.dashPageOffset = 0
 
 	maxVisible := m.dashMaxVisible()
@@ -1842,17 +1841,17 @@ func TestDashboard_Pagination_NextPage(t *testing.T) {
 		t.Skip("terminal too large for pagination test")
 	}
 
-	result, _ := m.updateDashboard(tea.KeyPressMsg{Code: ']', Text: "]"})
+	result, _ := m.updateDashboard(tea.KeyPressMsg{Mod: tea.ModCtrl, Code: 'd'})
 	rm := result.(Model)
 	if rm.dashPageOffset != maxVisible {
-		t.Errorf("expected dashPageOffset=%d after ], got %d", maxVisible, rm.dashPageOffset)
+		t.Errorf("expected dashPageOffset=%d after ctrl+d, got %d", maxVisible, rm.dashPageOffset)
 	}
 	if rm.dashCursor != 0 {
-		t.Errorf("expected dashCursor=0 after page change, got %d", rm.dashCursor)
+		t.Errorf("expected dashCursor=0 after ctrl+d, got %d", rm.dashCursor)
 	}
 }
 
-func TestDashboard_Pagination_PrevPage(t *testing.T) {
+func TestDashboard_Pagination_CtrlU_PrevPage(t *testing.T) {
 	sessions := make([]session.Session, 20)
 	for i := range sessions {
 		sessions[i] = session.Session{Name: fmt.Sprintf("s%d", i), Status: session.StatusIdle, WindowIndex: fmt.Sprintf("%d", i)}
@@ -1862,17 +1861,20 @@ func TestDashboard_Pagination_PrevPage(t *testing.T) {
 	m.width = 80
 	m.height = 20
 	maxVisible := m.dashMaxVisible()
+	if maxVisible >= 20 {
+		t.Skip("terminal too large for pagination test")
+	}
 	m.dashPageOffset = maxVisible // start on page 2
 	m.dashCursor = 0
 
-	result, _ := m.updateDashboard(tea.KeyPressMsg{Code: '[', Text: "["})
+	result, _ := m.updateDashboard(tea.KeyPressMsg{Mod: tea.ModCtrl, Code: 'u'})
 	rm := result.(Model)
 	if rm.dashPageOffset != 0 {
-		t.Errorf("expected dashPageOffset=0 after [, got %d", rm.dashPageOffset)
+		t.Errorf("expected dashPageOffset=0 after ctrl+u, got %d", rm.dashPageOffset)
 	}
 }
 
-func TestDashboard_Pagination_PrevPage_AtStart(t *testing.T) {
+func TestDashboard_Pagination_CtrlU_AtStart(t *testing.T) {
 	sessions := make([]session.Session, 5)
 	for i := range sessions {
 		sessions[i] = session.Session{Name: fmt.Sprintf("s%d", i), Status: session.StatusIdle, WindowIndex: fmt.Sprintf("%d", i)}
@@ -1883,7 +1885,7 @@ func TestDashboard_Pagination_PrevPage_AtStart(t *testing.T) {
 	m.height = 20
 	m.dashPageOffset = 0 // already on first page
 
-	result, _ := m.updateDashboard(tea.KeyPressMsg{Code: '[', Text: "["})
+	result, _ := m.updateDashboard(tea.KeyPressMsg{Mod: tea.ModCtrl, Code: 'u'})
 	rm := result.(Model)
 	if rm.dashPageOffset != 0 {
 		t.Errorf("expected dashPageOffset=0 (no change), got %d", rm.dashPageOffset)
