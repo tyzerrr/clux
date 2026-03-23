@@ -51,6 +51,11 @@ type (
 	ghqRootMsg          string   // cached ghq root path
 )
 
+type dashFocusedPreviewMsg struct {
+	idx     int
+	content string
+}
+
 // broadcastCompletedMsg is returned after all broadcast windows have been created.
 type broadcastCompletedMsg struct {
 	errors []string
@@ -107,7 +112,8 @@ type Model struct {
 	// Dashboard mode
 	dashCursor     int            // index into m.filtered for focused cell
 	dashPreviews   map[int]string // windowIndex -> pane content for each session
-	dashPageOffset int            // index of first displayed item in dashboard
+	dashPageOffset          int            // index of first displayed item in dashboard
+	dashPreviewScrollOffset int            // lines scrolled up from bottom for focused cell; 0 = live view
 	dashboardOnly  bool           // when true, Esc/q quits the app (popup mode)
 
 	// Grouping mode
@@ -229,27 +235,35 @@ func doImmediateTick() tea.Cmd {
 
 func fetchPreviewCmdForSession(s session.Session) tea.Cmd {
 	return func() tea.Msg {
-		sessionName := tmux.SessionName
-		if s.External && s.SessionName != "" {
-			sessionName = s.SessionName
-		}
-		paneIndex := resolvePaneIndex(s.PaneIndex)
-		content, err := tmux.CapturePaneForSession(sessionName, s.WindowIndex, paneIndex)
+		content, err := captureSessionPane(s)
 		if err != nil {
 			return previewMsg("")
 		}
 		return previewMsg(content)
 	}
+}
+
+func captureSessionPane(s session.Session) (string, error) {
+	sessionName := tmux.SessionName
+	if s.External && s.SessionName != "" {
+		sessionName = s.SessionName
+	}
+	paneIndex := resolvePaneIndex(s.PaneIndex)
+	return tmux.CapturePaneForSession(sessionName, s.WindowIndex, paneIndex)
+}
+
+func captureSessionPaneWithOffset(s session.Session, scrollOffset, height int) (string, error) {
+	sessionName := tmux.SessionName
+	if s.External && s.SessionName != "" {
+		sessionName = s.SessionName
+	}
+	paneIndex := resolvePaneIndex(s.PaneIndex)
+	return tmux.CapturePaneForSessionWithOffset(sessionName, s.WindowIndex, paneIndex, scrollOffset, height)
 }
 
 func fetchPreviewCmdForSessionWithOffset(s session.Session, scrollOffset, height int) tea.Cmd {
 	return func() tea.Msg {
-		sessionName := tmux.SessionName
-		if s.External && s.SessionName != "" {
-			sessionName = s.SessionName
-		}
-		paneIndex := resolvePaneIndex(s.PaneIndex)
-		content, err := tmux.CapturePaneForSessionWithOffset(sessionName, s.WindowIndex, paneIndex, scrollOffset, height)
+		content, err := captureSessionPaneWithOffset(s, scrollOffset, height)
 		if err != nil {
 			return previewMsg("")
 		}
@@ -257,21 +271,29 @@ func fetchPreviewCmdForSessionWithOffset(s session.Session, scrollOffset, height
 	}
 }
 
-func fetchDashboardPreviews(sessions []session.Session) tea.Cmd {
+func fetchDashboardFocusedPreview(localIdx int, s session.Session, scrollOffset, height int) tea.Cmd {
+	return func() tea.Msg {
+		content, err := captureSessionPaneWithOffset(s, scrollOffset, height)
+		if err != nil {
+			return dashFocusedPreviewMsg{idx: localIdx, content: ""}
+		}
+		return dashFocusedPreviewMsg{idx: localIdx, content: content}
+	}
+}
+
+func fetchDashboardPreviews(sessions []session.Session, skipIdx int) tea.Cmd {
 	return func() tea.Msg {
 		result := make(map[int]string, len(sessions))
 		var mu sync.Mutex
 		var wg sync.WaitGroup
 		for i, s := range sessions {
+			if skipIdx >= 0 && i == skipIdx {
+				continue
+			}
 			wg.Add(1)
 			go func(idx int, s session.Session) {
 				defer wg.Done()
-				sessionName := tmux.SessionName
-				if s.External && s.SessionName != "" {
-					sessionName = s.SessionName
-				}
-				paneIndex := resolvePaneIndex(s.PaneIndex)
-				content, err := tmux.CapturePaneForSession(sessionName, s.WindowIndex, paneIndex)
+				content, err := captureSessionPane(s)
 				mu.Lock()
 				if err == nil {
 					result[idx] = content
@@ -671,7 +693,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case dashPreviewsMsg:
-		m.dashPreviews = map[int]string(msg)
+		if m.dashPreviews == nil {
+			m.dashPreviews = make(map[int]string)
+		}
+		for k, v := range map[int]string(msg) {
+			if m.dashPreviewScrollOffset > 0 && k == m.dashCursor {
+				continue
+			}
+			m.dashPreviews[k] = v
+		}
+		return m, nil
+
+	case dashFocusedPreviewMsg:
+		if msg.idx != m.dashCursor || m.dashPreviewScrollOffset == 0 {
+			return m, nil
+		}
+		if m.dashPreviews == nil {
+			m.dashPreviews = make(map[int]string)
+		}
+		m.dashPreviews[msg.idx] = msg.content
 		return m, nil
 
 	case errMsg:
@@ -700,7 +740,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				pageItems = 0
 			}
 			pageSessions := m.filtered[m.dashPageOffset : m.dashPageOffset+pageItems]
-			cmds := []tea.Cmd{fetchSessionsCmdWithExternals(m.cfg), doTick(), fetchDashboardPreviews(pageSessions)}
+			skipIdx := -1
+			if m.dashPreviewScrollOffset > 0 {
+				skipIdx = m.dashCursor
+			}
+			cmds := []tea.Cmd{fetchSessionsCmdWithExternals(m.cfg), doTick(), fetchDashboardPreviews(pageSessions, skipIdx)}
+			if m.dashPreviewScrollOffset > 0 && m.dashPageOffset+m.dashCursor < len(m.filtered) {
+				s := m.filtered[m.dashPageOffset+m.dashCursor]
+				cmds = append(cmds, fetchDashboardFocusedPreview(m.dashCursor, s, m.dashPreviewScrollOffset, dashPreviewLines(m)))
+			}
 			return m, tea.Batch(cmds...)
 		default:
 			return m, doTick()
@@ -934,7 +982,7 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if pageItems > maxVisible {
 			pageItems = maxVisible
 		}
-		return m, fetchDashboardPreviews(m.filtered[:pageItems])
+		return m, fetchDashboardPreviews(m.filtered[:pageItems], -1)
 
 	case "b":
 		m.mode = ModeBroadcastSelect
@@ -1197,8 +1245,9 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if nextOffset < len(m.filtered) {
 			m.dashPageOffset = nextOffset
 			m.dashCursor = 0
+			m.dashPreviewScrollOffset = 0
 			pageSessions := m.filtered[m.dashPageOffset : m.dashPageOffset+min(m.dashMaxVisible(), len(m.filtered)-m.dashPageOffset)]
-			return m, fetchDashboardPreviews(pageSessions)
+			return m, fetchDashboardPreviews(pageSessions, -1)
 		}
 	case "[":
 		// Previous page
@@ -1209,20 +1258,24 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if prevOffset != m.dashPageOffset {
 			m.dashPageOffset = prevOffset
 			m.dashCursor = 0
+			m.dashPreviewScrollOffset = 0
 			pageSessions := m.filtered[m.dashPageOffset : m.dashPageOffset+min(m.dashMaxVisible(), len(m.filtered)-m.dashPageOffset)]
-			return m, fetchDashboardPreviews(pageSessions)
+			return m, fetchDashboardPreviews(pageSessions, -1)
 		}
 	case "h", "left":
 		if m.dashCursor%cols > 0 {
 			m.dashCursor--
+			m.dashPreviewScrollOffset = 0
 		}
 	case "l", "right":
 		if m.dashCursor%cols < cols-1 && m.dashCursor+1 < pageItems {
 			m.dashCursor++
+			m.dashPreviewScrollOffset = 0
 		}
 	case "k", "up", "ctrl+p":
 		if m.dashCursor-cols >= 0 {
 			m.dashCursor -= cols
+			m.dashPreviewScrollOffset = 0
 		} else if m.dashPageOffset > 0 {
 			// Go to previous page
 			prevOffset := m.dashPageOffset - maxVisible
@@ -1231,18 +1284,38 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			m.dashPageOffset = prevOffset
 			m.dashCursor = 0
+			m.dashPreviewScrollOffset = 0
 			pageSessions := m.filtered[m.dashPageOffset : m.dashPageOffset+min(m.dashMaxVisible(), len(m.filtered)-m.dashPageOffset)]
-			return m, fetchDashboardPreviews(pageSessions)
+			return m, fetchDashboardPreviews(pageSessions, -1)
 		}
 	case "j", "down", "ctrl+n":
 		if m.dashCursor+cols < pageItems {
 			m.dashCursor += cols
+			m.dashPreviewScrollOffset = 0
 		} else if m.dashPageOffset+maxVisible < len(m.filtered) {
 			// Go to next page
 			m.dashPageOffset += maxVisible
 			m.dashCursor = 0
+			m.dashPreviewScrollOffset = 0
 			pageSessions := m.filtered[m.dashPageOffset : m.dashPageOffset+min(m.dashMaxVisible(), len(m.filtered)-m.dashPageOffset)]
-			return m, fetchDashboardPreviews(pageSessions)
+			return m, fetchDashboardPreviews(pageSessions, -1)
+		}
+	case "ctrl+u":
+		if pageItems > 0 && m.dashPageOffset+m.dashCursor < len(m.filtered) {
+			m.dashPreviewScrollOffset += dashPreviewScrollStep(m)
+			s := m.filtered[m.dashPageOffset+m.dashCursor]
+			return m, fetchDashboardFocusedPreview(m.dashCursor, s, m.dashPreviewScrollOffset, dashPreviewLines(m))
+		}
+	case "ctrl+d":
+		if pageItems > 0 && m.dashPageOffset+m.dashCursor < len(m.filtered) && m.dashPreviewScrollOffset > 0 {
+			m.dashPreviewScrollOffset -= dashPreviewScrollStep(m)
+			if m.dashPreviewScrollOffset < 0 {
+				m.dashPreviewScrollOffset = 0
+			}
+			if m.dashPreviewScrollOffset > 0 {
+				s := m.filtered[m.dashPageOffset+m.dashCursor]
+				return m, fetchDashboardFocusedPreview(m.dashCursor, s, m.dashPreviewScrollOffset, dashPreviewLines(m))
+			}
 		}
 	case "enter":
 		if pageItems > 0 && m.dashPageOffset+m.dashCursor < len(m.filtered) {
@@ -1483,13 +1556,51 @@ func previewHeight(m Model) int {
 	return h
 }
 
-// previewScrollStep returns the number of lines to scroll per Ctrl+U/D press.
-func previewScrollStep(m Model) int {
-	h := previewHeight(m)
+func halfPageStep(h int) int {
 	if h < 2 {
 		return 1
 	}
 	return h / 2
+}
+
+// previewScrollStep returns the number of lines to scroll per Ctrl+U/D press.
+func previewScrollStep(m Model) int {
+	return halfPageStep(previewHeight(m))
+}
+
+// dashPreviewLines returns the number of preview lines per cell in the dashboard.
+func dashPreviewLines(m Model) int {
+	cols := m.dashCols()
+	maxVisible := m.dashMaxVisible()
+	pageItems := len(m.filtered) - m.dashPageOffset
+	if pageItems > maxVisible {
+		pageItems = maxVisible
+	}
+	if pageItems < 1 {
+		pageItems = 1
+	}
+	rows := (pageItems + cols - 1) / cols
+	if rows == 0 {
+		rows = 1
+	}
+	headerLines := 3
+	helpLines := 2
+	borderHeight := 2
+	availableHeight := m.height - headerLines - helpLines - (rows * (borderHeight + 1))
+	baseCellHeight := availableHeight / rows
+	if baseCellHeight < 5 {
+		baseCellHeight = 5
+	}
+	rowPreviewLines := baseCellHeight - 2
+	if rowPreviewLines < 1 {
+		rowPreviewLines = 1
+	}
+	return rowPreviewLines
+}
+
+// dashPreviewScrollStep returns the number of lines to scroll per Ctrl+U/D press in dashboard mode.
+func dashPreviewScrollStep(m Model) int {
+	return halfPageStep(dashPreviewLines(m))
 }
 
 // --- View ---
@@ -2256,7 +2367,11 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 			icon := s.Status.Icon()
 			statusStr := s.Status.String()
 			displayName := s.DisplayName()
-			cellHeaderText := fmt.Sprintf(" %s %s %s", icon, statusStr, displayName)
+			scrollIndicator := ""
+			if localIdx == m.dashCursor && m.dashPreviewScrollOffset > 0 {
+				scrollIndicator = " ↑scrolled"
+			}
+			cellHeaderText := fmt.Sprintf(" %s %s %s%s", icon, statusStr, displayName, scrollIndicator)
 			// Truncate if needed
 			cellHeaderRunes := []rune(cellHeaderText)
 			if len(cellHeaderRunes) > cw {
@@ -2335,7 +2450,7 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 
 	// Help bar
 	b.WriteString("\n")
-	b.WriteString(styleHelpBar.Render("↵:attach  K:kill  n:new  /:filter  b:broadcast  [/]:page  hjkl:navigate  Esc/d:back  q:quit"))
+	b.WriteString(styleHelpBar.Render("↵:attach  K:kill  n:new  /:filter  b:broadcast  [/]:page  hjkl:navigate  Ctrl+U/D:scroll  Esc/d:back  q:quit"))
 
 	return b.String()
 }
