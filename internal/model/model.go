@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"sort"
@@ -258,7 +259,9 @@ func fetchDashboardPreviews(sessions []session.Session) tea.Cmd {
 }
 
 func listGhqDirs() ([]string, error) {
-	out, err := exec.Command("ghq", "list", "-p").Output()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "ghq", "list", "-p").Output()
 	if err != nil {
 		return nil, fmt.Errorf("ghq list: %w", err)
 	}
@@ -429,7 +432,9 @@ type indexedSession struct {
 }
 
 func fetchGhqRoot() tea.Msg {
-	out, err := exec.Command("ghq", "root").Output()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "ghq", "root").Output()
 	if err != nil {
 		return ghqRootMsg("")
 	}
@@ -602,7 +607,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case dashPreviewsMsg:
-		m.dashPreviews = map[int]string(msg)
+		if m.dashPreviews == nil {
+			m.dashPreviews = make(map[int]string)
+		}
+		for k, v := range map[int]string(msg) {
+			m.dashPreviews[k] = v
+		}
 		return m, nil
 
 	case errMsg:
