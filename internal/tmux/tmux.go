@@ -67,9 +67,13 @@ type captureResult struct {
 
 // paneContentHashes stores the FNV-1a hash of the last captured pane content.
 // Key format: "sessionName:windowIndex.paneIndex"
+// paneCacheMu guards both paneContentHashes and paneDetectCache so that
+// clearing operations are atomic and no goroutine can observe a partially
+// cleared state.
 var (
-	paneContentHashes   = map[string]uint64{}
-	paneContentHashesMu sync.Mutex
+	paneCacheMu       sync.Mutex
+	paneContentHashes = map[string]uint64{}
+	paneDetectCache   = map[string]paneDetectResult{}
 )
 
 // paneDetectCache stores the last detected status and branch for each pane,
@@ -81,11 +85,6 @@ type paneDetectResult struct {
 	branch       string
 	summary      string
 }
-
-var (
-	paneDetectCacheMu sync.Mutex
-	paneDetectCache   = map[string]paneDetectResult{}
-)
 
 // paneKey returns the canonical map key for a pane's content hash.
 func paneKey(sessionName, windowIndex, paneIndex string) string {
@@ -105,8 +104,8 @@ func hashContent(content string) uint64 {
 // we cannot assume Working just because we haven't seen the pane before.
 func contentChanged(key string, content string) bool {
 	hash := hashContent(content)
-	paneContentHashesMu.Lock()
-	defer paneContentHashesMu.Unlock()
+	paneCacheMu.Lock()
+	defer paneCacheMu.Unlock()
 	prev, exists := paneContentHashes[key]
 	paneContentHashes[key] = hash
 	if !exists {
@@ -118,40 +117,34 @@ func contentChanged(key string, content string) bool {
 // ClearPaneHash removes the stored hash and cached detection result for a pane.
 func ClearPaneHash(sessionName, windowIndex, paneIndex string) {
 	key := paneKey(sessionName, windowIndex, paneIndex)
-	paneContentHashesMu.Lock()
+	paneCacheMu.Lock()
 	delete(paneContentHashes, key)
-	paneContentHashesMu.Unlock()
-	paneDetectCacheMu.Lock()
 	delete(paneDetectCache, key)
-	paneDetectCacheMu.Unlock()
+	paneCacheMu.Unlock()
 }
 
 // clearPaneHashByPrefix removes all stored hashes and cached results whose key starts with the given prefix.
 func clearPaneHashByPrefix(prefix string) {
-	paneContentHashesMu.Lock()
+	paneCacheMu.Lock()
 	for k := range paneContentHashes {
 		if strings.HasPrefix(k, prefix) {
 			delete(paneContentHashes, k)
 		}
 	}
-	paneContentHashesMu.Unlock()
-	paneDetectCacheMu.Lock()
 	for k := range paneDetectCache {
 		if strings.HasPrefix(k, prefix) {
 			delete(paneDetectCache, k)
 		}
 	}
-	paneDetectCacheMu.Unlock()
+	paneCacheMu.Unlock()
 }
 
 // ClearAllPaneCache removes all stored hashes and cached detection results.
 func ClearAllPaneCache() {
-	paneContentHashesMu.Lock()
+	paneCacheMu.Lock()
 	paneContentHashes = map[string]uint64{}
-	paneContentHashesMu.Unlock()
-	paneDetectCacheMu.Lock()
 	paneDetectCache = map[string]paneDetectResult{}
-	paneDetectCacheMu.Unlock()
+	paneCacheMu.Unlock()
 }
 
 // contentHashUnchanged checks whether the content hash for the given key
@@ -159,8 +152,8 @@ func ClearAllPaneCache() {
 // Returns false if content changed or there is no stored hash.
 func contentHashUnchanged(key, content string) bool {
 	hash := hashContent(content)
-	paneContentHashesMu.Lock()
-	defer paneContentHashesMu.Unlock()
+	paneCacheMu.Lock()
+	defer paneCacheMu.Unlock()
 	prev, exists := paneContentHashes[key]
 	if !exists {
 		return false
@@ -170,16 +163,16 @@ func contentHashUnchanged(key, content string) bool {
 
 // getCachedResult returns the cached detection result for a pane, if any.
 func getCachedResult(key string) (paneDetectResult, bool) {
-	paneDetectCacheMu.Lock()
-	defer paneDetectCacheMu.Unlock()
+	paneCacheMu.Lock()
+	defer paneCacheMu.Unlock()
 	r, ok := paneDetectCache[key]
 	return r, ok
 }
 
 // setCachedResult stores a detection result in the cache.
 func setCachedResult(key string, r paneDetectResult) {
-	paneDetectCacheMu.Lock()
-	defer paneDetectCacheMu.Unlock()
+	paneCacheMu.Lock()
+	defer paneCacheMu.Unlock()
 	paneDetectCache[key] = r
 }
 
