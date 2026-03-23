@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -886,6 +887,20 @@ func TestParseProcessList_FieldValues(t *testing.T) {
 	}
 }
 
+func TestParseProcessList_MultiWordComm(t *testing.T) {
+	output := "  100   1 /Applications/Self Service.app/Contents/MacOS/Self Service\n  200   1 /usr/local/bin/claude\n"
+	got := parseProcessList(output)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(got))
+	}
+	if got[0].comm != "Self Service" {
+		t.Errorf("comm = %q, want %q", got[0].comm, "Self Service")
+	}
+	if got[1].comm != "claude" {
+		t.Errorf("comm = %q, want %q", got[1].comm, "claude")
+	}
+}
+
 // --- buildProcessMaps ---
 
 func TestBuildProcessMaps(t *testing.T) {
@@ -1040,5 +1055,66 @@ func TestIsAncestorOf(t *testing.T) {
 				t.Errorf("isAncestorOf(%d, %d) = %v, want %v", tt.ancestor, tt.target, got, tt.want)
 			}
 		})
+	}
+}
+
+// --- findClaudePanes integration ---
+
+func TestFindClaudePanes(t *testing.T) {
+	myPID := os.Getpid()
+
+	origPanes := listAllPanesFn
+	origProcs := listProcessesFn
+	t.Cleanup(func() {
+		listAllPanesFn = origPanes
+		listProcessesFn = origProcs
+	})
+
+	// Pane layout:
+	//   pane 1000: shell with claude child → should be found
+	//   pane 2000: claude as root process → should be found
+	//   pane 3000: no claude → should be excluded
+	//   pane myPID: clux itself → should be excluded (self-exclusion)
+	listAllPanesFn = func() (string, error) {
+		lines := strings.Join([]string{
+			"1000\twork\t0\t0\tdev\t/home/user/project",
+			"2000\tother\t1\t0\teditor\t/tmp/editor",
+			"3000\twork\t2\t0\tshell\t/home/user",
+			fmt.Sprintf("%d\tclux\t0\t0\tclux\t/home/user/clux", myPID),
+		}, "\n")
+		return lines, nil
+	}
+
+	listProcessesFn = func() (string, error) {
+		lines := strings.Join([]string{
+			fmt.Sprintf("%d   1 zsh", myPID), // clux's own process
+			"1000   1 zsh",
+			"1001 1000 claude",  // claude is child of pane 1000
+			"2000   1 claude",   // claude IS pane 2000
+			"3000   1 zsh",
+			"3001 3000 vim",     // no claude in pane 3000
+		}, "\n")
+		return lines, nil
+	}
+
+	got, err := findClaudePanes()
+	if err != nil {
+		t.Fatalf("findClaudePanes() error: %v", err)
+	}
+
+	if len(got) != 2 {
+		t.Fatalf("expected 2 panes, got %d: %+v", len(got), got)
+	}
+
+	// Verify the two found panes
+	sessions := map[string]bool{}
+	for _, p := range got {
+		sessions[p.sessionName+":"+p.windowIndex] = true
+	}
+	if !sessions["work:0"] {
+		t.Error("expected work:0 (shell with claude child) to be found")
+	}
+	if !sessions["other:1"] {
+		t.Error("expected other:1 (claude as root) to be found")
 	}
 }

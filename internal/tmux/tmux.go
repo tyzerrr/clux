@@ -247,7 +247,7 @@ func parseProcessList(output string) []processInfo {
 		if err != nil {
 			continue
 		}
-		comm := filepath.Base(fields[2])
+		comm := filepath.Base(strings.Join(fields[2:], " "))
 		procs = append(procs, processInfo{pid: pid, ppid: ppid, comm: comm})
 	}
 	return procs
