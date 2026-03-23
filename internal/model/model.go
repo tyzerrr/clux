@@ -235,6 +235,53 @@ func fetchPreviewCmdForSessionWithOffset(s session.Session, scrollOffset, height
 	}
 }
 
+const dashScrollbackLines = 500
+
+func fetchDashboardPreviewWithScrollback(s session.Session, tileIdx int) tea.Cmd {
+	return func() tea.Msg {
+		sessionName := s.SessionName
+		if sessionName == "" {
+			sessionName = tmux.SessionName
+		}
+		paneIndex := resolvePaneIndex(s.PaneIndex)
+		content, err := tmux.CapturePaneWithScrollback(sessionName, s.WindowIndex, paneIndex, dashScrollbackLines)
+		if err != nil {
+			return dashPreviewsMsg(map[int]string{tileIdx: ""})
+		}
+		return dashPreviewsMsg(map[int]string{tileIdx: content})
+	}
+}
+
+func fetchDashboardPreviewsSkipping(sessions []session.Session, skipIdx int) tea.Cmd {
+	return func() tea.Msg {
+		result := make(map[int]string, len(sessions))
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+		for i, s := range sessions {
+			if i == skipIdx {
+				continue
+			}
+			wg.Add(1)
+			go func(idx int, s session.Session) {
+				defer wg.Done()
+				sessionName := s.SessionName
+				if sessionName == "" {
+					sessionName = tmux.SessionName
+				}
+				paneIndex := resolvePaneIndex(s.PaneIndex)
+				content, err := tmux.CapturePaneForSession(sessionName, s.WindowIndex, paneIndex)
+				mu.Lock()
+				if err == nil {
+					result[idx] = content
+				}
+				mu.Unlock()
+			}(i, s)
+		}
+		wg.Wait()
+		return dashPreviewsMsg(result)
+	}
+}
+
 func fetchDashboardPreviews(sessions []session.Session) tea.Cmd {
 	return func() tea.Msg {
 		result := make(map[int]string, len(sessions))
@@ -645,7 +692,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				pageItems = 0
 			}
 			pageSessions := m.filtered[m.dashPageOffset : m.dashPageOffset+pageItems]
-			cmds := []tea.Cmd{fetchSessionsCmd, doTick(), fetchDashboardPreviews(pageSessions)}
+			cmds := []tea.Cmd{fetchSessionsCmd, doTick()}
+			if m.previewScrollOffset > 0 && m.dashCursor < len(pageSessions) {
+				cmds = append(cmds, fetchDashboardPreviewsSkipping(pageSessions, m.dashCursor))
+				cmds = append(cmds, fetchDashboardPreviewWithScrollback(pageSessions[m.dashCursor], m.dashCursor))
+			} else {
+				cmds = append(cmds, fetchDashboardPreviews(pageSessions))
+			}
 			return m, tea.Batch(cmds...)
 		default:
 			return m, doTick()
@@ -1038,9 +1091,15 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case "ctrl+u":
 		if pageItems > 0 && m.dashPageOffset+m.dashCursor < len(m.filtered) {
+			wasZero := m.previewScrollOffset == 0
 			m.previewScrollOffset += dashPreviewScrollStep(m)
 			if maxOff := dashMaxScrollOffset(m); m.previewScrollOffset > maxOff {
 				m.previewScrollOffset = maxOff
+			}
+			if wasZero {
+				// First scroll: fetch extended content with scrollback history
+				s := m.filtered[m.dashPageOffset+m.dashCursor]
+				return m, fetchDashboardPreviewWithScrollback(s, m.dashCursor)
 			}
 		}
 	case "ctrl+d":

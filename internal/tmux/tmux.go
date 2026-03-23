@@ -999,6 +999,27 @@ func CapturePaneForSessionWithOffset(sessionName, windowIndex, paneIndex string,
 	return string(out), nil
 }
 
+// CapturePaneWithScrollback captures the visible pane content plus scrollback history.
+// historyLines specifies how many lines of scrollback to include (e.g. 500).
+func CapturePaneWithScrollback(sessionName, windowIndex, paneIndex string, historyLines int) (string, error) {
+	if err := validatePaneTarget(windowIndex, paneIndex); err != nil {
+		return "", err
+	}
+	target := sessionName + ":" + windowIndex + "." + paneIndex
+	if historyLines < 1 {
+		historyLines = 1
+	}
+	cmd, cancel := tmuxCommand("capture-pane", "-t", target, "-e", "-p",
+		"-S", strconv.Itoa(-historyLines),
+	)
+	out, err := cmd.Output()
+	cancel()
+	if err != nil {
+		return "", fmt.Errorf("capturing pane with scrollback for window %q pane %q in session %q: %w", windowIndex, paneIndex, sessionName, err)
+	}
+	return string(out), nil
+}
+
 // capturePaneContentForSession captures the plain (no ANSI) content of a specific pane in a window.
 func capturePaneContentForSession(sessionName, windowIndex, paneIndex string) (string, error) {
 	if err := validatePaneTarget(windowIndex, paneIndex); err != nil {
