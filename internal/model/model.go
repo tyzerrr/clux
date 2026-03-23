@@ -1039,6 +1039,9 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+u":
 		if pageItems > 0 && m.dashPageOffset+m.dashCursor < len(m.filtered) {
 			m.previewScrollOffset += dashPreviewScrollStep(m)
+			if maxOff := dashMaxScrollOffset(m); m.previewScrollOffset > maxOff {
+				m.previewScrollOffset = maxOff
+			}
 		}
 	case "ctrl+d":
 		if pageItems > 0 && m.dashPageOffset+m.dashCursor < len(m.filtered) {
@@ -1340,6 +1343,22 @@ func previewScrollStep(m Model) int {
 // dashPreviewScrollStep returns the number of lines to scroll per ctrl+u/d press in dashboard.
 func dashPreviewScrollStep(_ Model) int {
 	return 3
+}
+
+// dashMaxScrollOffset returns the maximum scroll offset based on cached preview content.
+func dashMaxScrollOffset(m Model) int {
+	if m.dashPreviews == nil {
+		return 0
+	}
+	preview := m.dashPreviews[m.dashCursor]
+	lines := strings.Split(preview, "\n")
+	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
+	}
+	if len(lines) <= 1 {
+		return 0
+	}
+	return len(lines)
 }
 
 // --- View ---
@@ -2073,14 +2092,12 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 			scrollOff := 0
 			if localIdx == m.dashCursor {
 				scrollOff = m.previewScrollOffset
-				// Clamp to available scroll range
 				maxScroll := len(lines) - rowPreviewLines
 				if maxScroll < 0 {
 					maxScroll = 0
 				}
 				if scrollOff > maxScroll {
 					scrollOff = maxScroll
-					m.previewScrollOffset = scrollOff
 				}
 			}
 			start := len(lines) - rowPreviewLines - scrollOff

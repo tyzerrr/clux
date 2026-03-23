@@ -1910,6 +1910,14 @@ func TestDashboard_ViewShowsPageIndicator(t *testing.T) {
 	}
 }
 
+func testDashPreview(n int) string {
+	var lines []string
+	for i := range n {
+		lines = append(lines, fmt.Sprintf("line %d", i))
+	}
+	return strings.Join(lines, "\n")
+}
+
 func TestDashboard_CtrlU_ScrollsPreviewUp(t *testing.T) {
 	sessions := []session.Session{
 		{Name: "s0", Status: session.StatusIdle, WindowIndex: "0"},
@@ -1920,6 +1928,7 @@ func TestDashboard_CtrlU_ScrollsPreviewUp(t *testing.T) {
 	m.width = 80
 	m.height = 20
 	m.dashCursor = 0
+	m.dashPreviews = map[int]string{0: testDashPreview(50), 1: testDashPreview(50)}
 
 	result, _ := m.updateDashboard(tea.KeyPressMsg{Mod: tea.ModCtrl, Code: 'u'})
 	rm := result.(Model)
@@ -1938,6 +1947,7 @@ func TestDashboard_CtrlD_ScrollsPreviewDown(t *testing.T) {
 	m.width = 80
 	m.height = 20
 	m.dashCursor = 0
+	m.dashPreviews = map[int]string{0: testDashPreview(50), 1: testDashPreview(50)}
 	m.previewScrollOffset = 10
 
 	result, _ := m.updateDashboard(tea.KeyPressMsg{Mod: tea.ModCtrl, Code: 'd'})
