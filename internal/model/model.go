@@ -591,7 +591,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.filtered = applyFilter(m.sessions, m.filterInput.Value())
-		sortByStatus(m.filtered)
+		if m.mode != ModeDashboard {
+			sortByStatus(m.filtered)
+		}
 		// Clamp cursor.
 		if len(m.filtered) == 0 {
 			m.cursor = 0

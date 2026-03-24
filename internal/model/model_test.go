@@ -939,6 +939,51 @@ func TestModeList_ShiftKSetsConfirmPaneIndex(t *testing.T) {
 		t.Errorf("confirmPaneIndex = %q, want %q", updated.confirmPaneIndex, "2")
 	}
 }
+// --- dashboard sort-skip tests ---
+
+func TestDashboardMode_SessionsNotReorderedOnSessionsMsg(t *testing.T) {
+	// Start with sessions in Idle, Working, Waiting order.
+	sessions := []session.Session{
+		{Name: "idle-first", WindowIndex: "0", PaneIndex: "0", Status: session.StatusIdle},
+		{Name: "working-second", WindowIndex: "1", PaneIndex: "0", Status: session.StatusWorking},
+		{Name: "waiting-third", WindowIndex: "2", PaneIndex: "0", Status: session.StatusWaiting},
+	}
+	m := testModel(sessions)
+	m.mode = ModeDashboard
+
+	result, _ := m.Update(sessionsMsg(sessions))
+	rm := result.(Model)
+
+	expected := []string{"idle-first", "working-second", "waiting-third"}
+	for i, name := range expected {
+		if rm.filtered[i].Name != name {
+			t.Errorf("dashboard mode: position %d = %q, want %q (order should be preserved)", i, rm.filtered[i].Name, name)
+		}
+	}
+}
+
+func TestListMode_SessionsSortedByStatusOnSessionsMsg(t *testing.T) {
+	// Start with sessions in Idle, Working, Waiting order.
+	sessions := []session.Session{
+		{Name: "idle-first", WindowIndex: "0", PaneIndex: "0", Status: session.StatusIdle},
+		{Name: "working-second", WindowIndex: "1", PaneIndex: "0", Status: session.StatusWorking},
+		{Name: "waiting-third", WindowIndex: "2", PaneIndex: "0", Status: session.StatusWaiting},
+	}
+	m := testModel(sessions)
+	m.mode = ModeList
+
+	result, _ := m.Update(sessionsMsg(sessions))
+	rm := result.(Model)
+
+	// sortByStatus priority: Waiting > Working > Idle > Unknown
+	expected := []string{"waiting-third", "working-second", "idle-first"}
+	for i, name := range expected {
+		if rm.filtered[i].Name != name {
+			t.Errorf("list mode: position %d = %q, want %q (should be sorted by status)", i, rm.filtered[i].Name, name)
+		}
+	}
+}
+
 // --- sortByStatus tests ---
 
 func TestSortByStatus(t *testing.T) {
