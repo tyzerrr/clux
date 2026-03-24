@@ -13,7 +13,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/tanaka0325/clux/internal/session"
 )
@@ -27,6 +26,12 @@ const claudeProcessName = "claude"
 var (
 	validWindowIndex = regexp.MustCompile(`^\d+$`)
 	safeWindowName   = regexp.MustCompile(`[^a-zA-Z0-9_\-.]`)
+	// spinnerPattern matches Claude Code's activity spinner lines like
+	// "✻ Cooking…" or "⏺ Reading file…". The spinner character class covers
+	// dingbats (U+2720-U+2767), ⏺ (U+23FA), and geometric shapes (U+25C9-U+25CF).
+	// Requires a gerund word (\w+ing) to avoid false positives on truncated
+	// tool output lines like "⏺ Bash(long command…".
+	spinnerPattern = regexp.MustCompile(`(?m)^\s*[\x{2720}-\x{2767}\x{23FA}\x{25C9}-\x{25CF}] \S*[Ii]ng\b.*…`)
 )
 
 const (
@@ -1235,37 +1240,14 @@ func isWorking(content string) bool {
 		}
 	}
 
-	// Spinner activity: a line starting with a spinner char, a space, a word
-	// ending in "ing", and an ellipsis "…". Matches output like:
-	//   ✻ Cooking…    ⏺ Reading file…    ◉ Searching…
-	for _, line := range strings.Split(content, "\n") {
-		line = strings.TrimSpace(line)
-		if len(line) == 0 {
-			continue
-		}
-		r, _ := utf8.DecodeRuneInString(line)
-		if isSpinnerRune(r) && strings.HasSuffix(line, "…") {
-			return true
-		}
-	}
-
-	return false
-}
-
-// isSpinnerRune returns true for Unicode characters used as spinner/activity
-// indicators in Claude Code's TUI output.
-func isSpinnerRune(r rune) bool {
-	// Dingbats and miscellaneous symbols used by Claude Code spinners.
-	// Ranges: ✠-❧ (U+2720-U+2767, includes ✦✧✨✱✲…❋),
-	// ⏺ (U+23FA), ◉◊○◌◍◎● (U+25C9-U+25CF).
-	switch {
-	case r >= 0x2720 && r <= 0x2767: // ✠ .. ❧ (dingbats)
-		return true
-	case r == 0x23FA: // ⏺
-		return true
-	case r >= 0x25C9 && r <= 0x25CF: // ◉◊○◌◍◎●
+	// Spinner activity: a line like "✻ Cooking…" or "⏺ Reading file…".
+	// Must start with a spinner char followed by a gerund word (ending in
+	// "ing") to avoid false positives on truncated tool output lines like
+	// "⏺ Bash(very long command…".
+	if spinnerPattern.MatchString(content) {
 		return true
 	}
+
 	return false
 }
 

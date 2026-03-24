@@ -663,6 +663,18 @@ func TestDetect_OldLocalAgentInScrollback_HashStable_Idle(t *testing.T) {
 	assert(t, st == session.StatusIdle, "expected Idle (old agent text in scrollback), got %v", st)
 }
 
+// Truncated tool output line "⏺ Bash(long command…" must NOT trigger spinner detection
+func TestDetect_TruncatedToolOutput_NotSpinner_Idle(t *testing.T) {
+	withMockedDeps(t,
+		func(_, _, _ string) string { return "" },
+		func(_, _, _ string) bool { return false },
+		func(_ string, _ string) bool { return false },
+	)
+	content := "some output\n⏺ Bash(git add internal/tmux/tmux.go internal/tmux/tmux_t…\n❯ \n  -- INSERT --"
+	st := detectStatusWithHooksForSession(content, "clux", "0", "0")
+	assert(t, st == session.StatusIdle, "expected Idle (truncated tool output, not spinner), got %v", st)
+}
+
 // Hook says "idle" -> ignored, hash takes priority
 func TestDetect_HookIdle_Ignored_HashChanged(t *testing.T) {
 	withMockedDeps(t,
