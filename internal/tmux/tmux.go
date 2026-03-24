@@ -1115,10 +1115,10 @@ func parseClaudeStatus(s string) (session.Status, bool) {
 	}
 }
 
-// hasActiveChildrenForSession checks whether the pane's process has grandchild processes,
-// indicating that Claude Code is actively executing a tool (e.g., bash command).
-// The pane PID is the shell, its child is Claude Code (node), and grandchildren
-// are tool processes.
+// hasActiveChildrenForSession checks whether the pane's process has grandchild
+// processes that indicate active tool execution (e.g., bash → gh, grep).
+// Persistent child processes (MCP servers, LSP servers, caffeinate) are excluded
+// since they always have grandchildren and would cause false positives.
 func hasActiveChildrenForSession(sessionName, windowIndex, paneIndex string) bool {
 	panePID := tmuxDisplayOption(sessionName, windowIndex, paneIndex, "#{pane_pid}")
 	if panePID == "" {
@@ -1134,12 +1134,37 @@ func hasActiveChildrenForSession(sessionName, windowIndex, paneIndex string) boo
 		if child = strings.TrimSpace(child); child == "" {
 			continue
 		}
+		if isPersistentChild(child) {
+			continue
+		}
 		cmd, cancel = procCommand("pgrep", "-P", child)
 		err = cmd.Run()
 		cancel()
 		if err == nil {
 			return true
 		}
+	}
+	return false
+}
+
+// isPersistentChild returns true if the given PID is a long-lived background
+// process (MCP server, LSP, etc.) that should be excluded from grandchild
+// detection. These processes are always present and their grandchildren do not
+// indicate active tool execution.
+func isPersistentChild(pid string) bool {
+	cmd, cancel := procCommand("ps", "-o", "comm=", "-p", pid)
+	out, err := cmd.Output()
+	cancel()
+	if err != nil {
+		return false
+	}
+	comm := strings.TrimSpace(string(out))
+	name := filepath.Base(comm)
+	// Known persistent processes spawned by Claude Code.
+	switch name {
+	case "node", "gopls", "caffeinate",
+		"bigbrother-mcp-server", "tasq", "memq":
+		return true
 	}
 	return false
 }
