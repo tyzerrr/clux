@@ -480,6 +480,41 @@ func TestContentChanged(t *testing.T) {
 	}
 }
 
+// Timer line changes (e.g., "Baked for 3m 16s" -> "3m 17s") should NOT cause hash change
+func TestContentChanged_TimerIgnored(t *testing.T) {
+	resetPaneHashes(t)
+
+	key := "test:timer"
+	base := "some output\n❯ \n  -- INSERT --"
+
+	content1 := "◆ Baked for 3m 16s\n" + base
+	content2 := "◆ Baked for 3m 17s\n" + base
+
+	// First call
+	contentChanged(key, content1)
+	// Timer tick only — should NOT be detected as change
+	if contentChanged(key, content2) {
+		t.Error("timer-only change should not be detected")
+	}
+}
+
+// Real content change alongside timer should still be detected
+func TestContentChanged_RealChangeWithTimer(t *testing.T) {
+	resetPaneHashes(t)
+
+	key := "test:timer2"
+	base1 := "old output\n❯ \n  -- INSERT --"
+	base2 := "new output\n❯ \n  -- INSERT --"
+
+	content1 := "◆ Baked for 1s\n" + base1
+	content2 := "◆ Baked for 2s\n" + base2
+
+	contentChanged(key, content1)
+	if !contentChanged(key, content2) {
+		t.Error("real content change should be detected even with timer")
+	}
+}
+
 func TestClearPaneHash(t *testing.T) {
 	resetPaneHashes(t)
 

@@ -32,6 +32,10 @@ var (
 	// Requires a gerund word (\w+ing) to avoid false positives on truncated
 	// tool output lines like "⏺ Bash(long command…".
 	spinnerPattern = regexp.MustCompile(`(?m)^\s*[\x{2720}-\x{2767}\x{23FA}\x{25C9}-\x{25CF}] \S*[Ii]ng\b.*…`)
+	// idleTimerPattern matches Claude Code's idle timer lines that update
+	// every second (e.g., "◆ Baked for 3m 16s", "✻ Cooked for 47s").
+	// These must be stripped before content hashing to avoid false Working.
+	idleTimerPattern = regexp.MustCompile(`(?m)^.*(?:Baked|Cooked|Worked|Sauteed|Marinated) for \d+.*$`)
 )
 
 const (
@@ -138,8 +142,11 @@ func paneKey(sessionName, windowIndex, paneIndex string) string {
 
 // hashContent computes the FNV-1a hash of a string.
 func hashContent(content string) uint64 {
+	// Strip idle timer lines that update every second (e.g., "◆ Baked for 3m 16s")
+	// so that timer ticks alone do not cause hash changes.
+	normalized := idleTimerPattern.ReplaceAllString(content, "")
 	h := fnv.New64a()
-	_, _ = io.WriteString(h, content)
+	_, _ = io.WriteString(h, normalized)
 	return h.Sum64()
 }
 
