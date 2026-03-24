@@ -789,13 +789,13 @@ func TestModeNewSession_EnterWithValidDir(t *testing.T) {
 	m.filteredDirs = []string{os.TempDir()}
 	m.newSessionCursor = 0
 	msg := tea.KeyPressMsg{Code: tea.KeyEnter}
-	result, _ := m.updateNewSession(msg)
+	result, cmd := m.updateNewSession(msg)
 	rm := result.(Model)
-	if rm.mode != ModeNewSessionPrompt {
-		t.Errorf("expected ModeNewSessionPrompt, got %v", rm.mode)
+	if rm.mode != ModeList {
+		t.Errorf("expected ModeList, got %v", rm.mode)
 	}
-	if rm.selectedRepoDir != os.TempDir() {
-		t.Errorf("expected selectedRepoDir %q, got %q", os.TempDir(), rm.selectedRepoDir)
+	if cmd == nil {
+		t.Error("expected non-nil cmd for valid dir (direct window creation)")
 	}
 }
 
@@ -812,61 +812,6 @@ func TestModeNewSession_EnterWithInvalidDir(t *testing.T) {
 	}
 	if cmd != nil {
 		t.Error("expected nil cmd for invalid dir")
-	}
-}
-
-// --- ModeNewSessionPrompt tests ---
-
-func TestModeNewSessionPrompt_EmptyPromptCreatesWindowDirectly(t *testing.T) {
-	m := testModel(testSessions)
-	m.mode = ModeNewSessionPrompt
-	m.selectedRepoDir = os.TempDir()
-	m.newSessionPromptInput.SetValue("")
-	msg := tea.KeyPressMsg{Code: tea.KeyEnter}
-	_, cmd := m.updateNewSessionPrompt(msg)
-	if cmd == nil {
-		t.Error("expected non-nil cmd for empty prompt (direct window creation)")
-	}
-}
-
-func TestModeNewSessionPrompt_WithPromptCreatesWindowSilently(t *testing.T) {
-	m := testModel(testSessions)
-	m.mode = ModeNewSessionPrompt
-	m.selectedRepoDir = os.TempDir()
-	m.newSessionPromptInput.SetValue("fix the bug")
-	msg := tea.KeyPressMsg{Code: tea.KeyEnter}
-	result, cmd := m.updateNewSessionPrompt(msg)
-	rm := result.(Model)
-	if rm.mode != ModeList {
-		t.Errorf("expected ModeList, got %v", rm.mode)
-	}
-	if cmd == nil {
-		t.Error("expected non-nil cmd for prompt (silent window creation)")
-	}
-}
-
-func TestModeNewSessionPrompt_EscGoesToModeList(t *testing.T) {
-	m := testModel(testSessions)
-	m.mode = ModeNewSessionPrompt
-	m.selectedRepoDir = os.TempDir()
-	msg := tea.KeyPressMsg{Code: tea.KeyEscape}
-	result, _ := m.updateNewSessionPrompt(msg)
-	rm := result.(Model)
-	if rm.mode != ModeList {
-		t.Errorf("expected ModeList, got %v", rm.mode)
-	}
-}
-
-func TestView_ModeNewSessionPrompt(t *testing.T) {
-	m := New()
-	m.mode = ModeNewSessionPrompt
-	m.selectedRepoDir = "/tmp/test-repo"
-	view := m.View().Content
-	if !strings.Contains(view, "Initial Prompt") {
-		t.Error("expected view to contain 'Initial Prompt'")
-	}
-	if !strings.Contains(view, "skip prompt") {
-		t.Error("expected view to contain 'skip prompt'")
 	}
 }
 

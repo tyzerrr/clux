@@ -27,7 +27,6 @@ const (
 	ModeList Mode = iota
 	ModeFilter
 	ModeNewSession
-	ModeNewSessionPrompt // prompt input for new session
 	ModeConfirmKill
 	ModeDashboard
 	ModeBroadcastSelect // ghq repo multi-select for broadcast
@@ -82,10 +81,6 @@ type Model struct {
 	newSessionInput  textinput.Model
 	newSessionCursor int
 
-	// New session prompt
-	newSessionPromptInput textinput.Model
-	selectedRepoDir       string // repo selected in ModeNewSession, used in ModeNewSessionPrompt
-
 	// Preview mode
 	previewEnabled      bool   // toggle state, default false
 	previewContent      string // captured pane content for selected session
@@ -129,10 +124,6 @@ func New() Model {
 	ni.Placeholder = "Search repository..."
 	ni.CharLimit = 64
 
-	npi := textinput.New()
-	npi.Placeholder = "Enter prompt (optional, Enter to skip)..."
-	npi.CharLimit = 512
-
 	bci := textinput.New()
 	bci.Placeholder = "Search repository..."
 	bci.CharLimit = 64
@@ -154,7 +145,6 @@ func New() Model {
 		mode:                 ModeList,
 		filterInput:          ti,
 		newSessionInput:      ni,
-		newSessionPromptInput: npi,
 		broadcastInput:       bci,
 		broadcastPromptInput: bpi,
 		dashboardPromptInput: di,
@@ -729,8 +719,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateFilter(msg)
 		case ModeNewSession:
 			return m.updateNewSession(msg)
-		case ModeNewSessionPrompt:
-			return m.updateNewSessionPrompt(msg)
 		case ModeConfirmKill:
 			return m.updateConfirmKill(msg)
 		case ModeDashboard:
@@ -762,11 +750,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.newSessionCursor >= len(m.filteredDirs) {
 				m.newSessionCursor = 0
 			}
-			return m, cmd
-
-		case ModeNewSessionPrompt:
-			var cmd tea.Cmd
-			m.newSessionPromptInput, cmd = m.newSessionPromptInput.Update(msg)
 			return m, cmd
 
 		case ModeBroadcastSelect:
@@ -986,11 +969,15 @@ func (m Model) updateNewSession(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.err = err
 				return m, nil
 			}
-			m.selectedRepoDir = dir
-			m.mode = ModeNewSessionPrompt
-			m.newSessionPromptInput.SetValue("")
 			m.newSessionInput.Blur()
-			return m, m.newSessionPromptInput.Focus()
+			m.mode = ModeList
+			name := tmux.GenerateWindowName(dir)
+			return m, func() tea.Msg {
+				if err := tmux.CreateWindow(name, dir); err != nil {
+					return errMsg(err)
+				}
+				return tea.QuitMsg{}
+			}
 		}
 		return m, nil
 
@@ -1021,47 +1008,6 @@ func (m Model) updateNewSession(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 }
-
-func (m Model) updateNewSessionPrompt(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "enter":
-		prompt := strings.TrimSpace(m.newSessionPromptInput.Value())
-		dir := m.selectedRepoDir
-		m.newSessionPromptInput.Blur()
-		m.mode = ModeList
-
-		if prompt == "" {
-			// No prompt — just create the window
-			name := tmux.GenerateWindowName(dir)
-			return m, func() tea.Msg {
-				if err := tmux.CreateWindow(name, dir); err != nil {
-					return errMsg(err)
-				}
-				return tea.QuitMsg{}
-			}
-		}
-
-		// With prompt — create window with prompt as arg
-		name := tmux.GenerateWindowName(dir)
-		return m, func() tea.Msg {
-			if err := tmux.CreateWindow(name, dir, prompt); err != nil {
-				return errMsg(err)
-			}
-			return tea.QuitMsg{}
-		}
-
-	case "esc":
-		m.mode = ModeList
-		m.newSessionPromptInput.Blur()
-		return m, nil
-
-	default:
-		var cmd tea.Cmd
-		m.newSessionPromptInput, cmd = m.newSessionPromptInput.Update(msg)
-		return m, cmd
-	}
-}
-
 func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	cols := m.dashCols()
 	maxVisible := m.dashMaxVisible()
@@ -1855,10 +1801,6 @@ func (m Model) View() tea.View {
 		return m.viewWithOverlay(m.viewNewSession)
 	}
 
-	if m.mode == ModeNewSessionPrompt {
-		return m.viewWithOverlay(m.viewNewSessionPrompt)
-	}
-
 	if m.mode == ModeDashboard || m.mode == ModeDashboardPrompt {
 		return newView(m.viewDashboard(&b))
 	}
@@ -2074,28 +2016,6 @@ func (m Model) viewNewSession(b *strings.Builder) (string, *overlayCursor) {
 	cur := &overlayCursor{x: 1 + textInputCursorX(m.newSessionInput), y: cursorY}
 	return renderOverlayBox(b.String(), overlayWidth), cur
 }
-
-func (m Model) viewNewSessionPrompt(b *strings.Builder) (string, *overlayCursor) {
-	overlayWidth := m.overlayWidth(50, 60, 80)
-
-	b.WriteString(styleOverlayTitle.Render("New Session — Initial Prompt"))
-	b.WriteString("\n\n")
-	fmt.Fprintf(b, " Repository: %s\n\n", styleDir.Render(shortenDir(m.selectedRepoDir)))
-	b.WriteString(" ")
-	b.WriteString(m.newSessionPromptInput.View())
-	b.WriteString("\n\n")
-	if m.err != nil {
-		b.WriteString(styleError.Render("Error: " + m.err.Error()))
-		b.WriteString("\n\n")
-	}
-
-	b.WriteString(styleHelpBar.Render("↵:create  ↵(empty):skip prompt  Esc:cancel"))
-
-	// Line 0: title, line 1: blank (\n\n), line 2: " Repository: ...", line 3: blank (\n\n), line 4: " " + input
-	cur := &overlayCursor{x: 1 + textInputCursorX(m.newSessionPromptInput), y: 4}
-	return renderOverlayBox(b.String(), overlayWidth), cur
-}
-
 func (m Model) viewDashboard(b *strings.Builder) string {
 	cols := m.dashCols()
 	maxVisible := m.dashMaxVisible()
