@@ -929,6 +929,46 @@ func TestListMode_SessionsSortedByStatusOnSessionsMsg(t *testing.T) {
 	}
 }
 
+func TestDashboardPromptMode_SessionsNotReorderedOnSessionsMsg(t *testing.T) {
+	sessions := []session.Session{
+		{Name: "idle-first", WindowIndex: "0", PaneIndex: "0", Status: session.StatusIdle},
+		{Name: "working-second", WindowIndex: "1", PaneIndex: "0", Status: session.StatusWorking},
+		{Name: "waiting-third", WindowIndex: "2", PaneIndex: "0", Status: session.StatusWaiting},
+	}
+	m := testModel(sessions)
+	m.mode = ModeDashboardPrompt
+
+	result, _ := m.Update(sessionsMsg(sessions))
+	rm := result.(Model)
+
+	expected := []string{"idle-first", "working-second", "waiting-third"}
+	for i, name := range expected {
+		if rm.filtered[i].Name != name {
+			t.Errorf("dashboard prompt mode: position %d = %q, want %q (order should be preserved)", i, rm.filtered[i].Name, name)
+		}
+	}
+}
+
+func TestListPromptMode_SessionsNotReorderedOnSessionsMsg(t *testing.T) {
+	sessions := []session.Session{
+		{Name: "idle-first", WindowIndex: "0", PaneIndex: "0", Status: session.StatusIdle},
+		{Name: "working-second", WindowIndex: "1", PaneIndex: "0", Status: session.StatusWorking},
+		{Name: "waiting-third", WindowIndex: "2", PaneIndex: "0", Status: session.StatusWaiting},
+	}
+	m := testModel(sessions)
+	m.mode = ModeListPrompt
+
+	result, _ := m.Update(sessionsMsg(sessions))
+	rm := result.(Model)
+
+	expected := []string{"idle-first", "working-second", "waiting-third"}
+	for i, name := range expected {
+		if rm.filtered[i].Name != name {
+			t.Errorf("list prompt mode: position %d = %q, want %q (order should be preserved)", i, rm.filtered[i].Name, name)
+		}
+	}
+}
+
 // --- sortByStatus tests ---
 
 func TestSortByStatus(t *testing.T) {

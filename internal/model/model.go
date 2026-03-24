@@ -582,7 +582,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.filtered = applyFilter(m.sessions, m.filterInput.Value())
-		if m.mode != ModeDashboard {
+		if m.mode != ModeDashboard && m.mode != ModeDashboardPrompt && m.mode != ModeListPrompt {
 			sortByStatus(m.filtered)
 		}
 		// Clamp cursor.
@@ -592,7 +592,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cursor = len(m.filtered) - 1
 		}
 
-		if m.mode == ModeDashboard {
+		if m.mode == ModeDashboard || m.mode == ModeDashboardPrompt {
 			maxVisible := m.dashMaxVisible()
 			// Snap page offset to a valid page boundary.
 			if maxVisible > 0 {
