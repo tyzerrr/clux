@@ -2414,3 +2414,99 @@ func TestModeDashboardPrompt_EnterWithStaleIndex(t *testing.T) {
 		t.Error("expected nil command when index is out of bounds")
 	}
 }
+
+// --- ModeListPrompt tests ---
+
+func TestModeList_ISetsListPromptMode(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeList
+
+	result, _ := m.updateList(tea.KeyPressMsg{Code: 'i', Text: "i"})
+	rm := result.(Model)
+	if rm.mode != ModeListPrompt {
+		t.Errorf("expected ModeListPrompt, got %v", rm.mode)
+	}
+}
+
+func TestModeList_IWithEmptyList(t *testing.T) {
+	m := testModel(nil)
+	m.mode = ModeList
+
+	result, _ := m.updateList(tea.KeyPressMsg{Code: 'i', Text: "i"})
+	rm := result.(Model)
+	if rm.mode != ModeList {
+		t.Errorf("expected mode to remain ModeList, got %v", rm.mode)
+	}
+}
+
+func TestModeListPrompt_EscGoesBack(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeListPrompt
+
+	result, _ := m.updateListPrompt(tea.KeyPressMsg{Code: tea.KeyEscape, Text: ""})
+	rm := result.(Model)
+	if rm.mode != ModeList {
+		t.Errorf("expected ModeList, got %v", rm.mode)
+	}
+}
+
+func TestModeListPrompt_EnterWithTextReturns(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeListPrompt
+	m.dashboardPromptInput.SetValue("hello")
+
+	result, cmd := m.updateListPrompt(tea.KeyPressMsg{Code: tea.KeyEnter, Text: ""})
+	rm := result.(Model)
+	if rm.mode != ModeList {
+		t.Errorf("expected ModeList, got %v", rm.mode)
+	}
+	if cmd == nil {
+		t.Error("expected non-nil command for sending input")
+	}
+}
+
+func TestModeListPrompt_EnterEmptyDoesNothing(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeListPrompt
+	m.dashboardPromptInput.SetValue("")
+
+	result, cmd := m.updateListPrompt(tea.KeyPressMsg{Code: tea.KeyEnter, Text: ""})
+	rm := result.(Model)
+	if rm.mode != ModeListPrompt {
+		t.Errorf("expected mode to remain ModeListPrompt, got %v", rm.mode)
+	}
+	if cmd != nil {
+		t.Error("expected nil command for empty input")
+	}
+}
+
+func TestModeListPrompt_EnterWhitespaceOnlyDoesNothing(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeListPrompt
+	m.dashboardPromptInput.SetValue("   ")
+
+	result, cmd := m.updateListPrompt(tea.KeyPressMsg{Code: tea.KeyEnter, Text: ""})
+	rm := result.(Model)
+	if rm.mode != ModeListPrompt {
+		t.Errorf("expected mode to remain ModeListPrompt, got %v", rm.mode)
+	}
+	if cmd != nil {
+		t.Error("expected nil command for whitespace-only input")
+	}
+}
+
+func TestModeListPrompt_EnterWithStaleIndex(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeListPrompt
+	m.dashboardPromptInput.SetValue("hello")
+	m.cursor = 99 // out of bounds
+
+	result, cmd := m.updateListPrompt(tea.KeyPressMsg{Code: tea.KeyEnter, Text: ""})
+	rm := result.(Model)
+	if rm.mode != ModeList {
+		t.Errorf("expected ModeList on stale index, got %v", rm.mode)
+	}
+	if cmd != nil {
+		t.Error("expected nil command when index is out of bounds")
+	}
+}

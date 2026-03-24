@@ -32,6 +32,7 @@ const (
 	ModeBroadcastSelect // ghq repo multi-select for broadcast
 	ModeBroadcastPrompt // prompt/skill input for broadcast
 	ModeDashboardPrompt // inline text input on dashboard
+	ModeListPrompt      // inline text input on list
 )
 
 // Custom message types.
@@ -725,6 +726,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateDashboard(msg)
 		case ModeDashboardPrompt:
 			return m.updateDashboardPrompt(msg)
+		case ModeListPrompt:
+			return m.updateListPrompt(msg)
 		case ModeBroadcastSelect:
 			return m.updateBroadcastSelect(msg)
 		case ModeBroadcastPrompt:
@@ -766,7 +769,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.broadcastPromptInput, cmd = m.broadcastPromptInput.Update(msg)
 			return m, cmd
 
-		case ModeDashboardPrompt:
+		case ModeDashboardPrompt, ModeListPrompt:
 			var cmd tea.Cmd
 			m.dashboardPromptInput, cmd = m.dashboardPromptInput.Update(msg)
 			return m, cmd
@@ -892,6 +895,13 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "g":
 		m.groupEnabled = !m.groupEnabled
 
+	case "i":
+		if len(m.filtered) > 0 {
+			m.mode = ModeListPrompt
+			m.dashboardPromptInput.SetValue("")
+			return m, m.dashboardPromptInput.Focus()
+		}
+
 	case "/":
 		m.mode = ModeFilter
 		return m, m.filterInput.Focus()
@@ -901,6 +911,44 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func (m Model) updateListPrompt(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		text := strings.TrimSpace(m.dashboardPromptInput.Value())
+		if text == "" {
+			return m, nil
+		}
+		if m.cursor >= len(m.filtered) {
+			m.dashboardPromptInput.Blur()
+			m.mode = ModeList
+			return m, nil
+		}
+		s := m.filtered[m.cursor]
+		m.dashboardPromptInput.Blur()
+		m.mode = ModeList
+		sessionName := s.SessionName
+		if sessionName == "" {
+			sessionName = tmux.SessionName
+		}
+		paneIndex := resolvePaneIndex(s.PaneIndex)
+		windowIndex := s.WindowIndex
+		return m, func() tea.Msg {
+			if err := tmux.SendKeysLiteral(sessionName, windowIndex, paneIndex, text); err != nil {
+				return errMsg(err)
+			}
+			return nil
+		}
+	case "esc":
+		m.dashboardPromptInput.Blur()
+		m.mode = ModeList
+		return m, nil
+	default:
+		var cmd tea.Cmd
+		m.dashboardPromptInput, cmd = m.dashboardPromptInput.Update(msg)
+		return m, cmd
+	}
 }
 
 func (m Model) updateConfirmKill(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -1823,7 +1871,15 @@ func (m Model) View() tea.View {
 			previewLabel = "p:preview  ctrl+u/d:scroll"
 		}
 		groupLabel := "g:group"
-		helpBar = styleHelpBar.Render("↵:attach  j/k/↑/↓:navigate  n:new  b:broadcast  K:kill  " + previewLabel + "  " + groupLabel + "  d:dashboard  /:filter  q/Esc:quit")
+		if m.mode == ModeListPrompt {
+			targetName := ""
+			if m.cursor < len(m.filtered) {
+				targetName = m.filtered[m.cursor].DisplayName()
+			}
+			helpBar = fmt.Sprintf(" Send to [%s]: %s  (Enter:send  Esc:cancel)", targetName, m.dashboardPromptInput.View())
+		} else {
+			helpBar = styleHelpBar.Render("↵:attach  j/k/↑/↓:navigate  n:new  i:send  b:broadcast  K:kill  " + previewLabel + "  " + groupLabel + "  d:dashboard  /:filter  q/Esc:quit")
+		}
 	}
 
 	showPreviewPanel := m.previewEnabled && len(m.filtered) > 0 && m.width >= 80
@@ -2224,7 +2280,7 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 		if m.dashPageOffset+m.dashCursor < len(m.filtered) {
 			targetName = m.filtered[m.dashPageOffset+m.dashCursor].DisplayName()
 		}
-		b.WriteString(fmt.Sprintf(" Send to [%s]: %s  (Enter:send  Esc:cancel)", targetName, m.dashboardPromptInput.View()))
+		fmt.Fprintf(b, " Send to [%s]: %s  (Enter:send  Esc:cancel)", targetName, m.dashboardPromptInput.View())
 	} else {
 		b.WriteString(styleHelpBar.Render("↵:attach  i:send  K:kill  n:new  /:filter  b:broadcast  ctrl+u/d:scroll  [:prev ]:next  hjkl/↑↓←→:navigate  Esc/d:back  q:quit"))
 	}
