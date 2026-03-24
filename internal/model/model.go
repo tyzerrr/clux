@@ -32,6 +32,7 @@ const (
 	ModeDashboard
 	ModeBroadcastSelect // ghq repo multi-select for broadcast
 	ModeBroadcastPrompt // prompt/skill input for broadcast
+	ModeDashboardPrompt // inline text input on dashboard
 )
 
 // Custom message types.
@@ -98,6 +99,7 @@ type Model struct {
 	dashPreviews   map[int]string // windowIndex -> pane content for each session
 	dashPageOffset int            // index of first displayed item in dashboard
 	dashboardOnly  bool           // when true, Esc/q quits the app (popup mode)
+	dashboardPromptInput textinput.Model // inline input for sending text to a session from dashboard
 
 	// Grouping mode
 	groupEnabled bool   // toggle for grouped display
@@ -139,6 +141,10 @@ func New() Model {
 	bpi.Placeholder = "Prompt or skill to broadcast..."
 	bpi.CharLimit = 512
 
+	di := textinput.New()
+	di.Placeholder = "Send to session..."
+	di.CharLimit = 512
+
 	cfg, configErr := config.Load()
 	if cfg == nil {
 		cfg = &config.Config{}
@@ -151,6 +157,7 @@ func New() Model {
 		newSessionPromptInput: npi,
 		broadcastInput:       bci,
 		broadcastPromptInput: bpi,
+		dashboardPromptInput: di,
 		cfg:                  cfg,
 		configErr:            configErr,
 		previewEnabled:       cfg.PreviewDefault,
@@ -726,6 +733,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateConfirmKill(msg)
 		case ModeDashboard:
 			return m.updateDashboard(msg)
+		case ModeDashboardPrompt:
+			return m.updateDashboardPrompt(msg)
 		case ModeBroadcastSelect:
 			return m.updateBroadcastSelect(msg)
 		case ModeBroadcastPrompt:
@@ -770,6 +779,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case ModeBroadcastPrompt:
 			var cmd tea.Cmd
 			m.broadcastPromptInput, cmd = m.broadcastPromptInput.Update(msg)
+			return m, cmd
+
+		case ModeDashboardPrompt:
+			var cmd tea.Cmd
+			m.dashboardPromptInput, cmd = m.dashboardPromptInput.Update(msg)
 			return m, cmd
 		}
 	}
@@ -1206,8 +1220,54 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.broadcastFiltered = m.broadcastDirs
 		}
 		return m, tea.Batch(cmds...)
+
+	case "i":
+		if pageItems > 0 && m.dashPageOffset+m.dashCursor < len(m.filtered) {
+			m.mode = ModeDashboardPrompt
+			m.dashboardPromptInput.SetValue("")
+			return m, m.dashboardPromptInput.Focus()
+		}
 	}
 	return m, nil
+}
+
+func (m Model) updateDashboardPrompt(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		text := strings.TrimSpace(m.dashboardPromptInput.Value())
+		if text == "" {
+			return m, nil
+		}
+		idx := m.dashPageOffset + m.dashCursor
+		if idx >= len(m.filtered) {
+			m.dashboardPromptInput.Blur()
+			m.mode = ModeDashboard
+			return m, nil
+		}
+		s := m.filtered[idx]
+		m.dashboardPromptInput.Blur()
+		m.mode = ModeDashboard
+		sessionName := s.SessionName
+		if sessionName == "" {
+			sessionName = tmux.SessionName
+		}
+		paneIndex := resolvePaneIndex(s.PaneIndex)
+		windowIndex := s.WindowIndex
+		return m, func() tea.Msg {
+			if err := tmux.SendKeysLiteral(sessionName, windowIndex, paneIndex, text); err != nil {
+				return errMsg(err)
+			}
+			return nil
+		}
+	case "esc":
+		m.dashboardPromptInput.Blur()
+		m.mode = ModeDashboard
+		return m, nil
+	default:
+		var cmd tea.Cmd
+		m.dashboardPromptInput, cmd = m.dashboardPromptInput.Update(msg)
+		return m, cmd
+	}
 }
 
 func (m Model) updateBroadcastSelect(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -1797,7 +1857,7 @@ func (m Model) View() tea.View {
 		return m.viewWithOverlay(m.viewNewSessionPrompt)
 	}
 
-	if m.mode == ModeDashboard {
+	if m.mode == ModeDashboard || m.mode == ModeDashboardPrompt {
 		return newView(m.viewDashboard(&b))
 	}
 
@@ -2237,7 +2297,15 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 
 	// Help bar
 	b.WriteString("\n")
-	b.WriteString(styleHelpBar.Render("↵:attach  K:kill  n:new  /:filter  b:broadcast  ctrl+u/d:scroll  [:prev ]:next  hjkl/↑↓←→:navigate  Esc/d:back  q:quit"))
+	if m.mode == ModeDashboardPrompt {
+		targetName := ""
+		if m.dashPageOffset+m.dashCursor < len(m.filtered) {
+			targetName = m.filtered[m.dashPageOffset+m.dashCursor].DisplayName()
+		}
+		b.WriteString(fmt.Sprintf(" Send to [%s]: %s  (Enter:send  Esc:cancel)", targetName, m.dashboardPromptInput.View()))
+	} else {
+		b.WriteString(styleHelpBar.Render("↵:attach  i:send  K:kill  n:new  /:filter  b:broadcast  ctrl+u/d:scroll  [:prev ]:next  hjkl/↑↓←→:navigate  Esc/d:back  q:quit"))
+	}
 
 	return b.String()
 }

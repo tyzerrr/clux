@@ -2321,3 +2321,106 @@ func TestInit_ReturnsNonNilCmd(t *testing.T) {
 		t.Fatal("expected non-nil cmd from Init")
 	}
 }
+
+// --- ModeDashboardPrompt tests ---
+
+func TestModeDashboard_ISetsInputMode(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeDashboard
+	m.width = 200
+
+	result, _ := m.updateDashboard(tea.KeyPressMsg{Code: 'i', Text: "i"})
+	rm := result.(Model)
+	if rm.mode != ModeDashboardPrompt {
+		t.Errorf("expected ModeDashboardPrompt, got %v", rm.mode)
+	}
+}
+
+func TestModeDashboard_IWithEmptyList(t *testing.T) {
+	m := testModel(nil)
+	m.mode = ModeDashboard
+	m.width = 200
+
+	result, _ := m.updateDashboard(tea.KeyPressMsg{Code: 'i', Text: "i"})
+	rm := result.(Model)
+	if rm.mode != ModeDashboard {
+		t.Errorf("expected mode to remain ModeDashboard, got %v", rm.mode)
+	}
+}
+
+func TestModeDashboardPrompt_EscGoesBack(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeDashboardPrompt
+	m.width = 200
+
+	result, _ := m.updateDashboardPrompt(tea.KeyPressMsg{Code: tea.KeyEscape, Text: ""})
+	rm := result.(Model)
+	if rm.mode != ModeDashboard {
+		t.Errorf("expected ModeDashboard, got %v", rm.mode)
+	}
+}
+
+func TestModeDashboardPrompt_EnterWithTextReturns(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeDashboardPrompt
+	m.width = 200
+	m.dashboardPromptInput.SetValue("hello")
+
+	result, cmd := m.updateDashboardPrompt(tea.KeyPressMsg{Code: tea.KeyEnter, Text: ""})
+	rm := result.(Model)
+	if rm.mode != ModeDashboard {
+		t.Errorf("expected ModeDashboard, got %v", rm.mode)
+	}
+	if cmd == nil {
+		t.Error("expected non-nil command for sending input")
+	}
+}
+
+func TestModeDashboardPrompt_EnterEmptyDoesNothing(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeDashboardPrompt
+	m.width = 200
+	m.dashboardPromptInput.SetValue("")
+
+	result, cmd := m.updateDashboardPrompt(tea.KeyPressMsg{Code: tea.KeyEnter, Text: ""})
+	rm := result.(Model)
+	if rm.mode != ModeDashboardPrompt {
+		t.Errorf("expected mode to remain ModeDashboardPrompt, got %v", rm.mode)
+	}
+	if cmd != nil {
+		t.Error("expected nil command for empty input")
+	}
+}
+
+func TestModeDashboardPrompt_EnterWhitespaceOnlyDoesNothing(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeDashboardPrompt
+	m.width = 200
+	m.dashboardPromptInput.SetValue("   ")
+
+	result, cmd := m.updateDashboardPrompt(tea.KeyPressMsg{Code: tea.KeyEnter, Text: ""})
+	rm := result.(Model)
+	if rm.mode != ModeDashboardPrompt {
+		t.Errorf("expected mode to remain ModeDashboardPrompt, got %v", rm.mode)
+	}
+	if cmd != nil {
+		t.Error("expected nil command for whitespace-only input")
+	}
+}
+
+func TestModeDashboardPrompt_EnterWithStaleIndex(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeDashboardPrompt
+	m.width = 200
+	m.dashboardPromptInput.SetValue("hello")
+	m.dashCursor = 99 // out of bounds
+
+	result, cmd := m.updateDashboardPrompt(tea.KeyPressMsg{Code: tea.KeyEnter, Text: ""})
+	rm := result.(Model)
+	if rm.mode != ModeDashboard {
+		t.Errorf("expected ModeDashboard on stale index, got %v", rm.mode)
+	}
+	if cmd != nil {
+		t.Error("expected nil command when index is out of bounds")
+	}
+}
