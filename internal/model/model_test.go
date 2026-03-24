@@ -1994,6 +1994,26 @@ func TestDashboard_CursorMove_ResetsScrollOffset(t *testing.T) {
 	}
 }
 
+func TestDashboard_ExitToList_ResetsScrollOffset(t *testing.T) {
+	sessions := []session.Session{
+		{Name: "s0", Status: session.StatusIdle, WindowIndex: "0"},
+	}
+	m := testModel(sessions)
+	m.mode = ModeDashboard
+	m.width = 80
+	m.height = 20
+	m.previewScrollOffset = 5
+
+	result, _ := m.updateDashboard(tea.KeyPressMsg{Code: 'd', Text: "d"})
+	rm := result.(Model)
+	if rm.mode != ModeList {
+		t.Fatalf("expected ModeList, got %d", rm.mode)
+	}
+	if rm.previewScrollOffset != 0 {
+		t.Errorf("expected previewScrollOffset=0 after exiting dashboard, got %d", rm.previewScrollOffset)
+	}
+}
+
 // --- Grouping tests ---
 
 func TestListPanelWidth(t *testing.T) {

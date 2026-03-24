@@ -610,6 +610,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.dashCursor >= pageCount {
 				m.dashCursor = 0
+				m.previewScrollOffset = 0
 			}
 		}
 
@@ -1062,6 +1063,7 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		m.mode = ModeList
+		m.previewScrollOffset = 0
 		return m, nil
 	case "q":
 		return m, tea.Quit
@@ -1069,11 +1071,13 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if pageItems > 0 && m.dashPageOffset+m.dashCursor < len(m.filtered) {
 			wasZero := m.previewScrollOffset == 0
 			m.previewScrollOffset += dashPreviewScrollStep()
-			if maxOff := dashMaxScrollOffset(m); m.previewScrollOffset > maxOff {
-				m.previewScrollOffset = maxOff
+			if !wasZero {
+				// Clamp only after scrollback content has been fetched
+				if maxOff := dashMaxScrollOffset(m); m.previewScrollOffset > maxOff {
+					m.previewScrollOffset = maxOff
+				}
 			}
 			if wasZero {
-				// First scroll: fetch extended content with scrollback history
 				s := m.filtered[m.dashPageOffset+m.dashCursor]
 				return m, fetchDashboardPreviewWithScrollback(s, m.dashCursor)
 			}
