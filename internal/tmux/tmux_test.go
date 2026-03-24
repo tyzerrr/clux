@@ -567,16 +567,100 @@ func TestDetect_HashStable_NoWaiting_NoChildren_Idle(t *testing.T) {
 	assert(t, st == session.StatusIdle, "expected Idle, got %v", st)
 }
 
-// Hook says "waiting" -> Waiting immediately
-func TestDetect_HookWaiting_Immediate(t *testing.T) {
+// Hook says "waiting", hash stable, no active children -> Waiting
+func TestDetect_HookWaiting_HashStable_NoChildren(t *testing.T) {
 	withMockedDeps(t,
 		func(_, _, _ string) string { return "waiting" },
-		func(_, _, _ string) bool { t.Error("should not be called"); return false },
-		func(_ string, _ string) bool { t.Error("should not be called"); return false },
+		func(_, _, _ string) bool { return false },
+		func(_ string, _ string) bool { return false },
 	)
 	content := "-- INSERT --\nsome output"
 	st := detectStatusWithHooksForSession(content, "clux", "0", "0")
 	assert(t, st == session.StatusWaiting, "expected Waiting, got %v", st)
+}
+
+// Hook says "waiting" but active children exist -> Working (agents running)
+func TestDetect_HookWaiting_ActiveChildren_Working(t *testing.T) {
+	withMockedDeps(t,
+		func(_, _, _ string) string { return "waiting" },
+		func(_, _, _ string) bool { return true },
+		func(_ string, _ string) bool { return false },
+	)
+	content := "-- INSERT --\nsome output"
+	st := detectStatusWithHooksForSession(content, "clux", "0", "0")
+	assert(t, st == session.StatusWorking, "expected Working (active children override hook waiting), got %v", st)
+}
+
+// Hash stable + "local agent still running" in body -> Working
+func TestDetect_BackgroundAgent_StillRunning_Working(t *testing.T) {
+	withMockedDeps(t,
+		func(_, _, _ string) string { return "" },
+		func(_, _, _ string) bool { return false },
+		func(_ string, _ string) bool { return false },
+	)
+	content := "some output\n✻ Cooked for 36s · 1 local agent still running\n❯ \n  [Opus 4.6 (1M context)]\n  -- INSERT --"
+	st := detectStatusWithHooksForSession(content, "clux", "0", "0")
+	assert(t, st == session.StatusWorking, "expected Working (agent still running in body), got %v", st)
+}
+
+// Hash stable + "local agents still running" (plural) -> Working
+func TestDetect_BackgroundAgents_Plural_Working(t *testing.T) {
+	withMockedDeps(t,
+		func(_, _, _ string) string { return "" },
+		func(_, _, _ string) bool { return false },
+		func(_ string, _ string) bool { return false },
+	)
+	content := "some output\n✻ Cooked for 20s · 2 local agents still running\n❯ \n  -- INSERT --"
+	st := detectStatusWithHooksForSession(content, "clux", "0", "0")
+	assert(t, st == session.StatusWorking, "expected Working (agents plural still running), got %v", st)
+}
+
+// Hash stable + "esc to interrupt" -> Working (tool execution)
+func TestDetect_EscToInterrupt_Working(t *testing.T) {
+	withMockedDeps(t,
+		func(_, _, _ string) string { return "" },
+		func(_, _, _ string) bool { return false },
+		func(_ string, _ string) bool { return false },
+	)
+	content := "some output\n❯ \n  [Opus 4.6 (1M context)]\n  ⏺ Bash(git status) esc to interrupt"
+	st := detectStatusWithHooksForSession(content, "clux", "0", "0")
+	assert(t, st == session.StatusWorking, "expected Working (esc to interrupt), got %v", st)
+}
+
+// Hash stable + spinner activity line -> Working
+func TestDetect_SpinnerActivity_Working(t *testing.T) {
+	withMockedDeps(t,
+		func(_, _, _ string) string { return "" },
+		func(_, _, _ string) bool { return false },
+		func(_ string, _ string) bool { return false },
+	)
+	content := "some output\n⏺ Reading file…\n❯ \n  -- INSERT --"
+	st := detectStatusWithHooksForSession(content, "clux", "0", "0")
+	assert(t, st == session.StatusWorking, "expected Working (spinner activity), got %v", st)
+}
+
+// Hash stable + agent still running + hook=waiting -> Working (agent overrides hook)
+func TestDetect_BackgroundAgent_OverridesHookWaiting(t *testing.T) {
+	withMockedDeps(t,
+		func(_, _, _ string) string { return "waiting" },
+		func(_, _, _ string) bool { return false },
+		func(_ string, _ string) bool { return false },
+	)
+	content := "some output\n✻ Baked for 10s · 1 local agent still running\n❯ \n  -- INSERT --"
+	st := detectStatusWithHooksForSession(content, "clux", "0", "0")
+	assert(t, st == session.StatusWorking, "expected Working (agent overrides hook waiting), got %v", st)
+}
+
+// "local agent" in scrollback (beyond bottomScanLines) -> Idle, not false positive
+func TestDetect_OldLocalAgentInScrollback_HashStable_Idle(t *testing.T) {
+	withMockedDeps(t,
+		func(_, _, _ string) string { return "" },
+		func(_, _, _ string) bool { return false },
+		func(_ string, _ string) bool { return false },
+	)
+	content := "1 local agent still running\n" + strings.Repeat("filler line\n", 20) + "some output\n❯ \n  -- INSERT --"
+	st := detectStatusWithHooksForSession(content, "clux", "0", "0")
+	assert(t, st == session.StatusIdle, "expected Idle (old agent text in scrollback), got %v", st)
 }
 
 // Hook says "idle" -> ignored, hash takes priority

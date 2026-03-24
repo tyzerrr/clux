@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/tanaka0325/clux/internal/session"
 )
@@ -1171,14 +1172,6 @@ func debugLog(msg string) {
 func detectStatusWithHooksForSession(content, sessionName, windowIndex, paneIndex string) session.Status {
 	key := paneKey(sessionName, windowIndex, paneIndex)
 
-	// @claude-status hook — only trust "waiting" immediately.
-	if cs := getClaudeStatusFn(sessionName, windowIndex, paneIndex); cs != "" {
-		if st, ok := parseClaudeStatus(cs); ok && st == session.StatusWaiting {
-			debugLogf("[%s] hook=waiting -> final=waiting", key)
-			return session.StatusWaiting
-		}
-	}
-
 	// Primary signal: content hash comparison.
 	if contentChangedFn(key, content) {
 		debugLogf("[%s] hash=changed -> final=working", key)
@@ -1186,21 +1179,94 @@ func detectStatusWithHooksForSession(content, sessionName, windowIndex, paneInde
 	}
 	debugLogf("[%s] hash=stable", key)
 
-	// Hash stable — determine Waiting vs Idle.
 	bottom := bottomContent(content, bottomScanLines)
-	if isWaiting(bottom) {
-		debugLogf("[%s] pattern=waiting -> final=waiting", key)
-		return session.StatusWaiting
+
+	// Active-work detection via pane content patterns. Catches background
+	// agents (which run inside the Claude Code process without grandchild
+	// processes) and spinner-based activity indicators.
+	if isWorking(bottom) {
+		debugLogf("[%s] pattern=working -> final=working", key)
+		return session.StatusWorking
 	}
 
-	// Safety net: process tree check for active tool execution.
+	// Process tree check for active tool execution (grandchild processes).
 	if hasActiveChildrenFn(sessionName, windowIndex, paneIndex) {
 		debugLogf("[%s] proctree=active -> final=working", key)
 		return session.StatusWorking
 	}
 
+	// @claude-status hook — trust "waiting" only after ruling out active work.
+	if cs := getClaudeStatusFn(sessionName, windowIndex, paneIndex); cs != "" {
+		if st, ok := parseClaudeStatus(cs); ok && st == session.StatusWaiting {
+			debugLogf("[%s] hook=waiting -> final=waiting", key)
+			return session.StatusWaiting
+		}
+	}
+
+	// Pattern matching for permission prompts.
+	if isWaiting(bottom) {
+		debugLogf("[%s] pattern=waiting -> final=waiting", key)
+		return session.StatusWaiting
+	}
+
 	debugLogf("[%s] -> final=idle", key)
 	return session.StatusIdle
+}
+
+// isWorking returns true when the pane content indicates active work.
+// This covers cases that the process tree cannot always detect:
+//  1. Background agents — they run inside the Claude Code process without
+//     spawning grandchild processes.
+//  2. Interrupt prompts — Claude Code shows "esc to interrupt" or
+//     "ctrl+c to interrupt" while actively executing tools.
+//  3. Spinner-based activity — Claude Code shows a spinner character (from
+//     the dingbat/symbol range) followed by "…" while working.
+func isWorking(content string) bool {
+	// Exact-match patterns for active work indicators.
+	patterns := []string{
+		"local agent still running",
+		"local agents still running",
+		"esc to interrupt",
+		"ctrl+c to interrupt",
+	}
+	for _, p := range patterns {
+		if strings.Contains(content, p) {
+			return true
+		}
+	}
+
+	// Spinner activity: a line starting with a spinner char, a space, a word
+	// ending in "ing", and an ellipsis "…". Matches output like:
+	//   ✻ Cooking…    ⏺ Reading file…    ◉ Searching…
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+		r, _ := utf8.DecodeRuneInString(line)
+		if isSpinnerRune(r) && strings.HasSuffix(line, "…") {
+			return true
+		}
+	}
+
+	return false
+}
+
+// isSpinnerRune returns true for Unicode characters used as spinner/activity
+// indicators in Claude Code's TUI output.
+func isSpinnerRune(r rune) bool {
+	// Dingbats and miscellaneous symbols used by Claude Code spinners.
+	// Ranges: ✠-❧ (U+2720-U+2767, includes ✦✧✨✱✲…❋),
+	// ⏺ (U+23FA), ◉◊○◌◍◎● (U+25C9-U+25CF).
+	switch {
+	case r >= 0x2720 && r <= 0x2767: // ✠ .. ❧ (dingbats)
+		return true
+	case r == 0x23FA: // ⏺
+		return true
+	case r >= 0x25C9 && r <= 0x25CF: // ◉◊○◌◍◎●
+		return true
+	}
+	return false
 }
 
 // isWaiting returns true when the pane appears to be showing a permission prompt.
