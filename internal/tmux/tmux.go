@@ -33,9 +33,11 @@ var (
 	// tool output lines like "⏺ Bash(long command…".
 	spinnerPattern = regexp.MustCompile(`(?m)^\s*[\x{2720}-\x{2767}\x{23FA}\x{25C9}-\x{25CF}] \S*[Ii]ng\b.*…`)
 	// idleTimerPattern matches Claude Code's idle timer lines that update
-	// every second (e.g., "◆ Baked for 3m 16s", "✻ Cooked for 47s").
-	// These must be stripped before content hashing to avoid false Working.
-	idleTimerPattern = regexp.MustCompile(`(?m)^.*(?:Baked|Cooked|Worked|Sauteed|Marinated) for \d+.*$`)
+	// every second (e.g., "◆ Baked for 3m 16s", "✻ Cogitated for 47s").
+	// Claude Code uses many timer words (Baked, Cooked, Cogitated, Sauteed, …)
+	// so we match the structural pattern: a non-ASCII bullet char, a
+	// capitalized word, "for", and a duration with time units.
+	idleTimerPattern = regexp.MustCompile(`(?m)^\s*[^\x00-\x7F] [A-Z]\w* for \d+[smh].*$`)
 )
 
 const (

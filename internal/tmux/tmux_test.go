@@ -487,14 +487,19 @@ func TestContentChanged_TimerIgnored(t *testing.T) {
 	key := "test:timer"
 	base := "some output\n❯ \n  -- INSERT --"
 
-	content1 := "◆ Baked for 3m 16s\n" + base
-	content2 := "◆ Baked for 3m 17s\n" + base
-
-	// First call
-	contentChanged(key, content1)
-	// Timer tick only — should NOT be detected as change
-	if contentChanged(key, content2) {
-		t.Error("timer-only change should not be detected")
+	timerPairs := [][2]string{
+		{"◆ Baked for 3m 16s", "◆ Baked for 3m 17s"},
+		{"✻ Cogitated for 47s", "✻ Cogitated for 48s"},
+		{"◆ Worked for 1m 0s", "◆ Worked for 1m 1s"},
+	}
+	for _, pair := range timerPairs {
+		k := key + pair[0]
+		content1 := pair[0] + "\n" + base
+		content2 := pair[1] + "\n" + base
+		contentChanged(k, content1)
+		if contentChanged(k, content2) {
+			t.Errorf("timer-only change should not be detected for %q", pair[0])
+		}
 	}
 }
 
