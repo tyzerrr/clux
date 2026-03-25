@@ -75,6 +75,7 @@ type Model struct {
 	confirmWindowIndex string // window index for tmux command
 	confirmPaneIndex   string // pane index for tmux command
 	confirmSessionName string // tmux session name
+	confirmReturnMode  Mode   // mode to return to after confirm
 
 	// New session mode
 	repoDirs         []string // all dirs from ghq
@@ -841,6 +842,7 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.confirmPaneIndex = resolvePaneIndex(s.PaneIndex)
 			m.confirmSessionName = s.SessionName
 			m.err = nil
+			m.confirmReturnMode = ModeList
 			m.mode = ModeConfirmKill
 		}
 
@@ -963,7 +965,8 @@ func (m Model) clearConfirm() Model {
 	m.confirmWindowIndex = ""
 	m.confirmPaneIndex = ""
 	m.confirmSessionName = ""
-	m.mode = ModeList
+	m.mode = m.confirmReturnMode
+	m.confirmReturnMode = 0
 	return m
 }
 
@@ -1170,6 +1173,7 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.confirmPaneIndex = resolvePaneIndex(s.PaneIndex)
 			m.confirmSessionName = s.SessionName
 			m.err = nil
+			m.confirmReturnMode = ModeDashboard
 			m.mode = ModeConfirmKill
 		}
 
@@ -1846,6 +1850,9 @@ func (m Model) View() tea.View {
 	var b strings.Builder
 
 	if m.mode == ModeConfirmKill {
+		if m.confirmReturnMode == ModeDashboard {
+			return m.viewWithOverlayOn(styleDimmed.Render(m.viewDashboard(&b)), m.viewConfirmKill)
+		}
 		return m.viewWithOverlay(m.viewConfirmKill)
 	}
 
