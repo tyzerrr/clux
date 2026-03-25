@@ -381,13 +381,6 @@ func applyFilter(sessions []session.Session, query string) []session.Session {
 	return result
 }
 
-// sortByStatus sorts sessions so that those needing attention appear first.
-// Priority order: Waiting (3) > Working (2) > Idle (1) > Unknown (0).
-func sortByStatus(sessions []session.Session) {
-	sort.SliceStable(sessions, func(i, j int) bool {
-		return statusPriority(sessions[i].Status) > statusPriority(sessions[j].Status)
-	})
-}
 
 func statusSummary(sessions []session.Session) string {
 	counts := make(map[session.Status]int)
@@ -582,9 +575,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.filtered = applyFilter(m.sessions, m.filterInput.Value())
-		if m.mode != ModeDashboard && m.mode != ModeDashboardPrompt && m.mode != ModeListPrompt {
-			sortByStatus(m.filtered)
-		}
 		// Clamp cursor.
 		if len(m.filtered) == 0 {
 			m.cursor = 0
@@ -740,7 +730,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.filterInput, cmd = m.filterInput.Update(msg)
 			m.filtered = applyFilter(m.sessions, m.filterInput.Value())
-			sortByStatus(m.filtered)
 			if m.cursor >= len(m.filtered) {
 				m.cursor = 0
 			}
@@ -992,7 +981,6 @@ func (m Model) updateFilter(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.filterInput.Blur()
 		m.mode = ModeList
 		m.filtered = m.sessions
-		sortByStatus(m.filtered)
 		m.cursor = 0
 		return m, nil
 
@@ -1000,7 +988,6 @@ func (m Model) updateFilter(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.filterInput, cmd = m.filterInput.Update(msg)
 		m.filtered = applyFilter(m.sessions, m.filterInput.Value())
-		sortByStatus(m.filtered)
 		if m.cursor >= len(m.filtered) {
 			m.cursor = 0
 		}
