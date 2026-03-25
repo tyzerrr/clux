@@ -2532,3 +2532,46 @@ func TestViewSendPrompt_EmptyFilteredSessions(t *testing.T) {
 		t.Error("expected cursor to be non-nil")
 	}
 }
+
+// --- placeOverlay tests ---
+
+func TestPlaceOverlay_PreservesBackground(t *testing.T) {
+	bg := "AAAAABBBBBCCCCC\nDDDDDEEEEEFFFFF\nGGGGGHHHHHIIIII"
+	fg := "xxx\nyyy"
+	result := placeOverlay(bg, fg, 15, 3)
+	lines := strings.Split(result, "\n")
+	if len(lines) != 3 {
+		t.Fatalf("expected 3 lines, got %d", len(lines))
+	}
+	// fg is 3 wide, bg is 15 wide => startX = (15-3)/2 = 6, overlay on line index 0
+	// Line 0 (overlay line 0): first 6 chars of bg preserved, then "xxx", then remaining bg
+	// startX=6: left="AAAAAB" (6 chars), fg="xxx" (3), right=Cut(bg,9,15)="BCCCCC" (6)
+	if lines[0] != "AAAAABxxxBCCCCC" {
+		t.Errorf("line 0: got %q, want %q", lines[0], "AAAAABxxxBCCCCC")
+	}
+	if lines[1] != "DDDDDEyyyEFFFFF" {
+		t.Errorf("line 1: got %q, want %q", lines[1], "DDDDDEyyyEFFFFF")
+	}
+	// Line 2 should be untouched
+	if lines[2] != "GGGGGHHHHHIIIII" {
+		t.Errorf("line 2: got %q, want %q", lines[2], "GGGGGHHHHHIIIII")
+	}
+}
+
+func TestPlaceOverlay_ShortBackground(t *testing.T) {
+	bg := "AB\nCD\nEF"
+	fg := "XY"
+	result := placeOverlay(bg, fg, 2, 3)
+	lines := strings.Split(result, "\n")
+	// fg width=2, bg width=2 => startX=0, overlay centered vertically on line 1
+	if lines[1] != "XY" {
+		t.Errorf("line 1: got %q, want %q", lines[1], "XY")
+	}
+	// Other lines untouched
+	if lines[0] != "AB" {
+		t.Errorf("line 0: got %q, want %q", lines[0], "AB")
+	}
+	if lines[2] != "EF" {
+		t.Errorf("line 2: got %q, want %q", lines[2], "EF")
+	}
+}

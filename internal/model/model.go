@@ -1549,7 +1549,6 @@ func placeOverlay(bg, fg string, bgWidth, bgHeight int) string {
 		startY = 0
 	}
 
-	leftPad := strings.Repeat(" ", startX)
 	for i, fgLine := range fgLines {
 		bgIdx := startY + i
 		if bgIdx >= len(bgLines) {
@@ -1560,7 +1559,22 @@ func placeOverlay(bg, fg string, bgWidth, bgHeight int) string {
 			pad = 0
 		}
 		padded := fgLine + strings.Repeat(" ", pad)
-		bgLines[bgIdx] = leftPad + padded
+
+		// Preserve background on both sides of the overlay.
+		left := ansi.Truncate(bgLines[bgIdx], startX, "")
+		leftW := lipgloss.Width(left)
+		if leftW < startX {
+			left += strings.Repeat(" ", startX-leftW)
+		}
+
+		endX := startX + fgWidth
+		bgW := lipgloss.Width(bgLines[bgIdx])
+		right := ""
+		if bgW > endX {
+			right = ansi.Cut(bgLines[bgIdx], endX, bgW)
+		}
+
+		bgLines[bgIdx] = left + padded + right
 	}
 
 	return strings.Join(bgLines, "\n")
@@ -1855,10 +1869,6 @@ func (m Model) View() tea.View {
 		return m.viewWithOverlay(m.viewBroadcastPrompt)
 	}
 
-	if m.mode == ModeListPrompt {
-		return m.viewWithOverlay(m.viewSendPrompt)
-	}
-
 	// Build helpbar first (spans full width at bottom).
 	var helpBar string
 	if m.mode == ModeFilter {
@@ -2007,6 +2017,10 @@ func (m Model) View() tea.View {
 
 		// Helpbar at the bottom, spanning full width.
 		b.WriteString(helpBar)
+	}
+
+	if m.mode == ModeListPrompt {
+		return m.viewWithOverlayOn(styleDimmed.Render(b.String()), m.viewSendPrompt)
 	}
 
 	return newView(b.String())
