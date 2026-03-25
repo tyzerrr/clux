@@ -2431,3 +2431,104 @@ func TestModeListPrompt_EnterWithStaleIndex(t *testing.T) {
 		t.Error("expected nil command when index is out of bounds")
 	}
 }
+
+// --- viewSendPrompt overlay tests ---
+
+func TestView_ModeDashboardPrompt_OverlaySendPrompt(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeDashboardPrompt
+	m.width = 120
+	m.height = 40
+	m.dashCursor = 0
+	m.dashPageOffset = 0
+	view := m.View().Content
+	// Should contain overlay title with target session name
+	if !strings.Contains(view, "Send to") {
+		t.Error("expected view to contain 'Send to' overlay title")
+	}
+	if !strings.Contains(view, "auth refactor") {
+		t.Error("expected view to contain target session display name 'auth refactor'")
+	}
+	// Should contain overlay help
+	if !strings.Contains(view, "send") {
+		t.Error("expected view to contain 'send' in help bar")
+	}
+	if !strings.Contains(view, "cancel") {
+		t.Error("expected view to contain 'cancel' in help bar")
+	}
+}
+
+func TestView_ModeListPrompt_OverlaySendPrompt(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeListPrompt
+	m.width = 120
+	m.height = 40
+	m.cursor = 1
+	view := m.View().Content
+	// Should contain overlay title with target session name
+	if !strings.Contains(view, "Send to") {
+		t.Error("expected view to contain 'Send to' overlay title")
+	}
+	if !strings.Contains(view, "beta-session") {
+		t.Error("expected view to contain target session name 'beta-session'")
+	}
+}
+
+func TestViewSendPrompt_ShowsDirAndBranch(t *testing.T) {
+	sessions := []session.Session{
+		{Name: "test-session", Dir: "/home/user/projects/myapp", Branch: "feature/overlay", WindowIndex: "0", PaneIndex: "0"},
+	}
+	m := testModel(sessions)
+	m.mode = ModeListPrompt
+	m.cursor = 0
+	var b strings.Builder
+	overlay, _ := m.viewSendPrompt(&b)
+	if !strings.Contains(overlay, "feature/overlay") {
+		t.Error("expected overlay to contain branch name 'feature/overlay'")
+	}
+}
+
+func TestViewSendPrompt_StripsWorktreePath(t *testing.T) {
+	sessions := []session.Session{
+		{Name: "wt-session", Dir: "/home/user/projects/myapp/.claude/worktrees/agent-123", Branch: "main", WindowIndex: "0", PaneIndex: "0"},
+	}
+	m := testModel(sessions)
+	m.mode = ModeListPrompt
+	m.cursor = 0
+	var b strings.Builder
+	overlay, _ := m.viewSendPrompt(&b)
+	if strings.Contains(overlay, ".claude/worktrees") {
+		t.Error("expected worktree path to be stripped from overlay")
+	}
+}
+
+func TestViewSendPrompt_DashboardPromptUsesCorrectTarget(t *testing.T) {
+	sessions := []session.Session{
+		{Name: "first", Dir: "/a", WindowIndex: "0", PaneIndex: "0"},
+		{Name: "second", Dir: "/b", WindowIndex: "1", PaneIndex: "0"},
+		{Name: "third", Dir: "/c", WindowIndex: "2", PaneIndex: "0"},
+	}
+	m := testModel(sessions)
+	m.mode = ModeDashboardPrompt
+	m.dashPageOffset = 0
+	m.dashCursor = 2
+	var b strings.Builder
+	overlay, _ := m.viewSendPrompt(&b)
+	if !strings.Contains(overlay, "third") {
+		t.Error("expected overlay to target 'third' session based on dashCursor")
+	}
+}
+
+func TestViewSendPrompt_EmptyFilteredSessions(t *testing.T) {
+	m := testModel(nil)
+	m.mode = ModeListPrompt
+	m.cursor = 0
+	var b strings.Builder
+	overlay, cur := m.viewSendPrompt(&b)
+	if !strings.Contains(overlay, "Send to") {
+		t.Error("expected overlay to contain 'Send to' even with no sessions")
+	}
+	if cur == nil {
+		t.Error("expected cursor to be non-nil")
+	}
+}

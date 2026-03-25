@@ -31,8 +31,8 @@ const (
 	ModeDashboard
 	ModeBroadcastSelect // ghq repo multi-select for broadcast
 	ModeBroadcastPrompt // prompt/skill input for broadcast
-	ModeDashboardPrompt // inline text input on dashboard
-	ModeListPrompt      // inline text input on list
+	ModeDashboardPrompt // overlay text input on dashboard
+	ModeListPrompt      // overlay text input on list
 )
 
 // Custom message types.
@@ -1387,10 +1387,7 @@ func (m Model) dashCols() int {
 // dashMaxVisible returns the maximum number of dashboard cells visible at once.
 func (m Model) dashMaxVisible() int {
 	cols := m.dashCols()
-	headerLines := 2
-	if m.configErr != nil {
-		headerLines += 2
-	}
+	headerLines := 3
 	helpLines := 2
 	borderHeight := 2                      // lipgloss RoundedBorder adds top + bottom border lines per row
 	minCellHeight := 7 + borderHeight + 1  // minimum usable cell height including border and trailing newline
@@ -1614,11 +1611,10 @@ func textInputCursorX(ti textinput.Model) int {
 	return promptWidth + uniseg.StringWidth(string(val[:pos]))
 }
 
-func (m Model) viewWithOverlay(viewFn func(*strings.Builder) (string, *overlayCursor)) tea.View {
+func (m Model) viewWithOverlayOn(base string, viewFn func(*strings.Builder) (string, *overlayCursor)) tea.View {
 	var b strings.Builder
 	overlay, cur := viewFn(&b)
 	if m.width > 0 && m.height > 0 {
-		base := m.viewListBase()
 		v := newView(placeOverlay(base, overlay, m.width, m.height))
 		if cur != nil {
 			// Calculate absolute screen position of the cursor.
@@ -1648,6 +1644,10 @@ func (m Model) viewWithOverlay(viewFn func(*strings.Builder) (string, *overlayCu
 		return v
 	}
 	return newView(overlay)
+}
+
+func (m Model) viewWithOverlay(viewFn func(*strings.Builder) (string, *overlayCursor)) tea.View {
+	return m.viewWithOverlayOn(m.viewListBase(), viewFn)
 }
 
 // columnWidthsForWidth returns the name and branch column widths based on the given width.
@@ -1839,7 +1839,11 @@ func (m Model) View() tea.View {
 		return m.viewWithOverlay(m.viewNewSession)
 	}
 
-	if m.mode == ModeDashboard || m.mode == ModeDashboardPrompt {
+	if m.mode == ModeDashboardPrompt {
+		return m.viewWithOverlayOn(styleDimmed.Render(m.viewDashboard(&b)), m.viewSendPrompt)
+	}
+
+	if m.mode == ModeDashboard {
 		return newView(m.viewDashboard(&b))
 	}
 
@@ -1849,6 +1853,10 @@ func (m Model) View() tea.View {
 
 	if m.mode == ModeBroadcastPrompt {
 		return m.viewWithOverlay(m.viewBroadcastPrompt)
+	}
+
+	if m.mode == ModeListPrompt {
+		return m.viewWithOverlay(m.viewSendPrompt)
 	}
 
 	// Build helpbar first (spans full width at bottom).
@@ -1861,15 +1869,7 @@ func (m Model) View() tea.View {
 			previewLabel = "p:preview  ctrl+u/d:scroll"
 		}
 		groupLabel := "g:group"
-		if m.mode == ModeListPrompt {
-			targetName := ""
-			if m.cursor < len(m.filtered) {
-				targetName = m.filtered[m.cursor].DisplayName()
-			}
-			helpBar = fmt.Sprintf(" Send to [%s]: %s  (Enter:send  Esc:cancel)", targetName, m.dashboardPromptInput.View())
-		} else {
-			helpBar = styleHelpBar.Render("↵:attach  j/k/↑/↓:navigate  n:new  i:send  b:broadcast  K:kill  " + previewLabel + "  " + groupLabel + "  d:dashboard  /:filter  q/Esc:quit")
-		}
+		helpBar = styleHelpBar.Render("↵:attach  j/k/↑/↓:navigate  n:new  i:send  b:broadcast  K:kill  " + previewLabel + "  " + groupLabel + "  d:dashboard  /:filter  q/Esc:quit")
 	}
 
 	showPreviewPanel := m.previewEnabled && len(m.filtered) > 0 && m.width >= 80
@@ -2132,10 +2132,7 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 	// availableHeight excludes header, helpbar, border lines (2 per row), and
 	// the trailing newline after each grid row (1 per row).
 	// cellHeight is the inner (content-only) height of each cell.
-	headerLines := 2
-	if m.configErr != nil {
-		headerLines += 2
-	}
+	headerLines := 3
 	helpLines := 2
 	borderHeight := 2 // lipgloss RoundedBorder adds top + bottom border lines per row
 	availableHeight := m.height - headerLines - helpLines - (rows * (borderHeight + 1))
@@ -2268,15 +2265,7 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 
 	// Help bar
 	b.WriteString("\n")
-	if m.mode == ModeDashboardPrompt {
-		targetName := ""
-		if m.dashPageOffset+m.dashCursor < len(m.filtered) {
-			targetName = m.filtered[m.dashPageOffset+m.dashCursor].DisplayName()
-		}
-		fmt.Fprintf(b, " Send to [%s]: %s  (Enter:send  Esc:cancel)", targetName, m.dashboardPromptInput.View())
-	} else {
 		b.WriteString(styleHelpBar.Render("↵:attach  i:send  K:kill  n:new  /:filter  b:broadcast  ctrl+u/d:scroll  [:prev ]:next  hjkl/↑↓←→:navigate  Esc/d:back  q:quit"))
-	}
 
 	return b.String()
 }
@@ -2373,6 +2362,62 @@ func (m Model) viewBroadcastPrompt(b *strings.Builder) (string, *overlayCursor) 
 	b.WriteString(styleHelpBar.Render("↵:send  Esc:back"))
 
 	cur := &overlayCursor{x: 1 + textInputCursorX(m.broadcastPromptInput), y: cursorY}
+	return renderOverlayBox(b.String(), overlayWidth), cur
+}
+
+func (m Model) viewSendPrompt(b *strings.Builder) (string, *overlayCursor) {
+	overlayWidth := m.overlayWidth(50, 60, 80)
+
+	// Determine the target session based on the current mode.
+	var target *session.Session
+	if m.mode == ModeDashboardPrompt {
+		if idx := m.dashPageOffset + m.dashCursor; idx < len(m.filtered) {
+			target = &m.filtered[idx]
+		}
+	} else {
+		if m.cursor < len(m.filtered) {
+			target = &m.filtered[m.cursor]
+		}
+	}
+
+	targetName := ""
+	if target != nil {
+		targetName = target.DisplayName()
+	}
+
+	b.WriteString(styleOverlayTitle.Render(fmt.Sprintf("Send to [%s]", targetName)))
+	b.WriteString("\n")
+
+	// Show dir and branch info for the target session.
+	if target != nil {
+		dir := target.Dir
+		// Strip worktree paths to show the base repo.
+		if idx := strings.Index(dir, "/.claude/worktrees/"); idx >= 0 {
+			dir = dir[:idx]
+		}
+		info := shortenDir(dir)
+		if target.Branch != "" {
+			info += "  " + target.Branch
+		}
+		b.WriteString(styleDir.Render(" " + info))
+	}
+	b.WriteString("\n")
+
+	// Line 0: title, line 1: dir/branch info
+	cursorY := 2
+
+	b.WriteString(" ")
+	b.WriteString(m.dashboardPromptInput.View())
+	b.WriteString("\n\n")
+
+	if m.err != nil {
+		b.WriteString(styleError.Render("Error: " + m.err.Error()))
+		b.WriteString("\n\n")
+	}
+
+	b.WriteString(styleHelpBar.Render("↵:send  Esc:cancel"))
+
+	cur := &overlayCursor{x: 1 + textInputCursorX(m.dashboardPromptInput), y: cursorY}
 	return renderOverlayBox(b.String(), overlayWidth), cur
 }
 
