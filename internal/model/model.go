@@ -640,7 +640,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tickMsg:
 		switch m.mode { //nolint:exhaustive
-		case ModeList, ModeFilter:
+		case ModeList, ModeFilter, ModeListPrompt:
 			cmds := []tea.Cmd{fetchSessionsCmd, doTick()}
 			if m.previewEnabled && len(m.filtered) > 0 {
 				if m.previewScrollOffset > 0 {
@@ -650,7 +650,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			return m, tea.Batch(cmds...)
-		case ModeDashboard:
+		case ModeDashboard, ModeDashboardPrompt:
 			pageItems := len(m.filtered) - m.dashPageOffset
 			maxVisible := m.dashMaxVisible()
 			if pageItems > maxVisible {
