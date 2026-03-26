@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -69,14 +70,6 @@ func procCommand(name string, args ...string) (*exec.Cmd, context.CancelFunc) {
 // gitCommand creates an exec.Cmd for a git subcommand with a timeout context.
 func gitCommand(args ...string) (*exec.Cmd, context.CancelFunc) {
 	return commandWithTimeout(gitCmdTimeout, "git", args...)
-}
-
-// CheckTmux verifies that the current process is running inside a tmux session.
-func CheckTmux() error {
-	if os.Getenv("TMUX") == "" {
-		return fmt.Errorf("clux must be run inside a tmux session")
-	}
-	return nil
 }
 
 // EnsureSession ensures the clux tmux session exists. If not, it creates one.
@@ -196,8 +189,8 @@ func clearPaneHashByPrefix(prefix string) {
 // ClearAllPaneCache removes all stored hashes and cached detection results.
 func ClearAllPaneCache() {
 	paneCacheMu.Lock()
-	paneContentHashes = map[string]uint64{}
-	paneDetectCache = map[string]paneDetectResult{}
+	clear(paneContentHashes)
+	clear(paneDetectCache)
 	paneCacheMu.Unlock()
 }
 
@@ -770,15 +763,6 @@ func CreateWindowSilent(name, dir string, args ...string) (string, error) {
 	return newIndex, nil
 }
 
-// GetWindowStatus captures the pane content for a given session:window.pane and returns its status.
-func GetWindowStatus(sessionName, windowIndex, paneIndex string) session.Status {
-	content, err := capturePaneContentForSession(sessionName, windowIndex, paneIndex)
-	if err != nil {
-		return session.StatusUnknown
-	}
-	return detectStatusWithHooksForSession(content, sessionName, windowIndex, paneIndex)
-}
-
 // ValidateDir checks that the given path exists and is a directory.
 func ValidateDir(dir string) error {
 	info, err := os.Stat(dir)
@@ -875,21 +859,6 @@ func SwitchToWindow(sessionName, windowIndex, paneIndex string) error {
 	return nil
 }
 
-// SendKeys sends a key sequence to a specific pane in a window.
-func SendKeys(sessionName, windowIndex, paneIndex, keys string) error {
-	if err := validatePaneTarget(windowIndex, paneIndex); err != nil {
-		return err
-	}
-	target := sessionName + ":" + windowIndex + "." + paneIndex
-	cmd, cancel := tmuxCommand("send-keys", "-t", target, keys, "Enter")
-	err := cmd.Run()
-	cancel()
-	if err != nil {
-		return fmt.Errorf("sending keys to window %q pane %q in session %q: %w", windowIndex, paneIndex, sessionName, err)
-	}
-	return nil
-}
-
 // SendKeysLiteral sends text literally (no key name interpretation) to a specific pane in a window,
 // then sends Enter as a separate key press. This is safe for arbitrary prompt text that may
 // contain characters tmux would otherwise interpret as key names (e.g., "Up", "C-c").
@@ -927,19 +896,27 @@ func WindowExists(windowIndex string) bool {
 	return err == nil
 }
 
-// KillWindow kills a window in the clux session by its window index.
-func KillWindow(windowIndex string) error {
+// KillWindowForSession kills a window in the specified tmux session by its window index.
+func KillWindowForSession(sessionName, windowIndex string) error {
+	if sessionName == "" {
+		return fmt.Errorf("empty session name")
+	}
 	if !validWindowIndex.MatchString(windowIndex) {
 		return fmt.Errorf("invalid window index %q", windowIndex)
 	}
-	cmd, cancel := tmuxCommand("kill-window", "-t", SessionName+":"+windowIndex)
+	cmd, cancel := tmuxCommand("kill-window", "-t", sessionName+":"+windowIndex)
 	err := cmd.Run()
 	cancel()
 	if err != nil {
-		return fmt.Errorf("killing window %q: %w", windowIndex, err)
+		return fmt.Errorf("killing window %q in session %q: %w", windowIndex, sessionName, err)
 	}
-	clearPaneHashByPrefix(SessionName + ":" + windowIndex + ".")
+	clearPaneHashByPrefix(sessionName + ":" + windowIndex + ".")
 	return nil
+}
+
+// KillWindow kills a window in the clux session by its window index.
+func KillWindow(windowIndex string) error {
+	return KillWindowForSession(SessionName, windowIndex)
 }
 
 // validatePaneTarget returns an error if either index is not a valid numeric string.
@@ -951,13 +928,6 @@ func validatePaneTarget(windowIndex, paneIndex string) error {
 		return fmt.Errorf("invalid pane index %q", paneIndex)
 	}
 	return nil
-}
-
-// CapturePane captures the visible content of a specific pane in the clux session
-// with ANSI escape sequences preserved for colored output.
-// windowIndex and paneIndex must be numeric strings.
-func CapturePane(windowIndex, paneIndex string) (string, error) {
-	return CapturePaneForSession(SessionName, windowIndex, paneIndex)
 }
 
 // CapturePaneForSession captures the visible content of a specific pane
@@ -1095,9 +1065,6 @@ var (
 	getClaudeStatusFn   = getClaudeStatusForSession
 	hasActiveChildrenFn = hasActiveChildrenForSession
 	contentChangedFn    = contentChanged
-	// WindowExistsFn is the function used to check window existence.
-	// Exported so that other packages (e.g., model) can override it in tests.
-	WindowExistsFn = WindowExists
 )
 
 // parseClaudeStatus converts a @claude-status string to a session.Status.
@@ -1171,7 +1138,7 @@ func isPersistentChild(pid string) bool {
 
 var (
 	debugEnabled  = os.Getenv("CLUX_DEBUG") == "1"
-	debugFile     *os.File
+	debugLogger   *log.Logger
 	debugFileOnce sync.Once
 )
 
@@ -1191,17 +1158,16 @@ func debugLog(msg string) {
 		return
 	}
 	debugFileOnce.Do(func() {
-		f, err := os.OpenFile("/tmp/clux-debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+		f, err := os.OpenFile("/tmp/clux-debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 		if err != nil {
 			return
 		}
-		debugFile = f
+		debugLogger = log.New(f, "", log.Ldate|log.Ltime)
 	})
-	if debugFile == nil {
+	if debugLogger == nil {
 		return
 	}
-	ts := time.Now().Format("2006-01-02 15:04:05")
-	_, _ = fmt.Fprintf(debugFile, "%s %s\n", ts, msg)
+	debugLogger.Println(msg)
 }
 
 // detectStatusWithHooksForSession determines status using a hash-based change detection

@@ -946,9 +946,13 @@ func (m Model) updateConfirmKill(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "y":
 		windowIndex := m.confirmWindowIndex
+		sessionName := m.confirmSessionName
+		if sessionName == "" {
+			sessionName = tmux.SessionName
+		}
 		m = m.clearConfirm()
 		return m, func() tea.Msg {
-			if err := tmux.KillWindow(windowIndex); err != nil {
+			if err := tmux.KillWindowForSession(sessionName, windowIndex); err != nil {
 				return errMsg(err)
 			}
 			return windowKilledMsg{}
@@ -959,7 +963,7 @@ func (m Model) updateConfirmKill(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// clearConfirm resets all confirm-kill fields and returns to ModeList.
+// clearConfirm resets all confirm-kill fields and returns to the mode stored in confirmReturnMode.
 func (m Model) clearConfirm() Model {
 	m.confirmTarget = ""
 	m.confirmWindowIndex = ""
@@ -2194,9 +2198,8 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 			displayName := s.DisplayName()
 			cellHeaderText := fmt.Sprintf(" %s %s %s", icon, statusStr, displayName)
 			// Truncate if needed
-			cellHeaderRunes := []rune(cellHeaderText)
-			if len(cellHeaderRunes) > cw {
-				cellHeaderText = string(cellHeaderRunes[:cw-1]) + "…"
+			if lipgloss.Width(cellHeaderText) > cw {
+				cellHeaderText = ansi.Truncate(cellHeaderText, cw-1, "…")
 			}
 
 			// Get preview content
@@ -2242,9 +2245,8 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 				if i < len(displayPreview) {
 					line := displayPreview[i]
 					// Truncate line to cell width
-					lineRunes := []rune(line)
-					if len(lineRunes) > cw {
-						line = string(lineRunes[:cw-1]) + "…"
+					if lipgloss.Width(line) > cw {
+						line = ansi.Truncate(line, cw-1, "…")
 					}
 					cell.WriteString(line)
 				}

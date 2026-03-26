@@ -107,22 +107,6 @@ func TestValidateDir_FileNotDir(t *testing.T) {
 	}
 }
 
-// --- CheckTmux ---
-
-func TestCheckTmux_WithTMUX(t *testing.T) {
-	t.Setenv("TMUX", "/tmp/tmux-1000/default,12345,0")
-	if err := CheckTmux(); err != nil {
-		t.Errorf("expected no error with TMUX set, got %v", err)
-	}
-}
-
-func TestCheckTmux_WithoutTMUX(t *testing.T) {
-	t.Setenv("TMUX", "")
-	if err := CheckTmux(); err == nil {
-		t.Error("expected error without TMUX, got nil")
-	}
-}
-
 // --- validWindowIndex ---
 
 func TestValidWindowIndex(t *testing.T) {
@@ -208,6 +192,20 @@ func TestKillWindow_InvalidIndex(t *testing.T) {
 	}
 }
 
+func TestKillWindowForSession_EmptySessionName(t *testing.T) {
+	err := KillWindowForSession("", "0")
+	if err == nil {
+		t.Error("expected error for empty session name")
+	}
+}
+
+func TestKillWindowForSession_InvalidIndex(t *testing.T) {
+	err := KillWindowForSession("my-session", "abc")
+	if err == nil {
+		t.Error("expected error for invalid window index")
+	}
+}
+
 func TestSwitchWindow_InvalidPaneIndex(t *testing.T) {
 	err := SwitchWindow("0", "abc")
 	if err == nil {
@@ -259,20 +257,6 @@ func TestGroupedSessionName(t *testing.T) {
 			t.Errorf("groupedSessionName() suffix %q contains non-digit %q", suffix, string(r))
 			break
 		}
-	}
-}
-
-// --- SendKeys validation ---
-
-func TestSendKeys_InvalidWindowIndex(t *testing.T) {
-	if err := SendKeys("sess", "abc", "0", "keys"); err == nil {
-		t.Error("expected error for invalid windowIndex")
-	}
-}
-
-func TestSendKeys_InvalidPaneIndex(t *testing.T) {
-	if err := SendKeys("sess", "0", "abc", "keys"); err == nil {
-		t.Error("expected error for invalid paneIndex")
 	}
 }
 

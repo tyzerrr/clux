@@ -312,6 +312,23 @@ func TestModeConfirmKill_YGoesBackToList(t *testing.T) {
 	}
 }
 
+func TestModeConfirmKill_YWithCustomSessionName(t *testing.T) {
+	m := testModel(testSessions)
+	m.mode = ModeConfirmKill
+	m.confirmTarget = "test-session"
+	m.confirmWindowIndex = "0"
+	m.confirmSessionName = "custom-session"
+	msg := tea.KeyPressMsg{Code: 'y', Text: "y"}
+	result, cmd := m.updateConfirmKill(msg)
+	rm := result.(Model)
+	if rm.confirmSessionName != "" {
+		t.Errorf("expected confirmSessionName cleared, got %q", rm.confirmSessionName)
+	}
+	if cmd == nil {
+		t.Error("expected non-nil cmd from y key with custom session")
+	}
+}
+
 func TestModeConfirmKill_NGoesBackToList(t *testing.T) {
 	m := testModel(testSessions)
 	m.mode = ModeConfirmKill

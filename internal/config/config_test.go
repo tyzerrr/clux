@@ -52,11 +52,11 @@ func TestLoad_InvalidJSON(t *testing.T) {
 
 	// Write invalid JSON to config file.
 	dir := filepath.Join(tmpHome, configDir)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
 	path := filepath.Join(dir, configFile)
-	if err := os.WriteFile(path, []byte("not valid json"), 0644); err != nil {
+	if err := os.WriteFile(path, []byte("not valid json"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
