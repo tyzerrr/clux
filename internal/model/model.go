@@ -141,7 +141,7 @@ func New() Model {
 
 	cfg, configErr := config.Load()
 	if cfg == nil {
-		cfg = &config.Config{}
+		cfg = config.NewConfig()
 	}
 
 	return Model{
@@ -771,8 +771,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "k", "up", "ctrl+p":
+	key := msg.String()
+	km := m.cfg.Keymaps
+	switch {
+	case km.IsMoveUp(key):
 		if len(m.filtered) > 0 {
 			m.cursor = (m.cursor - 1 + len(m.filtered)) % len(m.filtered)
 			m.previewScrollOffset = 0
@@ -781,7 +783,7 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-	case "j", "down", "ctrl+n":
+	case km.IsMoveDown(key):
 		if len(m.filtered) > 0 {
 			m.cursor = (m.cursor + 1) % len(m.filtered)
 			m.previewScrollOffset = 0
@@ -790,13 +792,13 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-	case "ctrl+u":
+	case km.IsScrollUp(key):
 		if m.previewEnabled && len(m.filtered) > 0 && previewHeight(m) > 0 {
 			m.previewScrollOffset += previewScrollStep(m)
 			return m, fetchPreviewCmdForSessionWithOffset(m.filtered[m.cursor], m.previewScrollOffset, previewHeight(m))
 		}
 
-	case "ctrl+d":
+	case km.IsScrollDown(key):
 		if m.previewEnabled && len(m.filtered) > 0 && previewHeight(m) > 0 {
 			m.previewScrollOffset -= previewScrollStep(m)
 			if m.previewScrollOffset < 0 {
@@ -805,7 +807,7 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, fetchPreviewCmdForSessionWithOffset(m.filtered[m.cursor], m.previewScrollOffset, previewHeight(m))
 		}
 
-	case "enter":
+	case key == "enter":
 		if len(m.filtered) > 0 {
 			s := m.filtered[m.cursor]
 			sessionName := s.SessionName
@@ -822,7 +824,7 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-	case "n":
+	case km.IsNewSession(key):
 		m.mode = ModeNewSession
 		m.newSessionReturnMode = ModeList
 		m.err = nil
@@ -836,7 +838,7 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 
-	case "K":
+	case km.IsKill(key):
 		if len(m.filtered) > 0 {
 			s := m.filtered[m.cursor]
 			m.confirmTarget = s.DisplayName()
@@ -848,7 +850,7 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.mode = ModeConfirmKill
 		}
 
-	case "p":
+	case km.IsTogglePreview(key):
 		m.previewEnabled = !m.previewEnabled
 		if m.previewEnabled && len(m.filtered) > 0 {
 			return m, fetchPreviewCmdForSession(m.filtered[m.cursor])
@@ -858,7 +860,7 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.previewScrollOffset = 0
 		}
 
-	case "d":
+	case km.IsDashboard(key):
 		m.mode = ModeDashboard
 		m.dashCursor = 0
 		m.dashPageOffset = 0
@@ -871,7 +873,7 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, fetchDashboardPreviews(m.filtered[:pageItems])
 
-	case "b":
+	case km.IsBroadcast(key):
 		m.mode = ModeBroadcastSelect
 		m.err = nil
 		m.broadcastInput.SetValue("")
@@ -885,21 +887,21 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 
-	case "g":
+	case km.IsGroup(key):
 		m.groupEnabled = !m.groupEnabled
 
-	case "i":
+	case km.IsInput(key):
 		if len(m.filtered) > 0 {
 			m.mode = ModeListPrompt
 			m.dashboardPromptInput.SetValue("")
 			return m, m.dashboardPromptInput.Focus()
 		}
 
-	case "/":
+	case km.IsFilter(key):
 		m.mode = ModeFilter
 		return m, m.filterInput.Focus()
 
-	case "q", "esc":
+	case km.IsQuit(key), key == "esc":
 		return m, tea.Quit
 	}
 
@@ -1005,8 +1007,11 @@ func (m Model) updateFilter(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateNewSession(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "enter":
+	key := msg.String()
+	km := m.cfg.Keymaps
+
+	switch {
+	case key == "enter":
 		if len(m.filteredDirs) > 0 {
 			dir := m.filteredDirs[m.newSessionCursor]
 			if err := tmux.ValidateDir(dir); err != nil {
@@ -1026,19 +1031,19 @@ func (m Model) updateNewSession(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case "esc":
+	case key == "esc":
 		m.mode = m.newSessionReturnMode
 		m.newSessionReturnMode = 0
 		m.newSessionInput.Blur()
 		return m, nil
 
-	case "up", "ctrl+k", "ctrl+p":
+	case km.IsMoveUpNonPrintable(key):
 		if len(m.filteredDirs) > 0 {
 			m.newSessionCursor = (m.newSessionCursor - 1 + len(m.filteredDirs)) % len(m.filteredDirs)
 		}
 		return m, nil
 
-	case "down", "ctrl+j", "ctrl+n":
+	case km.IsMoveDownNonPrintable(key):
 		if len(m.filteredDirs) > 0 {
 			m.newSessionCursor = (m.newSessionCursor + 1) % len(m.filteredDirs)
 		}
@@ -1065,17 +1070,26 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		pageItems = 0
 	}
 
-	switch msg.String() {
-	case "esc", "d":
+	key := msg.String()
+	km := m.cfg.Keymaps
+	switch {
+	case key == "esc":
 		if m.dashboardOnly {
 			return m, tea.Quit
 		}
 		m.mode = ModeList
 		m.previewScrollOffset = 0
 		return m, nil
-	case "q":
+	case km.IsDashboard(key):
+		if m.dashboardOnly {
+			return m, tea.Quit
+		}
+		m.mode = ModeList
+		m.previewScrollOffset = 0
+		return m, nil
+	case km.IsQuit(key):
 		return m, tea.Quit
-	case "ctrl+u":
+	case km.IsScrollUp(key):
 		if pageItems > 0 && m.dashPageOffset+m.dashCursor < len(m.filtered) {
 			wasZero := m.previewScrollOffset == 0
 			m.previewScrollOffset += dashPreviewScrollStep()
@@ -1090,14 +1104,14 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return m, fetchDashboardPreviewWithScrollback(s, m.dashCursor)
 			}
 		}
-	case "ctrl+d":
+	case km.IsScrollDown(key):
 		if pageItems > 0 && m.dashPageOffset+m.dashCursor < len(m.filtered) {
 			m.previewScrollOffset -= dashPreviewScrollStep()
 			if m.previewScrollOffset < 0 {
 				m.previewScrollOffset = 0
 			}
 		}
-	case "]":
+	case km.IsNextPage(key):
 		// Next page
 		nextOffset := m.dashPageOffset + maxVisible
 		if nextOffset < len(m.filtered) {
@@ -1107,7 +1121,7 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			pageSessions := m.filtered[m.dashPageOffset : m.dashPageOffset+min(m.dashMaxVisible(), len(m.filtered)-m.dashPageOffset)]
 			return m, fetchDashboardPreviews(pageSessions)
 		}
-	case "[":
+	case km.IsPrevPage(key):
 		// Previous page
 		prevOffset := m.dashPageOffset - maxVisible
 		if prevOffset < 0 {
@@ -1120,17 +1134,17 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			pageSessions := m.filtered[m.dashPageOffset : m.dashPageOffset+min(m.dashMaxVisible(), len(m.filtered)-m.dashPageOffset)]
 			return m, fetchDashboardPreviews(pageSessions)
 		}
-	case "h", "left":
+	case km.IsMoveLeft(key):
 		if m.dashCursor%cols > 0 {
 			m.dashCursor--
 			m.previewScrollOffset = 0
 		}
-	case "l", "right":
+	case km.IsMoveRight(key):
 		if m.dashCursor%cols < cols-1 && m.dashCursor+1 < pageItems {
 			m.dashCursor++
 			m.previewScrollOffset = 0
 		}
-	case "k", "up", "ctrl+p":
+	case km.IsMoveUp(key):
 		if m.dashCursor-cols >= 0 {
 			m.dashCursor -= cols
 			m.previewScrollOffset = 0
@@ -1146,7 +1160,7 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			pageSessions := m.filtered[m.dashPageOffset : m.dashPageOffset+min(m.dashMaxVisible(), len(m.filtered)-m.dashPageOffset)]
 			return m, fetchDashboardPreviews(pageSessions)
 		}
-	case "j", "down", "ctrl+n":
+	case km.IsMoveDown(key):
 		if m.dashCursor+cols < pageItems {
 			m.dashCursor += cols
 			m.previewScrollOffset = 0
@@ -1158,7 +1172,7 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			pageSessions := m.filtered[m.dashPageOffset : m.dashPageOffset+min(m.dashMaxVisible(), len(m.filtered)-m.dashPageOffset)]
 			return m, fetchDashboardPreviews(pageSessions)
 		}
-	case "enter":
+	case key == "enter":
 		if pageItems > 0 && m.dashPageOffset+m.dashCursor < len(m.filtered) {
 			s := m.filtered[m.dashPageOffset+m.dashCursor]
 			sessionName := s.SessionName
@@ -1173,7 +1187,7 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return tea.QuitMsg{}
 			}
 		}
-	case "K":
+	case km.IsKill(key):
 		if len(m.filtered) > 0 && m.dashPageOffset+m.dashCursor < len(m.filtered) {
 			s := m.filtered[m.dashPageOffset+m.dashCursor]
 			m.confirmTarget = s.DisplayName()
@@ -1185,7 +1199,7 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.mode = ModeConfirmKill
 		}
 
-	case "n":
+	case km.IsNewSession(key):
 		m.mode = ModeNewSession
 		m.newSessionReturnMode = ModeDashboard
 		m.err = nil
@@ -1199,11 +1213,11 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 
-	case "/":
+	case km.IsFilter(key):
 		m.mode = ModeFilter
 		return m, m.filterInput.Focus()
 
-	case "b":
+	case km.IsBroadcast(key):
 		m.mode = ModeBroadcastSelect
 		m.err = nil
 		m.broadcastInput.SetValue("")
@@ -1217,7 +1231,7 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 
-	case "i":
+	case km.IsInput(key):
 		if pageItems > 0 && m.dashPageOffset+m.dashCursor < len(m.filtered) {
 			m.mode = ModeDashboardPrompt
 			m.dashboardPromptInput.SetValue("")
@@ -1267,8 +1281,10 @@ func (m Model) updateDashboardPrompt(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateBroadcastSelect(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "enter":
+	key := msg.String()
+	km := m.cfg.Keymaps
+	switch {
+	case key == "enter":
 		// Collect selected dirs; if nothing selected, treat cursor item as selected.
 		var selectedDirs []string
 		for dir, sel := range m.broadcastSelected {
@@ -1294,13 +1310,13 @@ func (m Model) updateBroadcastSelect(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.broadcastPromptInput.SetValue("")
 		return m, m.broadcastPromptInput.Focus()
 
-	case "esc":
+	case key == "esc":
 		m.mode = ModeList
 		m.broadcastInput.Blur()
 		m.broadcastSelected = make(map[string]bool)
 		return m, nil
 
-	case " ", "space":
+	case km.IsToggleSelect(key):
 		// Toggle selection of item at cursor.
 		if len(m.broadcastFiltered) > 0 {
 			dir := m.broadcastFiltered[m.broadcastCursor]
@@ -1308,13 +1324,13 @@ func (m Model) updateBroadcastSelect(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case "up", "ctrl+k", "ctrl+p":
+	case km.IsMoveUpNonPrintable(key):
 		if len(m.broadcastFiltered) > 0 {
 			m.broadcastCursor = (m.broadcastCursor - 1 + len(m.broadcastFiltered)) % len(m.broadcastFiltered)
 		}
 		return m, nil
 
-	case "down", "ctrl+j", "ctrl+n":
+	case km.IsMoveDownNonPrintable(key):
 		if len(m.broadcastFiltered) > 0 {
 			m.broadcastCursor = (m.broadcastCursor + 1) % len(m.broadcastFiltered)
 		}
@@ -1896,12 +1912,13 @@ func (m Model) View() tea.View {
 	if m.mode == ModeFilter {
 		helpBar = " / " + m.filterInput.View() + "\n\n" + styleHelpBar.Render("↵:apply  Esc:clear")
 	} else {
-		previewLabel := "p:preview"
+		km := m.cfg.Keymaps
+		previewLabel := km.HintTogglePreview() + ":preview"
 		if m.previewEnabled {
-			previewLabel = "p:preview  ctrl+u/d:scroll"
+			previewLabel = km.HintTogglePreview() + ":preview  " + km.HintScroll() + ":scroll"
 		}
-		groupLabel := "g:group"
-		helpBar = styleHelpBar.Render("↵:attach  j/k/↑/↓:navigate  n:new  i:send  b:broadcast  K:kill  " + previewLabel + "  " + groupLabel + "  d:dashboard  /:filter  q/Esc:quit")
+		groupLabel := km.HintGroup() + ":group"
+		helpBar = styleHelpBar.Render("↵:attach  " + km.HintNavigate() + ":navigate  " + km.HintNewSession() + ":new  " + km.HintInput() + ":send  " + km.HintBroadcast() + ":broadcast  " + km.HintKill() + ":kill  " + previewLabel + "  " + groupLabel + "  " + km.HintDashboard() + ":dashboard  " + km.HintFilter() + ":filter  " + km.HintQuit() + "/Esc:quit")
 	}
 
 	showPreviewPanel := m.previewEnabled && len(m.filtered) > 0 && m.width >= 80
@@ -2093,7 +2110,8 @@ func (m Model) viewNewSession(b *strings.Builder) (string, *overlayCursor) {
 	}
 
 	b.WriteString("\n\n")
-	b.WriteString(styleHelpBar.Render("↵:select  Esc:cancel  ↑/↓/ctrl+k/j:navigate"))
+	km := m.cfg.Keymaps
+	b.WriteString(styleHelpBar.Render("↵:select  Esc:cancel  " + km.HintNavigate() + ":navigate"))
 
 	cur := &overlayCursor{x: 1 + textInputCursorX(m.newSessionInput), y: cursorY}
 	return renderOverlayBox(b.String(), overlayWidth), cur
@@ -2302,7 +2320,8 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 
 	// Help bar
 	b.WriteString("\n")
-		b.WriteString(styleHelpBar.Render("↵:attach  i:send  K:kill  n:new  /:filter  b:broadcast  ctrl+u/d:scroll  [:prev ]:next  hjkl/↑↓←→:navigate  Esc/d:back  q:quit"))
+	km := m.cfg.Keymaps
+	b.WriteString(styleHelpBar.Render("↵:attach  " + km.HintInput() + ":send  " + km.HintKill() + ":kill  " + km.HintNewSession() + ":new  " + km.HintFilter() + ":filter  " + km.HintBroadcast() + ":broadcast  " + km.HintScroll() + ":scroll  " + km.HintPrevPage() + ":prev " + km.HintNextPage() + ":next  " + km.HintNavigateFull() + ":navigate  Esc/" + km.HintDashboard() + ":back  " + km.HintQuit() + ":quit"))
 
 	return b.String()
 }
@@ -2365,7 +2384,8 @@ func (m Model) viewBroadcastSelect(b *strings.Builder) (string, *overlayCursor) 
 	}
 
 	b.WriteString("\n\n")
-	b.WriteString(styleHelpBar.Render("Space:toggle  ↵:confirm  Esc:cancel  ↑/↓/ctrl+k/j:navigate"))
+	km := m.cfg.Keymaps
+	b.WriteString(styleHelpBar.Render(km.HintToggleSelect() + ":toggle  ↵:confirm  Esc:cancel  " + km.HintNavigate() + ":navigate"))
 
 	cur := &overlayCursor{x: 1 + textInputCursorX(m.broadcastInput), y: cursorY}
 	return renderOverlayBox(b.String(), overlayWidth), cur
