@@ -82,6 +82,7 @@ type Model struct {
 	filteredDirs     []string // filtered dirs
 	newSessionInput  textinput.Model
 	newSessionCursor int
+	newSessionReturnMode Mode // mode to return to after new session
 
 	// Preview mode
 	previewEnabled      bool   // toggle state, default false
@@ -823,6 +824,7 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case "n":
 		m.mode = ModeNewSession
+		m.newSessionReturnMode = ModeList
 		m.err = nil
 		m.newSessionInput.SetValue("")
 		m.newSessionCursor = 0
@@ -1008,7 +1010,8 @@ func (m Model) updateNewSession(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.newSessionInput.Blur()
-			m.mode = ModeList
+			m.mode = m.newSessionReturnMode
+			m.newSessionReturnMode = 0
 			name := tmux.GenerateWindowName(dir)
 			return m, func() tea.Msg {
 				if err := tmux.CreateWindow(name, dir); err != nil {
@@ -1020,7 +1023,8 @@ func (m Model) updateNewSession(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "esc":
-		m.mode = ModeList
+		m.mode = m.newSessionReturnMode
+		m.newSessionReturnMode = 0
 		m.newSessionInput.Blur()
 		return m, nil
 
@@ -1179,6 +1183,7 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case "n":
 		m.mode = ModeNewSession
+		m.newSessionReturnMode = ModeDashboard
 		m.err = nil
 		m.newSessionInput.SetValue("")
 		m.newSessionCursor = 0
@@ -1391,7 +1396,10 @@ func (m Model) dashCols() int {
 // dashMaxVisible returns the maximum number of dashboard cells visible at once.
 func (m Model) dashMaxVisible() int {
 	cols := m.dashCols()
-	headerLines := 3
+	headerLines := 2
+	if m.configErr != nil {
+		headerLines += 2
+	}
 	helpLines := 2
 	borderHeight := 2                      // lipgloss RoundedBorder adds top + bottom border lines per row
 	minCellHeight := 7 + borderHeight + 1  // minimum usable cell height including border and trailing newline
@@ -1857,6 +1865,9 @@ func (m Model) View() tea.View {
 	}
 
 	if m.mode == ModeNewSession {
+		if m.newSessionReturnMode == ModeDashboard {
+			return m.viewWithOverlayOn(styleDimmed.Render(m.viewDashboard(&b)), m.viewNewSession)
+		}
 		return m.viewWithOverlay(m.viewNewSession)
 	}
 
@@ -2153,7 +2164,10 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 	// availableHeight excludes header, helpbar, border lines (2 per row), and
 	// the trailing newline after each grid row (1 per row).
 	// cellHeight is the inner (content-only) height of each cell.
-	headerLines := 3
+	headerLines := 2
+	if m.configErr != nil {
+		headerLines += 2
+	}
 	helpLines := 2
 	borderHeight := 2 // lipgloss RoundedBorder adds top + bottom border lines per row
 	availableHeight := m.height - headerLines - helpLines - (rows * (borderHeight + 1))
