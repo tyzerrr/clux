@@ -108,7 +108,7 @@ func TestParseClaudeStatus(t *testing.T) {
 func withMockedDeps(t *testing.T,
 	statusFn func(string, string, string) string,
 	childrenFn func(string, string, string, processMaps) bool,
-	hashChangedFn func(string, string) bool,
+	hashChangedFn func(string, uint64) bool,
 ) {
 	t.Helper()
 	origStatus := getClaudeStatusFn
@@ -129,10 +129,10 @@ func TestDetect_HashChanged_Working(t *testing.T) {
 	withMockedDeps(t,
 		func(_, _, _ string) string { return "" },
 		func(_, _, _ string, _ processMaps) bool { return false },
-		func(_ string, _ string) bool { return true },
+		func(_ string, _ uint64) bool { return true },
 	)
 	content := "-- INSERT --\nsome output\n❯ "
-	st := detectStatusWithHooksForSession(content, "clux", "0", "0", processMaps{})
+	st := detectStatusWithHooksForSession(content, "clux", "0", "0", processMaps{}, hashContent(content))
 	assert(t, st == session.StatusWorking, "expected Working, got %v", st)
 }
 
@@ -141,10 +141,10 @@ func TestDetect_HashStable_WaitingPattern(t *testing.T) {
 	withMockedDeps(t,
 		func(_, _, _ string) string { return "" },
 		func(_, _, _ string, _ processMaps) bool { return false },
-		func(_ string, _ string) bool { return false },
+		func(_ string, _ uint64) bool { return false },
 	)
 	content := "-- INSERT --\nDo you want to proceed?\n❯ "
-	st := detectStatusWithHooksForSession(content, "clux", "0", "0", processMaps{})
+	st := detectStatusWithHooksForSession(content, "clux", "0", "0", processMaps{}, hashContent(content))
 	assert(t, st == session.StatusWaiting, "expected Waiting, got %v", st)
 }
 
@@ -153,10 +153,10 @@ func TestDetect_HashStable_ActiveChildren_Working(t *testing.T) {
 	withMockedDeps(t,
 		func(_, _, _ string) string { return "" },
 		func(_, _, _ string, _ processMaps) bool { return true },
-		func(_ string, _ string) bool { return false },
+		func(_ string, _ uint64) bool { return false },
 	)
 	content := "-- INSERT --\nsome output"
-	st := detectStatusWithHooksForSession(content, "clux", "0", "0", processMaps{})
+	st := detectStatusWithHooksForSession(content, "clux", "0", "0", processMaps{}, hashContent(content))
 	assert(t, st == session.StatusWorking, "expected Working, got %v", st)
 }
 
@@ -165,10 +165,10 @@ func TestDetect_HashStable_NoWaiting_NoChildren_Idle(t *testing.T) {
 	withMockedDeps(t,
 		func(_, _, _ string) string { return "" },
 		func(_, _, _ string, _ processMaps) bool { return false },
-		func(_ string, _ string) bool { return false },
+		func(_ string, _ uint64) bool { return false },
 	)
 	content := "-- INSERT --\nsome output\n❯ "
-	st := detectStatusWithHooksForSession(content, "clux", "0", "0", processMaps{})
+	st := detectStatusWithHooksForSession(content, "clux", "0", "0", processMaps{}, hashContent(content))
 	assert(t, st == session.StatusIdle, "expected Idle, got %v", st)
 }
 
@@ -177,10 +177,10 @@ func TestDetect_HookWaiting_HashStable_NoChildren(t *testing.T) {
 	withMockedDeps(t,
 		func(_, _, _ string) string { return "waiting" },
 		func(_, _, _ string, _ processMaps) bool { return false },
-		func(_ string, _ string) bool { return false },
+		func(_ string, _ uint64) bool { return false },
 	)
 	content := "-- INSERT --\nsome output"
-	st := detectStatusWithHooksForSession(content, "clux", "0", "0", processMaps{})
+	st := detectStatusWithHooksForSession(content, "clux", "0", "0", processMaps{}, hashContent(content))
 	assert(t, st == session.StatusWaiting, "expected Waiting, got %v", st)
 }
 
@@ -189,10 +189,10 @@ func TestDetect_HookWaiting_ActiveChildren_Working(t *testing.T) {
 	withMockedDeps(t,
 		func(_, _, _ string) string { return "waiting" },
 		func(_, _, _ string, _ processMaps) bool { return true },
-		func(_ string, _ string) bool { return false },
+		func(_ string, _ uint64) bool { return false },
 	)
 	content := "-- INSERT --\nsome output"
-	st := detectStatusWithHooksForSession(content, "clux", "0", "0", processMaps{})
+	st := detectStatusWithHooksForSession(content, "clux", "0", "0", processMaps{}, hashContent(content))
 	assert(t, st == session.StatusWorking, "expected Working (active children override hook waiting), got %v", st)
 }
 
@@ -201,10 +201,10 @@ func TestDetect_BackgroundAgent_StillRunning_Working(t *testing.T) {
 	withMockedDeps(t,
 		func(_, _, _ string) string { return "" },
 		func(_, _, _ string, _ processMaps) bool { return false },
-		func(_ string, _ string) bool { return false },
+		func(_ string, _ uint64) bool { return false },
 	)
 	content := "some output\n✻ Cooked for 36s · 1 local agent still running\n❯ \n  [Opus 4.6 (1M context)]\n  -- INSERT --"
-	st := detectStatusWithHooksForSession(content, "clux", "0", "0", processMaps{})
+	st := detectStatusWithHooksForSession(content, "clux", "0", "0", processMaps{}, hashContent(content))
 	assert(t, st == session.StatusWorking, "expected Working (agent still running in body), got %v", st)
 }
 
@@ -213,10 +213,10 @@ func TestDetect_BackgroundAgents_Plural_Working(t *testing.T) {
 	withMockedDeps(t,
 		func(_, _, _ string) string { return "" },
 		func(_, _, _ string, _ processMaps) bool { return false },
-		func(_ string, _ string) bool { return false },
+		func(_ string, _ uint64) bool { return false },
 	)
 	content := "some output\n✻ Cooked for 20s · 2 local agents still running\n❯ \n  -- INSERT --"
-	st := detectStatusWithHooksForSession(content, "clux", "0", "0", processMaps{})
+	st := detectStatusWithHooksForSession(content, "clux", "0", "0", processMaps{}, hashContent(content))
 	assert(t, st == session.StatusWorking, "expected Working (agents plural still running), got %v", st)
 }
 
@@ -225,10 +225,10 @@ func TestDetect_EscToInterrupt_Working(t *testing.T) {
 	withMockedDeps(t,
 		func(_, _, _ string) string { return "" },
 		func(_, _, _ string, _ processMaps) bool { return false },
-		func(_ string, _ string) bool { return false },
+		func(_ string, _ uint64) bool { return false },
 	)
 	content := "some output\n❯ \n  [Opus 4.6 (1M context)]\n  ⏺ Bash(git status) esc to interrupt"
-	st := detectStatusWithHooksForSession(content, "clux", "0", "0", processMaps{})
+	st := detectStatusWithHooksForSession(content, "clux", "0", "0", processMaps{}, hashContent(content))
 	assert(t, st == session.StatusWorking, "expected Working (esc to interrupt), got %v", st)
 }
 
@@ -237,10 +237,10 @@ func TestDetect_SpinnerActivity_Working(t *testing.T) {
 	withMockedDeps(t,
 		func(_, _, _ string) string { return "" },
 		func(_, _, _ string, _ processMaps) bool { return false },
-		func(_ string, _ string) bool { return false },
+		func(_ string, _ uint64) bool { return false },
 	)
 	content := "some output\n⏺ Reading file…\n❯ \n  -- INSERT --"
-	st := detectStatusWithHooksForSession(content, "clux", "0", "0", processMaps{})
+	st := detectStatusWithHooksForSession(content, "clux", "0", "0", processMaps{}, hashContent(content))
 	assert(t, st == session.StatusWorking, "expected Working (spinner activity), got %v", st)
 }
 
@@ -249,10 +249,10 @@ func TestDetect_BackgroundAgent_OverridesHookWaiting(t *testing.T) {
 	withMockedDeps(t,
 		func(_, _, _ string) string { return "waiting" },
 		func(_, _, _ string, _ processMaps) bool { return false },
-		func(_ string, _ string) bool { return false },
+		func(_ string, _ uint64) bool { return false },
 	)
 	content := "some output\n✻ Baked for 10s · 1 local agent still running\n❯ \n  -- INSERT --"
-	st := detectStatusWithHooksForSession(content, "clux", "0", "0", processMaps{})
+	st := detectStatusWithHooksForSession(content, "clux", "0", "0", processMaps{}, hashContent(content))
 	assert(t, st == session.StatusWorking, "expected Working (agent overrides hook waiting), got %v", st)
 }
 
@@ -261,10 +261,10 @@ func TestDetect_OldLocalAgentInScrollback_HashStable_Idle(t *testing.T) {
 	withMockedDeps(t,
 		func(_, _, _ string) string { return "" },
 		func(_, _, _ string, _ processMaps) bool { return false },
-		func(_ string, _ string) bool { return false },
+		func(_ string, _ uint64) bool { return false },
 	)
 	content := "1 local agent still running\n" + strings.Repeat("filler line\n", 20) + "some output\n❯ \n  -- INSERT --"
-	st := detectStatusWithHooksForSession(content, "clux", "0", "0", processMaps{})
+	st := detectStatusWithHooksForSession(content, "clux", "0", "0", processMaps{}, hashContent(content))
 	assert(t, st == session.StatusIdle, "expected Idle (old agent text in scrollback), got %v", st)
 }
 
@@ -273,10 +273,10 @@ func TestDetect_TruncatedToolOutput_NotSpinner_Idle(t *testing.T) {
 	withMockedDeps(t,
 		func(_, _, _ string) string { return "" },
 		func(_, _, _ string, _ processMaps) bool { return false },
-		func(_ string, _ string) bool { return false },
+		func(_ string, _ uint64) bool { return false },
 	)
 	content := "some output\n⏺ Bash(git add internal/tmux/tmux.go internal/tmux/tmux_t…\n❯ \n  -- INSERT --"
-	st := detectStatusWithHooksForSession(content, "clux", "0", "0", processMaps{})
+	st := detectStatusWithHooksForSession(content, "clux", "0", "0", processMaps{}, hashContent(content))
 	assert(t, st == session.StatusIdle, "expected Idle (truncated tool output, not spinner), got %v", st)
 }
 
@@ -285,10 +285,10 @@ func TestDetect_HookIdle_Ignored_HashChanged(t *testing.T) {
 	withMockedDeps(t,
 		func(_, _, _ string) string { return "idle" },
 		func(_, _, _ string, _ processMaps) bool { return false },
-		func(_ string, _ string) bool { return true },
+		func(_ string, _ uint64) bool { return true },
 	)
 	content := "-- INSERT --\nsome output\n❯ "
-	st := detectStatusWithHooksForSession(content, "clux", "0", "0", processMaps{})
+	st := detectStatusWithHooksForSession(content, "clux", "0", "0", processMaps{}, hashContent(content))
 	assert(t, st == session.StatusWorking, "expected Working (hash changed despite hook idle), got %v", st)
 }
 
@@ -297,10 +297,10 @@ func TestDetect_HookWorking_NotTrusted_HashStable_Idle(t *testing.T) {
 	withMockedDeps(t,
 		func(_, _, _ string) string { return "working" },
 		func(_, _, _ string, _ processMaps) bool { return false },
-		func(_ string, _ string) bool { return false },
+		func(_ string, _ uint64) bool { return false },
 	)
 	content := "-- INSERT --\nsome output\n❯ "
-	st := detectStatusWithHooksForSession(content, "clux", "0", "0", processMaps{})
+	st := detectStatusWithHooksForSession(content, "clux", "0", "0", processMaps{}, hashContent(content))
 	assert(t, st == session.StatusIdle, "expected Idle (hook working not trusted, hash stable), got %v", st)
 }
 
@@ -309,10 +309,10 @@ func TestDetect_HashStable_ClaudeCodeNoPattern_Idle(t *testing.T) {
 	withMockedDeps(t,
 		func(_, _, _ string) string { return "" },
 		func(_, _, _ string, _ processMaps) bool { return false },
-		func(_ string, _ string) bool { return false },
+		func(_ string, _ uint64) bool { return false },
 	)
 	content := "-- INSERT --\nsome unrecognized output"
-	st := detectStatusWithHooksForSession(content, "clux", "0", "0", processMaps{})
+	st := detectStatusWithHooksForSession(content, "clux", "0", "0", processMaps{}, hashContent(content))
 	assert(t, st == session.StatusIdle, "expected Idle (hash stable, Claude Code present), got %v", st)
 }
 
@@ -321,12 +321,12 @@ func TestDetect_OldWaitingInScrollback_HashStable_Idle(t *testing.T) {
 	withMockedDeps(t,
 		func(_, _, _ string) string { return "" },
 		func(_, _, _ string, _ processMaps) bool { return false },
-		func(_ string, _ string) bool { return false },
+		func(_ string, _ uint64) bool { return false },
 	)
 	// "Do you want to proceed?" is in scrollback (more than 15 lines up),
 	// so bottomContent won't include it.
 	content := "-- INSERT --\nDo you want to proceed?\n" + strings.Repeat("filler line\n", 20) + "some output\n"
-	st := detectStatusWithHooksForSession(content, "clux", "0", "0", processMaps{})
+	st := detectStatusWithHooksForSession(content, "clux", "0", "0", processMaps{}, hashContent(content))
 	assert(t, st == session.StatusIdle, "expected Idle (old waiting in scrollback), got %v", st)
 }
 

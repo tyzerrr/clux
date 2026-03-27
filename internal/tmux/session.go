@@ -40,7 +40,8 @@ func ListWindows() ([]session.Session, error) {
 		key := paneKey(p.sessionName, p.windowIndex, p.paneIndex)
 
 		// If content hasn't changed and we have a cached result, reuse it.
-		if contentHashUnchanged(key, content) {
+		unchanged, contentHash := contentHashUnchanged(key, content)
+		if unchanged {
 			if cached, ok := getCachedResult(key); ok {
 				sessions = append(sessions, session.Session{
 					Name:        p.windowName,
@@ -56,7 +57,7 @@ func ListWindows() ([]session.Session, error) {
 			}
 		}
 
-		status, summary, branch := detectPaneMetadata(content, p.sessionName, p.windowIndex, p.paneIndex, p.dir, pm)
+		status, summary, branch := detectPaneMetadata(content, p.sessionName, p.windowIndex, p.paneIndex, p.dir, pm, contentHash)
 		setCachedResult(key, paneDetectResult{
 			status:  status,
 			branch:  branch,

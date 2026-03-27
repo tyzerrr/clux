@@ -28,24 +28,26 @@ func TestContentChanged(t *testing.T) {
 	resetPaneHashes(t)
 
 	key := "test:0.0"
+	helloHash := hashContent("hello")
+	worldHash := hashContent("world")
 
 	// First call — no previous hash, returns false
-	if contentChanged(key, "hello") {
+	if contentChanged(key, helloHash) {
 		t.Error("first call should return false")
 	}
 
 	// Same content — returns false
-	if contentChanged(key, "hello") {
+	if contentChanged(key, helloHash) {
 		t.Error("same content should return false")
 	}
 
 	// Different content — returns true
-	if !contentChanged(key, "world") {
+	if !contentChanged(key, worldHash) {
 		t.Error("different content should return true")
 	}
 
 	// Same new content — returns false
-	if contentChanged(key, "world") {
+	if contentChanged(key, worldHash) {
 		t.Error("same content should return false")
 	}
 }
@@ -66,8 +68,8 @@ func TestContentChanged_TimerIgnored(t *testing.T) {
 		k := key + pair[0]
 		content1 := pair[0] + "\n" + base
 		content2 := pair[1] + "\n" + base
-		contentChanged(k, content1)
-		if contentChanged(k, content2) {
+		contentChanged(k, hashContent(content1))
+		if contentChanged(k, hashContent(content2)) {
 			t.Errorf("timer-only change should not be detected for %q", pair[0])
 		}
 	}
@@ -84,8 +86,8 @@ func TestContentChanged_RealChangeWithTimer(t *testing.T) {
 	content1 := "◆ Baked for 1s\n" + base1
 	content2 := "◆ Baked for 2s\n" + base2
 
-	contentChanged(key, content1)
-	if !contentChanged(key, content2) {
+	contentChanged(key, hashContent(content1))
+	if !contentChanged(key, hashContent(content2)) {
 		t.Error("real content change should be detected even with timer")
 	}
 }
@@ -94,11 +96,11 @@ func TestClearPaneHash(t *testing.T) {
 	resetPaneHashes(t)
 
 	key := paneKey("test", "0", "0")
-	contentChanged(key, "hello")
+	contentChanged(key, hashContent("hello"))
 	ClearPaneHash("test", "0", "0")
 
 	// After clear, first call returns false again
-	if contentChanged(key, "hello") {
+	if contentChanged(key, hashContent("hello")) {
 		t.Error("after clear, first call should return false")
 	}
 
@@ -113,27 +115,34 @@ func TestContentHashUnchanged(t *testing.T) {
 
 	key := "test:0.0"
 
-	// No stored hash — returns false
-	if contentHashUnchanged(key, "hello") {
+	// No stored hash — returns (false, hash)
+	unchanged, hash := contentHashUnchanged(key, "hello")
+	if unchanged {
 		t.Error("expected false when no stored hash exists")
+	}
+	if hash == 0 {
+		t.Error("expected non-zero hash even when no stored hash exists")
 	}
 
 	// Store a hash via contentChanged
-	contentChanged(key, "hello")
+	contentChanged(key, hashContent("hello"))
 
-	// Same content — returns true
-	if !contentHashUnchanged(key, "hello") {
+	// Same content — returns (true, hash)
+	unchanged, _ = contentHashUnchanged(key, "hello")
+	if !unchanged {
 		t.Error("expected true for unchanged content")
 	}
 
-	// Different content — returns false
-	if contentHashUnchanged(key, "world") {
+	// Different content — returns (false, hash)
+	unchanged, _ = contentHashUnchanged(key, "world")
+	if unchanged {
 		t.Error("expected false for changed content")
 	}
 
 	// contentHashUnchanged does not update the stored hash,
 	// so checking the original content still matches
-	if !contentHashUnchanged(key, "hello") {
+	unchanged, _ = contentHashUnchanged(key, "hello")
+	if !unchanged {
 		t.Error("expected true: contentHashUnchanged should not update stored hash")
 	}
 }
@@ -180,18 +189,20 @@ func TestClearAllPaneCache(t *testing.T) {
 	resetPaneHashes(t)
 
 	// Populate both caches
-	contentChanged("a:0.0", "content-a")
-	contentChanged("b:1.0", "content-b")
+	contentChanged("a:0.0", hashContent("content-a"))
+	contentChanged("b:1.0", hashContent("content-b"))
 	setCachedResult("a:0.0", paneDetectResult{status: session.StatusWorking})
 	setCachedResult("b:1.0", paneDetectResult{status: session.StatusIdle})
 
 	ClearAllPaneCache()
 
 	// Hash cache should be empty
-	if contentHashUnchanged("a:0.0", "content-a") {
+	unchanged, _ := contentHashUnchanged("a:0.0", "content-a")
+	if unchanged {
 		t.Error("expected hash cache to be cleared for a:0.0")
 	}
-	if contentHashUnchanged("b:1.0", "content-b") {
+	unchanged, _ = contentHashUnchanged("b:1.0", "content-b")
+	if unchanged {
 		t.Error("expected hash cache to be cleared for b:1.0")
 	}
 
@@ -209,7 +220,7 @@ func TestClearAllPaneCache(t *testing.T) {
 func TestClearPaneHash_AlsoClearsDetectCache(t *testing.T) {
 	resetPaneHashes(t)
 
-	contentChanged("sess:0.0", "content")
+	contentChanged("sess:0.0", hashContent("content"))
 	setCachedResult("sess:0.0", paneDetectResult{status: session.StatusIdle, branch: "main"})
 
 	ClearPaneHash("sess", "0", "0")
@@ -224,9 +235,9 @@ func TestClearPaneHash_AlsoClearsDetectCache(t *testing.T) {
 func TestClearPaneHashByPrefix_AlsoClearsDetectCache(t *testing.T) {
 	resetPaneHashes(t)
 
-	contentChanged("clux:5.0", "content1")
-	contentChanged("clux:5.1", "content2")
-	contentChanged("clux:6.0", "content3")
+	contentChanged("clux:5.0", hashContent("content1"))
+	contentChanged("clux:5.1", hashContent("content2"))
+	contentChanged("clux:6.0", hashContent("content3"))
 	setCachedResult("clux:5.0", paneDetectResult{status: session.StatusWorking})
 	setCachedResult("clux:5.1", paneDetectResult{status: session.StatusIdle})
 	setCachedResult("clux:6.0", paneDetectResult{status: session.StatusWaiting})

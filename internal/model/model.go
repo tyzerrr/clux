@@ -267,6 +267,7 @@ func fetchDashboardPreviews(sessions []session.Session, skipIdx ...int) tea.Cmd 
 		result := make(map[int]string, len(sessions))
 		var mu sync.Mutex
 		var wg sync.WaitGroup
+		sem := make(chan struct{}, 8)
 		for i, s := range sessions {
 			if i == skip {
 				continue
@@ -274,6 +275,8 @@ func fetchDashboardPreviews(sessions []session.Session, skipIdx ...int) tea.Cmd 
 			wg.Add(1)
 			go func(idx int, s session.Session) {
 				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
 				sessionName, paneIndex := s.ResolveTarget(tmux.SessionName)
 				content, err := tmux.CapturePaneForSession(sessionName, s.WindowIndex, paneIndex)
 				mu.Lock()

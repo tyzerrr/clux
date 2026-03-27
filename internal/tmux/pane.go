@@ -255,13 +255,17 @@ func isAncestorOf(ancestorPID, targetPID int, childrenByPID map[int][]int) bool 
 
 // capturePanesConcurrently captures the plain content of all given panes concurrently.
 // Each result corresponds to the pane at the same index in the input slice.
+// A semaphore limits concurrency to 8 goroutines to avoid overwhelming tmux.
 func capturePanesConcurrently(panes []claudePaneInfo) []captureResult {
 	results := make([]captureResult, len(panes))
+	sem := make(chan struct{}, 8)
 	var wg sync.WaitGroup
 	for i, p := range panes {
 		wg.Add(1)
 		go func(i int, sessionName, idx, paneIdx string) {
 			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
 			content, err := capturePaneContentForSession(sessionName, idx, paneIdx)
 			results[i] = captureResult{content: content, err: err}
 		}(i, p.sessionName, p.windowIndex, p.paneIndex)
@@ -272,8 +276,9 @@ func capturePanesConcurrently(panes []claudePaneInfo) []captureResult {
 
 // detectPaneMetadata detects status, then fetches summary and git branch concurrently.
 // The processMaps are threaded through to avoid re-querying the process tree.
-func detectPaneMetadata(content, sessionName, windowIndex, paneIndex, dir string, pm processMaps) (session.Status, string, string) {
-	status := detectStatusWithHooksForSession(content, sessionName, windowIndex, paneIndex, pm)
+// contentHash is a pre-computed FNV-1a hash passed through to avoid double hashing.
+func detectPaneMetadata(content, sessionName, windowIndex, paneIndex, dir string, pm processMaps, contentHash uint64) (session.Status, string, string) {
+	status := detectStatusWithHooksForSession(content, sessionName, windowIndex, paneIndex, pm, contentHash)
 	var summary, branch string
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -348,7 +353,7 @@ func getClaudeStatusForSession(sessionName, windowIndex, paneIndex string) strin
 var (
 	getClaudeStatusFn   = getClaudeStatusForSession
 	hasActiveChildrenFn = hasActiveChildrenForSession
-	contentChangedFn    = contentChanged
+	contentChangedFn    func(string, uint64) bool = contentChanged
 )
 
 // isPersistentChildByMaps returns true if the given PID is a long-lived background
@@ -410,11 +415,12 @@ func hasActiveChildrenForSession(sessionName, windowIndex, paneIndex string, pm 
 // matching and process tree to distinguish Waiting vs Idle.
 // This function assumes the pane is already known to contain Claude Code.
 // The processMaps are threaded through to avoid re-querying the process tree.
-func detectStatusWithHooksForSession(content, sessionName, windowIndex, paneIndex string, pm processMaps) session.Status {
+// contentHash is a pre-computed FNV-1a hash of the pane content to avoid double hashing.
+func detectStatusWithHooksForSession(content, sessionName, windowIndex, paneIndex string, pm processMaps, contentHash uint64) session.Status {
 	key := paneKey(sessionName, windowIndex, paneIndex)
 
 	// Primary signal: content hash comparison.
-	if contentChangedFn(key, content) {
+	if contentChangedFn(key, contentHash) {
 		debugLogf("[%s] hash=changed -> final=working", key)
 		return session.StatusWorking
 	}

@@ -42,22 +42,26 @@ func paneKey(sessionName, windowIndex, paneIndex string) string {
 	return sessionName + ":" + windowIndex + "." + paneIndex
 }
 
-// hashContent computes the FNV-1a hash of a string.
+// hashContent computes the FNV-1a hash of a string, skipping idle timer lines
+// so that timer ticks alone do not cause hash changes.
+// Uses line-by-line iteration to avoid allocating a replacement string.
 func hashContent(content string) uint64 {
-	// Strip idle timer lines that update every second (e.g., "◆ Baked for 3m 16s")
-	// so that timer ticks alone do not cause hash changes.
-	normalized := idleTimerPattern.ReplaceAllString(content, "")
 	h := fnv.New64a()
-	_, _ = io.WriteString(h, normalized)
+	for line := range strings.SplitSeq(content, "\n") {
+		if idleTimerPattern.MatchString(line) {
+			continue
+		}
+		io.WriteString(h, line)
+		io.WriteString(h, "\n")
+	}
 	return h.Sum64()
 }
 
-// contentChanged compares the current content hash with the stored hash.
-// Returns true if content changed since the last call. Updates the stored hash.
+// contentChanged compares the given pre-computed hash with the stored hash.
+// Returns true if the hash changed since the last call. Updates the stored hash.
 // On the first call for a given key (no previous hash), returns false —
 // we cannot assume Working just because we haven't seen the pane before.
-func contentChanged(key string, content string) bool {
-	hash := hashContent(content)
+func contentChanged(key string, hash uint64) bool {
 	paneCacheMu.Lock()
 	defer paneCacheMu.Unlock()
 	prev, exists := paneContentHashes[key]
@@ -102,17 +106,19 @@ func ClearAllPaneCache() {
 }
 
 // contentHashUnchanged checks whether the content hash for the given key
-// matches the stored hash without updating it. Returns true if unchanged.
-// Returns false if content changed or there is no stored hash.
-func contentHashUnchanged(key, content string) bool {
+// matches the stored hash without updating it. Returns (unchanged, hash).
+// unchanged is false if content changed or there is no stored hash.
+// The computed hash is always returned so callers can pass it downstream
+// without re-hashing.
+func contentHashUnchanged(key, content string) (bool, uint64) {
 	hash := hashContent(content)
 	paneCacheMu.Lock()
 	defer paneCacheMu.Unlock()
 	prev, exists := paneContentHashes[key]
 	if !exists {
-		return false
+		return false, hash
 	}
-	return prev == hash
+	return prev == hash, hash
 }
 
 // getCachedResult returns the cached detection result for a pane, if any.
