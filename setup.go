@@ -25,6 +25,11 @@ const tmuxConfBindingOldKeyNewSize = `bind-key C-c display-popup -E -w100% -h100
 
 const tmuxConfBlock = "\n# clux\n" + tmuxConfBinding + "\n"
 
+// printSetupError prints a formatted error message to stderr with a [✗] prefix.
+func printSetupError(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "[✗] "+format+"\n", args...)
+}
+
 const cluxSummaryBlock = `
 ## clux
 
@@ -63,7 +68,7 @@ func cmdInit() {
 func setupPostToolUseHook() setupResult {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[✗] Failed to determine home directory: %v\n", err)
+		printSetupError("Failed to determine home directory: %v", err)
 		return setupError
 	}
 
@@ -77,13 +82,13 @@ func setupPostToolUseHookAt(settingsPath string) setupResult {
 	data, err := os.ReadFile(settingsPath)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
-			fmt.Fprintf(os.Stderr, "[✗] Failed to read %s: %v\n", settingsPath, err)
+			printSetupError("Failed to read %s: %v", settingsPath, err)
 			return setupError
 		}
 		settings = make(map[string]any)
 	} else {
 		if err := json.Unmarshal(data, &settings); err != nil {
-			fmt.Fprintf(os.Stderr, "[✗] Failed to parse %s: %v\n", settingsPath, err)
+			printSetupError("Failed to parse %s: %v", settingsPath, err)
 			return setupError
 		}
 	}
@@ -96,7 +101,7 @@ func setupPostToolUseHookAt(settingsPath string) setupResult {
 	}
 	hooksMap, ok := hooks.(map[string]any)
 	if !ok {
-		fmt.Fprintf(os.Stderr, "[✗] hooks key in %s is not an object\n", settingsPath)
+		printSetupError("hooks key in %s is not an object", settingsPath)
 		return setupError
 	}
 
@@ -107,7 +112,7 @@ func setupPostToolUseHookAt(settingsPath string) setupResult {
 	}
 	postToolUseArr, ok := postToolUse.([]any)
 	if !ok {
-		fmt.Fprintf(os.Stderr, "[✗] hooks.PostToolUse in %s is not an array\n", settingsPath)
+		printSetupError("hooks.PostToolUse in %s is not an array", settingsPath)
 		return setupError
 	}
 
@@ -133,17 +138,17 @@ func setupPostToolUseHookAt(settingsPath string) setupResult {
 	// Write back
 	out, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[✗] Failed to marshal settings: %v\n", err)
+		printSetupError("Failed to marshal settings: %v", err)
 		return setupError
 	}
 
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
-		fmt.Fprintf(os.Stderr, "[✗] Failed to create directory: %v\n", err)
+		printSetupError("Failed to create directory: %v", err)
 		return setupError
 	}
 
 	if err := os.WriteFile(settingsPath, append(out, '\n'), 0o644); err != nil {
-		fmt.Fprintf(os.Stderr, "[✗] Failed to write %s: %v\n", settingsPath, err)
+		printSetupError("Failed to write %s: %v", settingsPath, err)
 		return setupError
 	}
 
@@ -154,7 +159,7 @@ func setupPostToolUseHookAt(settingsPath string) setupResult {
 func setupClaudeMD() setupResult {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[✗] Failed to determine home directory: %v\n", err)
+		printSetupError("Failed to determine home directory: %v", err)
 		return setupError
 	}
 	return setupClaudeMDAt(filepath.Join(homeDir, ".claude", "CLAUDE.md"))
@@ -164,16 +169,16 @@ func setupClaudeMDAt(path string) setupResult {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
-			fmt.Fprintf(os.Stderr, "[✗] Failed to read %s: %v\n", path, err)
+			printSetupError("Failed to read %s: %v", path, err)
 			return setupError
 		}
 		// File doesn't exist — create it
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			fmt.Fprintf(os.Stderr, "[✗] Failed to create directory for %s: %v\n", path, err)
+			printSetupError("Failed to create directory for %s: %v", path, err)
 			return setupError
 		}
 		if err := os.WriteFile(path, []byte(strings.TrimLeft(cluxSummaryBlock, "\n")), 0o644); err != nil {
-			fmt.Fprintf(os.Stderr, "[✗] Failed to create %s: %v\n", path, err)
+			printSetupError("Failed to create %s: %v", path, err)
 			return setupError
 		}
 		fmt.Printf("[✓] @clux-summary instruction added to %s\n", path)
@@ -187,17 +192,17 @@ func setupClaudeMDAt(path string) setupResult {
 
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[✗] Failed to open %s for appending: %v\n", path, err)
+		printSetupError("Failed to open %s for appending: %v", path, err)
 		return setupError
 	}
 	if _, err := f.WriteString(cluxSummaryBlock); err != nil {
 		_ = f.Close()
-		fmt.Fprintf(os.Stderr, "[✗] Failed to append to %s: %v\n", path, err)
+		printSetupError("Failed to append to %s: %v", path, err)
 		return setupError
 	}
 
 	if err := f.Close(); err != nil {
-		fmt.Fprintf(os.Stderr, "[✗] Failed to close %s: %v\n", path, err)
+		printSetupError("Failed to close %s: %v", path, err)
 		return setupError
 	}
 
@@ -208,7 +213,7 @@ func setupClaudeMDAt(path string) setupResult {
 func setupTmuxConf() setupResult {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[✗] Failed to determine home directory: %v\n", err)
+		printSetupError("Failed to determine home directory: %v", err)
 		return setupError
 	}
 	return setupTmuxConfAt(filepath.Join(homeDir, ".tmux.conf"))
@@ -218,11 +223,11 @@ func setupTmuxConfAt(path string) setupResult {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
-			fmt.Fprintf(os.Stderr, "[✗] Failed to read %s: %v\n", path, err)
+			printSetupError("Failed to read %s: %v", path, err)
 			return setupError
 		}
 		if err := os.WriteFile(path, []byte(strings.TrimLeft(tmuxConfBlock, "\n")), 0o644); err != nil {
-			fmt.Fprintf(os.Stderr, "[✗] Failed to create %s: %v\n", path, err)
+			printSetupError("Failed to create %s: %v", path, err)
 			return setupError
 		}
 		fmt.Printf("[✓] tmux key binding added to %s\n", path)
@@ -240,7 +245,7 @@ func setupTmuxConfAt(path string) setupResult {
 		if strings.Contains(content, old) {
 			updated := strings.ReplaceAll(content, old, tmuxConfBinding)
 			if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
-				fmt.Fprintf(os.Stderr, "[✗] Failed to write %s: %v\n", path, err)
+				printSetupError("Failed to write %s: %v", path, err)
 				return setupError
 			}
 			fmt.Printf("[✓] tmux key binding updated in %s\n", path)
@@ -250,16 +255,16 @@ func setupTmuxConfAt(path string) setupResult {
 
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[✗] Failed to open %s for appending: %v\n", path, err)
+		printSetupError("Failed to open %s for appending: %v", path, err)
 		return setupError
 	}
 	if _, err := f.WriteString(tmuxConfBlock); err != nil {
 		_ = f.Close()
-		fmt.Fprintf(os.Stderr, "[✗] Failed to append to %s: %v\n", path, err)
+		printSetupError("Failed to append to %s: %v", path, err)
 		return setupError
 	}
 	if err := f.Close(); err != nil {
-		fmt.Fprintf(os.Stderr, "[✗] Failed to close %s: %v\n", path, err)
+		printSetupError("Failed to close %s: %v", path, err)
 		return setupError
 	}
 
@@ -270,11 +275,11 @@ func setupTmuxConfAt(path string) setupResult {
 func setupConfig() setupResult {
 	cfg, err := config.Load()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[✗] Failed to load config: %v\n", err)
+		printSetupError("Failed to load config: %v", err)
 		return setupError
 	}
 	if err := cfg.Save(); err != nil {
-		fmt.Fprintf(os.Stderr, "[✗] Failed to save config: %v\n", err)
+		printSetupError("Failed to save config: %v", err)
 		return setupError
 	}
 	fmt.Println("[✓] Config written with defaults to ~/.config/clux/config.toml")

@@ -236,11 +236,7 @@ func doImmediateTick() tea.Cmd {
 
 func fetchPreviewCmdForSession(s session.Session) tea.Cmd {
 	return func() tea.Msg {
-		sessionName := s.SessionName
-		if sessionName == "" {
-			sessionName = tmux.SessionName
-		}
-		paneIndex := resolvePaneIndex(s.PaneIndex)
+		sessionName, paneIndex := s.ResolveTarget(tmux.SessionName)
 		content, err := tmux.CapturePaneForSession(sessionName, s.WindowIndex, paneIndex)
 		if err != nil {
 			return previewMsg("")
@@ -251,11 +247,7 @@ func fetchPreviewCmdForSession(s session.Session) tea.Cmd {
 
 func fetchPreviewCmdForSessionWithOffset(s session.Session, scrollOffset, height int) tea.Cmd {
 	return func() tea.Msg {
-		sessionName := s.SessionName
-		if sessionName == "" {
-			sessionName = tmux.SessionName
-		}
-		paneIndex := resolvePaneIndex(s.PaneIndex)
+		sessionName, paneIndex := s.ResolveTarget(tmux.SessionName)
 		content, err := tmux.CapturePaneForSessionWithOffset(sessionName, s.WindowIndex, paneIndex, scrollOffset, height)
 		if err != nil {
 			return previewMsg("")
@@ -266,11 +258,7 @@ func fetchPreviewCmdForSessionWithOffset(s session.Session, scrollOffset, height
 
 func fetchDashboardPreviewWithScrollback(s session.Session, tileIdx int) tea.Cmd {
 	return func() tea.Msg {
-		sessionName := s.SessionName
-		if sessionName == "" {
-			sessionName = tmux.SessionName
-		}
-		paneIndex := resolvePaneIndex(s.PaneIndex)
+		sessionName, paneIndex := s.ResolveTarget(tmux.SessionName)
 		content, err := tmux.CapturePaneWithScrollback(sessionName, s.WindowIndex, paneIndex, dashScrollbackLines)
 		if err != nil {
 			return dashPreviewsMsg(map[int]string{tileIdx: ""})
@@ -295,11 +283,7 @@ func fetchDashboardPreviews(sessions []session.Session, skipIdx ...int) tea.Cmd 
 			wg.Add(1)
 			go func(idx int, s session.Session) {
 				defer wg.Done()
-				sessionName := s.SessionName
-				if sessionName == "" {
-					sessionName = tmux.SessionName
-				}
-				paneIndex := resolvePaneIndex(s.PaneIndex)
+				sessionName, paneIndex := s.ResolveTarget(tmux.SessionName)
 				content, err := tmux.CapturePaneForSession(sessionName, s.WindowIndex, paneIndex)
 				mu.Lock()
 				if err == nil {
@@ -546,11 +530,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Check for status transitions and update prevStatuses.
 		shouldBell := false
 		for _, s := range m.sessions {
-			paneIdx := resolvePaneIndex(s.PaneIndex)
-			sessionName := s.SessionName
-			if sessionName == "" {
-				sessionName = tmux.SessionName
-			}
+			sessionName, paneIdx := s.ResolveTarget(tmux.SessionName)
 			key := sessionName + ":" + s.WindowIndex + "." + paneIdx
 			prev, exists := m.prevStatuses[key]
 			if exists {

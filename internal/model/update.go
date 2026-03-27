@@ -48,12 +48,8 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case key == "enter":
 		if len(m.filtered) > 0 {
 			s := m.filtered[m.list.cursor]
-			sessionName := s.SessionName
-			if sessionName == "" {
-				sessionName = tmux.SessionName
-			}
+			sessionName, paneIndex := s.ResolveTarget(tmux.SessionName)
 			windowIndex := s.WindowIndex
-			paneIndex := resolvePaneIndex(s.PaneIndex)
 			return m, func() tea.Msg {
 				if err := tmux.SwitchToWindow(sessionName, windowIndex, paneIndex); err != nil {
 					return errMsg(err)
@@ -63,25 +59,15 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case km.IsNewSession(key):
-		m.mode = ModeNewSession
-		m.newSess.returnMode = ModeList
-		m.err = nil
-		m.newSess.input.SetValue("")
-		m.newSess.cursor = 0
-		cmds := []tea.Cmd{m.newSess.input.Focus()}
-		if len(m.repoDirs) == 0 {
-			cmds = append(cmds, fetchGhqDirs)
-		} else {
-			m.filteredDirs = m.repoDirs
-		}
-		return m, tea.Batch(cmds...)
+		return m, m.enterNewSessionMode(ModeList)
 
 	case km.IsKill(key):
 		if len(m.filtered) > 0 {
 			s := m.filtered[m.list.cursor]
+			_, confirmPaneIndex := s.ResolveTarget(tmux.SessionName)
 			m.confirm.target = s.DisplayName()
 			m.confirm.windowIndex = s.WindowIndex
-			m.confirm.paneIndex = resolvePaneIndex(s.PaneIndex)
+			m.confirm.paneIndex = confirmPaneIndex
 			m.confirm.sessionName = s.SessionName
 			m.err = nil
 			m.confirm.returnMode = ModeList
@@ -112,18 +98,7 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, fetchDashboardPreviews(m.filtered[:pageItems])
 
 	case km.IsBroadcast(key):
-		m.mode = ModeBroadcastSelect
-		m.err = nil
-		m.broadcast.input.SetValue("")
-		m.broadcast.cursor = 0
-		m.broadcast.selected = make(map[string]bool)
-		cmds := []tea.Cmd{m.broadcast.input.Focus()}
-		if len(m.broadcast.dirs) == 0 {
-			cmds = append(cmds, fetchBroadcastGhqDirs)
-		} else {
-			m.broadcast.filtered = m.broadcast.dirs
-		}
-		return m, tea.Batch(cmds...)
+		return m, m.enterBroadcastSelectMode()
 
 	case km.IsGroup(key):
 		m.groupEnabled = !m.groupEnabled
@@ -161,11 +136,7 @@ func (m Model) updateListPrompt(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		s := m.filtered[m.list.cursor]
 		m.dashboard.promptInput.Blur()
 		m.mode = ModeList
-		sessionName := s.SessionName
-		if sessionName == "" {
-			sessionName = tmux.SessionName
-		}
-		paneIndex := resolvePaneIndex(s.PaneIndex)
+		sessionName, paneIndex := s.ResolveTarget(tmux.SessionName)
 		windowIndex := s.WindowIndex
 		return m, func() tea.Msg {
 			if err := tmux.SendKeysLiteral(sessionName, windowIndex, paneIndex, text); err != nil {
@@ -340,74 +311,29 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case km.IsNextPage(key):
-		// Next page
-		nextOffset := m.dashboard.pageOffset + maxVisible
-		if nextOffset < len(m.filtered) {
-			m.dashboard.pageOffset = nextOffset
-			m.dashboard.cursor = 0
-			m.preview.scrollOffset = 0
-			pageSessions := m.filtered[m.dashboard.pageOffset : m.dashboard.pageOffset+min(m.dashMaxVisible(), len(m.filtered)-m.dashboard.pageOffset)]
-			return m, fetchDashboardPreviews(pageSessions)
+		if cmd := m.dashNavigateToNextPage(); cmd != nil {
+			return m, cmd
 		}
 	case km.IsPrevPage(key):
-		// Previous page
-		prevOffset := m.dashboard.pageOffset - maxVisible
-		if prevOffset < 0 {
-			prevOffset = 0
-		}
-		if prevOffset != m.dashboard.pageOffset {
-			m.dashboard.pageOffset = prevOffset
-			m.dashboard.cursor = 0
-			m.preview.scrollOffset = 0
-			pageSessions := m.filtered[m.dashboard.pageOffset : m.dashboard.pageOffset+min(m.dashMaxVisible(), len(m.filtered)-m.dashboard.pageOffset)]
-			return m, fetchDashboardPreviews(pageSessions)
+		if cmd := m.dashNavigateToPrevPage(); cmd != nil {
+			return m, cmd
 		}
 	case km.IsMoveLeft(key):
-		if m.dashboard.cursor%cols > 0 {
-			m.dashboard.cursor--
-			m.preview.scrollOffset = 0
-		}
+		m.dashMoveGrid("left", cols, pageItems)
 	case km.IsMoveRight(key):
-		if m.dashboard.cursor%cols < cols-1 && m.dashboard.cursor+1 < pageItems {
-			m.dashboard.cursor++
-			m.preview.scrollOffset = 0
-		}
+		m.dashMoveGrid("right", cols, pageItems)
 	case km.IsMoveUp(key):
-		if m.dashboard.cursor-cols >= 0 {
-			m.dashboard.cursor -= cols
-			m.preview.scrollOffset = 0
-		} else if m.dashboard.pageOffset > 0 {
-			// Go to previous page
-			prevOffset := m.dashboard.pageOffset - maxVisible
-			if prevOffset < 0 {
-				prevOffset = 0
-			}
-			m.dashboard.pageOffset = prevOffset
-			m.dashboard.cursor = 0
-			m.preview.scrollOffset = 0
-			pageSessions := m.filtered[m.dashboard.pageOffset : m.dashboard.pageOffset+min(m.dashMaxVisible(), len(m.filtered)-m.dashboard.pageOffset)]
-			return m, fetchDashboardPreviews(pageSessions)
+		if cmd := m.dashMoveGrid("up", cols, pageItems); cmd != nil {
+			return m, cmd
 		}
 	case km.IsMoveDown(key):
-		if m.dashboard.cursor+cols < pageItems {
-			m.dashboard.cursor += cols
-			m.preview.scrollOffset = 0
-		} else if m.dashboard.pageOffset+maxVisible < len(m.filtered) {
-			// Go to next page
-			m.dashboard.pageOffset += maxVisible
-			m.dashboard.cursor = 0
-			m.preview.scrollOffset = 0
-			pageSessions := m.filtered[m.dashboard.pageOffset : m.dashboard.pageOffset+min(m.dashMaxVisible(), len(m.filtered)-m.dashboard.pageOffset)]
-			return m, fetchDashboardPreviews(pageSessions)
+		if cmd := m.dashMoveGrid("down", cols, pageItems); cmd != nil {
+			return m, cmd
 		}
 	case key == "enter":
 		if pageItems > 0 && m.dashboard.pageOffset+m.dashboard.cursor < len(m.filtered) {
 			s := m.filtered[m.dashboard.pageOffset+m.dashboard.cursor]
-			sessionName := s.SessionName
-			if sessionName == "" {
-				sessionName = tmux.SessionName
-			}
-			paneIndex := resolvePaneIndex(s.PaneIndex)
+			sessionName, paneIndex := s.ResolveTarget(tmux.SessionName)
 			return m, func() tea.Msg {
 				if err := tmux.SwitchToWindow(sessionName, s.WindowIndex, paneIndex); err != nil {
 					return errMsg(err)
@@ -418,9 +344,10 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case km.IsKill(key):
 		if len(m.filtered) > 0 && m.dashboard.pageOffset+m.dashboard.cursor < len(m.filtered) {
 			s := m.filtered[m.dashboard.pageOffset+m.dashboard.cursor]
+			_, confirmPaneIndex := s.ResolveTarget(tmux.SessionName)
 			m.confirm.target = s.DisplayName()
 			m.confirm.windowIndex = s.WindowIndex
-			m.confirm.paneIndex = resolvePaneIndex(s.PaneIndex)
+			m.confirm.paneIndex = confirmPaneIndex
 			m.confirm.sessionName = s.SessionName
 			m.err = nil
 			m.confirm.returnMode = ModeDashboard
@@ -428,36 +355,14 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case km.IsNewSession(key):
-		m.mode = ModeNewSession
-		m.newSess.returnMode = ModeDashboard
-		m.err = nil
-		m.newSess.input.SetValue("")
-		m.newSess.cursor = 0
-		cmds := []tea.Cmd{m.newSess.input.Focus()}
-		if len(m.repoDirs) == 0 {
-			cmds = append(cmds, fetchGhqDirs)
-		} else {
-			m.filteredDirs = m.repoDirs
-		}
-		return m, tea.Batch(cmds...)
+		return m, m.enterNewSessionMode(ModeDashboard)
 
 	case km.IsFilter(key):
 		m.mode = ModeFilter
 		return m, m.filterInput.Focus()
 
 	case km.IsBroadcast(key):
-		m.mode = ModeBroadcastSelect
-		m.err = nil
-		m.broadcast.input.SetValue("")
-		m.broadcast.cursor = 0
-		m.broadcast.selected = make(map[string]bool)
-		cmds := []tea.Cmd{m.broadcast.input.Focus()}
-		if len(m.broadcast.dirs) == 0 {
-			cmds = append(cmds, fetchBroadcastGhqDirs)
-		} else {
-			m.broadcast.filtered = m.broadcast.dirs
-		}
-		return m, tea.Batch(cmds...)
+		return m, m.enterBroadcastSelectMode()
 
 	case km.IsInput(key):
 		if pageItems > 0 && m.dashboard.pageOffset+m.dashboard.cursor < len(m.filtered) {
@@ -485,11 +390,7 @@ func (m Model) updateDashboardPrompt(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		s := m.filtered[idx]
 		m.dashboard.promptInput.Blur()
 		m.mode = ModeDashboard
-		sessionName := s.SessionName
-		if sessionName == "" {
-			sessionName = tmux.SessionName
-		}
-		paneIndex := resolvePaneIndex(s.PaneIndex)
+		sessionName, paneIndex := s.ResolveTarget(tmux.SessionName)
 		windowIndex := s.WindowIndex
 		return m, func() tea.Msg {
 			if err := tmux.SendKeysLiteral(sessionName, windowIndex, paneIndex, text); err != nil {

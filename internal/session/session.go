@@ -23,6 +23,20 @@ type Session struct {
 	SessionName string // tmux session name
 }
 
+// ResolveTarget returns the tmux session name (falling back to defaultSessionName)
+// and the pane index (falling back to "0").
+func (s Session) ResolveTarget(defaultSessionName string) (sessionName string, paneIndex string) {
+	sessionName = s.SessionName
+	if sessionName == "" {
+		sessionName = defaultSessionName
+	}
+	paneIndex = s.PaneIndex
+	if paneIndex == "" {
+		paneIndex = "0"
+	}
+	return
+}
+
 // DisplayName returns Summary if set, otherwise Name.
 func (s Session) DisplayName() string {
 	if s.Summary != "" {

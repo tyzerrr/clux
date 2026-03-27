@@ -45,6 +45,52 @@ func TestDisplayName(t *testing.T) {
 	}
 }
 
+func TestResolveTarget(t *testing.T) {
+	tests := []struct {
+		name               string
+		session            Session
+		defaultSessionName string
+		wantSession        string
+		wantPane           string
+	}{
+		{
+			"both set",
+			Session{SessionName: "my-session", PaneIndex: "2"},
+			"default-session",
+			"my-session", "2",
+		},
+		{
+			"session empty uses default",
+			Session{SessionName: "", PaneIndex: "1"},
+			"default-session",
+			"default-session", "1",
+		},
+		{
+			"pane empty defaults to 0",
+			Session{SessionName: "my-session", PaneIndex: ""},
+			"default-session",
+			"my-session", "0",
+		},
+		{
+			"both empty",
+			Session{SessionName: "", PaneIndex: ""},
+			"default-session",
+			"default-session", "0",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotSession, gotPane := tt.session.ResolveTarget(tt.defaultSessionName)
+			if gotSession != tt.wantSession {
+				t.Errorf("ResolveTarget() sessionName = %q, want %q", gotSession, tt.wantSession)
+			}
+			if gotPane != tt.wantPane {
+				t.Errorf("ResolveTarget() paneIndex = %q, want %q", gotPane, tt.wantPane)
+			}
+		})
+	}
+}
+
 func TestStatusString(t *testing.T) {
 	tests := []struct {
 		name   string

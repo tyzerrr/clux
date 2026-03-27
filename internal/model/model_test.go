@@ -844,26 +844,6 @@ func TestView_ModeConfirmKill_WithError(t *testing.T) {
 	}
 }
 
-func TestResolvePaneIndex(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{"", "0"},
-		{"0", "0"},
-		{"1", "1"},
-		{"42", "42"},
-	}
-	for _, tt := range tests {
-		t.Run(fmt.Sprintf("input=%q", tt.input), func(t *testing.T) {
-			got := resolvePaneIndex(tt.input)
-			if got != tt.want {
-				t.Errorf("resolvePaneIndex(%q) = %q, want %q", tt.input, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestPrevStatuses_KeyIncludesPaneIndex(t *testing.T) {
 	m := testModel([]session.Session{
 		{Name: "s1", WindowIndex: "0", PaneIndex: "0", Status: session.StatusWorking},
