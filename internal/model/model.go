@@ -323,7 +323,7 @@ func fetchBroadcastGhqDirs() tea.Msg {
 	return broadcastGhqDirsMsg(dirs)
 }
 
-// applyFilter returns sessions matching the query using fuzzy matching on Name or Dir.
+// applyFilter returns sessions matching the query using fuzzy matching on Name, Summary, Dir, or Branch.
 func applyFilter(sessions []session.Session, query string) []session.Session {
 	if query == "" {
 		return sessions
@@ -331,25 +331,23 @@ func applyFilter(sessions []session.Session, query string) []session.Session {
 	var result []session.Session
 	seen := make(map[int]bool)
 
-	// Match against names
-	names := make([]string, len(sessions))
-	for i, s := range sessions {
-		names[i] = s.Name
-	}
-	for _, m := range fuzzy.Find(query, names) {
-		if !seen[m.Index] {
-			seen[m.Index] = true
-			result = append(result, sessions[m.Index])
-		}
-	}
+	result = fuzzyMatchField(sessions, query, func(s session.Session) string { return s.Name }, false, seen, result)
+	result = fuzzyMatchField(sessions, query, func(s session.Session) string { return s.Summary }, true, seen, result)
+	result = fuzzyMatchField(sessions, query, func(s session.Session) string { return s.Dir }, false, seen, result)
+	result = fuzzyMatchField(sessions, query, func(s session.Session) string { return s.Branch }, true, seen, result)
 
-	// Match against summaries (skip empty summaries to avoid false positives)
-	summaries := make([]string, len(sessions))
+	return result
+}
+
+// fuzzyMatchField performs fuzzy matching on a single field extracted from sessions.
+// When skipEmpty is true, sessions whose extracted field is empty are excluded from results.
+func fuzzyMatchField(sessions []session.Session, query string, extract func(session.Session) string, skipEmpty bool, seen map[int]bool, result []session.Session) []session.Session {
+	values := make([]string, len(sessions))
 	for i, s := range sessions {
-		summaries[i] = s.Summary
+		values[i] = extract(s)
 	}
-	for _, m := range fuzzy.Find(query, summaries) {
-		if summaries[m.Index] == "" {
+	for _, m := range fuzzy.Find(query, values) {
+		if skipEmpty && values[m.Index] == "" {
 			continue
 		}
 		if !seen[m.Index] {
@@ -357,34 +355,6 @@ func applyFilter(sessions []session.Session, query string) []session.Session {
 			result = append(result, sessions[m.Index])
 		}
 	}
-
-	// Match against dirs
-	dirs := make([]string, len(sessions))
-	for i, s := range sessions {
-		dirs[i] = s.Dir
-	}
-	for _, m := range fuzzy.Find(query, dirs) {
-		if !seen[m.Index] {
-			seen[m.Index] = true
-			result = append(result, sessions[m.Index])
-		}
-	}
-
-	// Match against branches
-	branches := make([]string, len(sessions))
-	for i, s := range sessions {
-		branches[i] = s.Branch
-	}
-	for _, m := range fuzzy.Find(query, branches) {
-		if branches[m.Index] == "" {
-			continue
-		}
-		if !seen[m.Index] {
-			seen[m.Index] = true
-			result = append(result, sessions[m.Index])
-		}
-	}
-
 	return result
 }
 

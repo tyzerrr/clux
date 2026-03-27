@@ -122,37 +122,7 @@ func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateListPrompt(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "enter":
-		text := strings.TrimSpace(m.dashboard.promptInput.Value())
-		if text == "" {
-			return m, nil
-		}
-		if m.list.cursor >= len(m.filtered) {
-			m.dashboard.promptInput.Blur()
-			m.mode = ModeList
-			return m, nil
-		}
-		s := m.filtered[m.list.cursor]
-		m.dashboard.promptInput.Blur()
-		m.mode = ModeList
-		sessionName, paneIndex := s.ResolveTarget(tmux.SessionName)
-		windowIndex := s.WindowIndex
-		return m, func() tea.Msg {
-			if err := tmux.SendKeysLiteral(sessionName, windowIndex, paneIndex, text); err != nil {
-				return errMsg(err)
-			}
-			return nil
-		}
-	case "esc":
-		m.dashboard.promptInput.Blur()
-		m.mode = ModeList
-		return m, nil
-	default:
-		var cmd tea.Cmd
-		m.dashboard.promptInput, cmd = m.dashboard.promptInput.Update(msg)
-		return m, cmd
-	}
+	return m.handlePromptKey(msg, m.list.cursor, ModeList)
 }
 
 func (m Model) updateConfirmKill(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -378,21 +348,26 @@ func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateDashboardPrompt(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	return m.handlePromptKey(msg, m.dashboard.pageOffset+m.dashboard.cursor, ModeDashboard)
+}
+
+// handlePromptKey is the shared handler for ModeListPrompt and ModeDashboardPrompt.
+// It resolves the target session at targetIdx, sends the prompt text, and returns to returnMode.
+func (m Model) handlePromptKey(msg tea.KeyPressMsg, targetIdx int, returnMode Mode) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "enter":
 		text := strings.TrimSpace(m.dashboard.promptInput.Value())
 		if text == "" {
 			return m, nil
 		}
-		idx := m.dashboard.pageOffset + m.dashboard.cursor
-		if idx >= len(m.filtered) {
+		if targetIdx >= len(m.filtered) {
 			m.dashboard.promptInput.Blur()
-			m.mode = ModeDashboard
+			m.mode = returnMode
 			return m, nil
 		}
-		s := m.filtered[idx]
+		s := m.filtered[targetIdx]
 		m.dashboard.promptInput.Blur()
-		m.mode = ModeDashboard
+		m.mode = returnMode
 		sessionName, paneIndex := s.ResolveTarget(tmux.SessionName)
 		windowIndex := s.WindowIndex
 		return m, func() tea.Msg {
@@ -403,7 +378,7 @@ func (m Model) updateDashboardPrompt(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	case "esc":
 		m.dashboard.promptInput.Blur()
-		m.mode = ModeDashboard
+		m.mode = returnMode
 		return m, nil
 	default:
 		var cmd tea.Cmd
