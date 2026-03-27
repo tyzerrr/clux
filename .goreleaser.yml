@@ -45,6 +45,7 @@ brews:
   - repository:
       owner: tanaka0325
       name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     homepage: https://github.com/tanaka0325/clux
     description: TUI session manager for Claude Code on tmux
     license: MIT
