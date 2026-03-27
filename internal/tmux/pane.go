@@ -55,14 +55,12 @@ var listProcessesFn = listProcesses
 
 // listAllPanes runs tmux list-panes -a and returns the raw output.
 func listAllPanes() (string, error) {
-	cmd, cancel := tmuxCommand("list-panes", "-a", "-F",
+	out, err := runTmuxOutput("list-panes", "-a", "-F",
 		"#{pane_pid}\t#{session_name}\t#{window_index}\t#{pane_index}\t#{window_name}\t#{pane_current_path}")
-	out, err := cmd.Output()
-	cancel()
 	if err != nil {
 		return "", fmt.Errorf("listing all panes: %w", err)
 	}
-	return string(out), nil
+	return out, nil
 }
 
 // listProcesses runs ps -ax and returns the raw output.
@@ -334,13 +332,11 @@ func tmuxDisplayOption(sessionName, windowIndex, paneIndex, format string) strin
 		return ""
 	}
 	target := sessionName + ":" + windowIndex + "." + paneIndex
-	cmd, cancel := tmuxCommand("display-message", "-t", target, "-p", format)
-	out, err := cmd.Output()
-	cancel()
+	out, err := runTmuxOutput("display-message", "-t", target, "-p", format)
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(out))
+	return out
 }
 
 // getClaudeStatusForSession reads the @claude-status tmux user option for a given session:window.pane.

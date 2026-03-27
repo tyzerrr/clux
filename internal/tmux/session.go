@@ -88,13 +88,11 @@ func groupedSessionName() string {
 // currentClientSession returns the tmux session name that the current client is attached to.
 // Returns empty string on error (e.g., not inside tmux).
 func currentClientSession() string {
-	cmd, cancel := tmuxCommand("display-message", "-p", "#{client_session}")
-	out, err := cmd.Output()
-	cancel()
+	out, err := runTmuxOutput("display-message", "-p", "#{client_session}")
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(out))
+	return out
 }
 
 // switchClientGrouped switches the current tmux client to display the given window (and pane)
@@ -109,10 +107,8 @@ func currentClientSession() string {
 func switchClientGrouped(windowIndex, paneIndex string) error {
 	// Verify the window exists via display-message (has-session only checks sessions).
 	baseTarget := SessionName + ":" + windowIndex
-	cmd, cancel := tmuxCommand("display-message", "-t", baseTarget, "-p", "#{window_index}")
-	out, err := cmd.Output()
-	cancel()
-	if err != nil || strings.TrimSpace(string(out)) != windowIndex {
+	out, err := runTmuxOutput("display-message", "-t", baseTarget, "-p", "#{window_index}")
+	if err != nil || out != windowIndex {
 		return fmt.Errorf("window %q does not exist in session %q", windowIndex, SessionName)
 	}
 
@@ -122,31 +118,21 @@ func switchClientGrouped(windowIndex, paneIndex string) error {
 	// We always create a fresh grouped session for reliability.
 	if strings.HasPrefix(clientSession, SessionName+"-") {
 		debugLog(fmt.Sprintf("killing stale grouped session %q", clientSession))
-		cmd, cancel = tmuxCommand("kill-session", "-t", clientSession)
-		if err := cmd.Run(); err != nil {
+		if err := runTmux("kill-session", "-t", clientSession); err != nil {
 			debugLogf("failed to kill stale grouped session %q: %v", clientSession, err)
 		}
-		cancel()
 	}
 
 	// If the client is in the base clux session, use it directly.
 	if clientSession == SessionName {
-		cmd, cancel = tmuxCommand("select-window", "-t", baseTarget)
-		err = cmd.Run()
-		cancel()
-		if err != nil {
+		if err := runTmux("select-window", "-t", baseTarget); err != nil {
 			return fmt.Errorf("selecting window %q: %w", windowIndex, err)
 		}
 		paneTarget := SessionName + ":" + windowIndex + "." + paneIndex
-		cmd, cancel = tmuxCommand("select-pane", "-t", paneTarget)
-		if err := cmd.Run(); err != nil {
+		if err := runTmux("select-pane", "-t", paneTarget); err != nil {
 			debugLogf("failed to select pane %q: %v", paneTarget, err)
 		}
-		cancel()
-		cmd, cancel = tmuxCommand("switch-client", "-t", baseTarget)
-		err = cmd.Run()
-		cancel()
-		if err != nil {
+		if err := runTmux("switch-client", "-t", baseTarget); err != nil {
 			return fmt.Errorf("switching client to %q: %w", baseTarget, err)
 		}
 		return nil
@@ -154,48 +140,31 @@ func switchClientGrouped(windowIndex, paneIndex string) error {
 
 	// Create a new grouped session linked to the base clux session.
 	newSession := groupedSessionName()
-	cmd, cancel = tmuxCommand("new-session", "-d", "-t", SessionName, "-s", newSession)
-	err = cmd.Run()
-	cancel()
-	if err != nil {
+	if err := runTmux("new-session", "-d", "-t", SessionName, "-s", newSession); err != nil {
 		// Fall back to base session.
 		return switchToBase(baseTarget, windowIndex)
 	}
 
 	// Auto-destroy the grouped session when the client detaches.
-	cmd, cancel = tmuxCommand("set-option", "-t", newSession, "destroy-unattached", "on")
-	if err := cmd.Run(); err != nil {
+	if err := runTmux("set-option", "-t", newSession, "destroy-unattached", "on"); err != nil {
 		debugLogf("failed to set destroy-unattached on session %q: %v", newSession, err)
 	}
-	cancel()
 
 	target := newSession + ":" + windowIndex
-	cmd, cancel = tmuxCommand("select-window", "-t", target)
-	err = cmd.Run()
-	cancel()
-	if err != nil {
-		cmd, cancel = tmuxCommand("kill-session", "-t", newSession)
-		if killErr := cmd.Run(); killErr != nil {
+	if err := runTmux("select-window", "-t", target); err != nil {
+		if killErr := runTmux("kill-session", "-t", newSession); killErr != nil {
 			debugLogf("failed to kill grouped session %q during cleanup: %v", newSession, killErr)
 		}
-		cancel()
 		return switchToBase(baseTarget, windowIndex)
 	}
 	paneTarget := newSession + ":" + windowIndex + "." + paneIndex
-	cmd, cancel = tmuxCommand("select-pane", "-t", paneTarget)
-	if err := cmd.Run(); err != nil {
+	if err := runTmux("select-pane", "-t", paneTarget); err != nil {
 		debugLogf("failed to select pane %q in grouped session: %v", paneTarget, err)
 	}
-	cancel()
-	cmd, cancel = tmuxCommand("switch-client", "-t", target)
-	err = cmd.Run()
-	cancel()
-	if err != nil {
-		cmd, cancel = tmuxCommand("kill-session", "-t", newSession)
-		if killErr := cmd.Run(); killErr != nil {
+	if err := runTmux("switch-client", "-t", target); err != nil {
+		if killErr := runTmux("kill-session", "-t", newSession); killErr != nil {
 			debugLogf("failed to kill grouped session %q during cleanup: %v", newSession, killErr)
 		}
-		cancel()
 		return switchToBase(baseTarget, windowIndex)
 	}
 	return nil
@@ -203,27 +172,17 @@ func switchClientGrouped(windowIndex, paneIndex string) error {
 
 // switchToBase attempts to switch the client to a window in the base clux session.
 func switchToBase(baseTarget, windowIndex string) error {
-	cmd, cancel := tmuxCommand("select-window", "-t", baseTarget)
-	err := cmd.Run()
-	cancel()
-	if err != nil {
+	if err := runTmux("select-window", "-t", baseTarget); err != nil {
 		// Last resort: try to at least attach the client to the base session.
-		cmd, cancel = tmuxCommand("switch-client", "-t", SessionName)
-		if fallbackErr := cmd.Run(); fallbackErr != nil {
+		if fallbackErr := runTmux("switch-client", "-t", SessionName); fallbackErr != nil {
 			debugLogf("last-resort switch-client to %q also failed: %v", SessionName, fallbackErr)
 		}
-		cancel()
 		return fmt.Errorf("selecting window %q: %w", windowIndex, err)
 	}
-	cmd, cancel = tmuxCommand("switch-client", "-t", baseTarget)
-	err = cmd.Run()
-	cancel()
-	if err != nil {
-		cmd, cancel = tmuxCommand("switch-client", "-t", SessionName)
-		if fallbackErr := cmd.Run(); fallbackErr != nil {
+	if err := runTmux("switch-client", "-t", baseTarget); err != nil {
+		if fallbackErr := runTmux("switch-client", "-t", SessionName); fallbackErr != nil {
 			debugLogf("last-resort switch-client to %q also failed: %v", SessionName, fallbackErr)
 		}
-		cancel()
 		return fmt.Errorf("switching client to session %q: %w", SessionName, err)
 	}
 	return nil
@@ -237,25 +196,17 @@ func CreateWindow(name, dir string, args ...string) error {
 	name = sanitizeWindowName(name)
 	tmuxArgs := []string{"new-window", "-a", "-t", SessionName, "-n", name, "-c", dir, "-P", "-F", "#{window_index}"}
 	tmuxArgs = append(tmuxArgs, append([]string{"claude"}, args...)...)
-	cmd, cancel := tmuxCommand(tmuxArgs...)
-	out, err := cmd.Output()
-	cancel()
+	newIndex, err := runTmuxOutput(tmuxArgs...)
 	if err != nil {
 		return fmt.Errorf("creating window %q: %w", name, err)
 	}
-	newIndex := strings.TrimSpace(string(out))
 	// Clear any stale @clux-summary on the new pane (best-effort).
-	cmd, cancel = tmuxCommand("set-option", "-p", "-t", SessionName+":"+newIndex+".0", "@clux-summary", "")
-	if err := cmd.Run(); err != nil {
+	if err := runTmux("set-option", "-p", "-t", SessionName+":"+newIndex+".0", "@clux-summary", ""); err != nil {
 		debugLogf("failed to clear @clux-summary on %s:%s.0: %v", SessionName, newIndex, err)
 	}
-	cancel()
 	if !validWindowIndex.MatchString(newIndex) {
 		debugLog(fmt.Sprintf("CreateWindow: unexpected window index %q from new-window, falling back to base session", newIndex))
-		cmd, cancel = tmuxCommand("switch-client", "-t", SessionName)
-		err2 := cmd.Run()
-		cancel()
-		if err2 != nil {
+		if err2 := runTmux("switch-client", "-t", SessionName); err2 != nil {
 			return fmt.Errorf("switching client to session %q: %w", SessionName, err2)
 		}
 		return nil
@@ -270,19 +221,14 @@ func CreateWindowSilent(name, dir string, args ...string) (string, error) {
 	name = sanitizeWindowName(name)
 	tmuxArgs := []string{"new-window", "-d", "-a", "-t", SessionName, "-n", name, "-c", dir, "-P", "-F", "#{window_index}"}
 	tmuxArgs = append(tmuxArgs, append([]string{"claude"}, args...)...)
-	cmd, cancel := tmuxCommand(tmuxArgs...)
-	out, err := cmd.Output()
-	cancel()
+	newIndex, err := runTmuxOutput(tmuxArgs...)
 	if err != nil {
 		return "", fmt.Errorf("creating window %q: %w", name, err)
 	}
-	newIndex := strings.TrimSpace(string(out))
 	// Clear any stale @clux-summary on the new pane (best-effort).
-	cmd, cancel = tmuxCommand("set-option", "-p", "-t", SessionName+":"+newIndex+".0", "@clux-summary", "")
-	if err := cmd.Run(); err != nil {
+	if err := runTmux("set-option", "-p", "-t", SessionName+":"+newIndex+".0", "@clux-summary", ""); err != nil {
 		debugLogf("failed to clear @clux-summary on %s:%s.0: %v", SessionName, newIndex, err)
 	}
-	cancel()
 	if !validWindowIndex.MatchString(newIndex) {
 		return "", fmt.Errorf("unexpected window index %q from new-window", newIndex)
 	}
@@ -318,13 +264,11 @@ func deduplicateWindowName(base string, nameSet map[string]bool) string {
 // Appends -2, -3, etc. if the name already exists.
 func GenerateWindowName(dir string) string {
 	base := sanitizeWindowName(filepath.Base(dir))
-	cmd, cancel := tmuxCommand("list-windows", "-t", SessionName, "-F", "#{window_name}")
-	out, err := cmd.Output()
-	cancel()
+	out, err := runTmuxOutput("list-windows", "-t", SessionName, "-F", "#{window_name}")
 	if err != nil {
 		return base
 	}
-	existing := strings.Split(strings.TrimSpace(string(out)), "\n")
+	existing := strings.Split(out, "\n")
 	nameSet := make(map[string]bool)
 	for _, n := range existing {
 		nameSet[strings.TrimSpace(n)] = true
@@ -363,23 +307,15 @@ func SwitchToWindow(sessionName, windowIndex, paneIndex string) error {
 	}
 	// For other sessions, switch directly.
 	target := sessionName + ":" + windowIndex
-	cmd, cancel := tmuxCommand("select-window", "-t", target)
-	err := cmd.Run()
-	cancel()
-	if err != nil {
+	if err := runTmux("select-window", "-t", target); err != nil {
 		return fmt.Errorf("switching to window %q in session %q: %w", windowIndex, sessionName, err)
 	}
 	paneTarget := sessionName + ":" + windowIndex + "." + paneIndex
 	// Best-effort pane selection; window is already selected so this is non-critical.
-	cmd, cancel = tmuxCommand("select-pane", "-t", paneTarget)
-	if err := cmd.Run(); err != nil {
+	if err := runTmux("select-pane", "-t", paneTarget); err != nil {
 		debugLogf("failed to select pane %q in session %q: %v", paneTarget, sessionName, err)
 	}
-	cancel()
-	cmd, cancel = tmuxCommand("switch-client", "-t", target)
-	err = cmd.Run()
-	cancel()
-	if err != nil {
+	if err := runTmux("switch-client", "-t", target); err != nil {
 		return fmt.Errorf("switching client to session %q: %w", sessionName, err)
 	}
 	return nil
@@ -394,17 +330,11 @@ func SendKeysLiteral(sessionName, windowIndex, paneIndex, text string) error {
 	}
 	target := sessionName + ":" + windowIndex + "." + paneIndex
 	// -l sends the text literally, preventing tmux from interpreting key names.
-	cmd, cancel := tmuxCommand("send-keys", "-l", "-t", target, text)
-	err := cmd.Run()
-	cancel()
-	if err != nil {
+	if err := runTmux("send-keys", "-l", "-t", target, text); err != nil {
 		return fmt.Errorf("sending literal keys to window %q pane %q in session %q: %w", windowIndex, paneIndex, sessionName, err)
 	}
 	// Send Enter separately so it is interpreted as the actual Enter key.
-	cmd, cancel = tmuxCommand("send-keys", "-t", target, "Enter")
-	err = cmd.Run()
-	cancel()
-	if err != nil {
+	if err := runTmux("send-keys", "-t", target, "Enter"); err != nil {
 		return fmt.Errorf("sending Enter to window %q pane %q in session %q: %w", windowIndex, paneIndex, sessionName, err)
 	}
 	return nil
@@ -416,10 +346,7 @@ func WindowExists(windowIndex string) bool {
 		return false
 	}
 	target := SessionName + ":" + windowIndex
-	cmd, cancel := tmuxCommand("has-session", "-t", target)
-	err := cmd.Run()
-	cancel()
-	return err == nil
+	return runTmux("has-session", "-t", target) == nil
 }
 
 // KillWindowForSession kills a window in the specified tmux session by its window index.
@@ -430,10 +357,7 @@ func KillWindowForSession(sessionName, windowIndex string) error {
 	if !validWindowIndex.MatchString(windowIndex) {
 		return fmt.Errorf("invalid window index %q", windowIndex)
 	}
-	cmd, cancel := tmuxCommand("kill-window", "-t", sessionName+":"+windowIndex)
-	err := cmd.Run()
-	cancel()
-	if err != nil {
+	if err := runTmux("kill-window", "-t", sessionName+":"+windowIndex); err != nil {
 		return fmt.Errorf("killing window %q in session %q: %w", windowIndex, sessionName, err)
 	}
 	clearPaneHashByPrefix(sessionName + ":" + windowIndex + ".")

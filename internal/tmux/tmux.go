@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 )
@@ -54,23 +55,29 @@ func gitCommand(args ...string) (*exec.Cmd, context.CancelFunc) {
 	return commandWithTimeout(gitCmdTimeout, "git", args...)
 }
 
+// runTmux executes a tmux command and returns any error.
+func runTmux(args ...string) error {
+	cmd, cancel := tmuxCommand(args...)
+	defer cancel()
+	return cmd.Run()
+}
+
+// runTmuxOutput executes a tmux command and returns its trimmed output.
+func runTmuxOutput(args ...string) (string, error) {
+	cmd, cancel := tmuxCommand(args...)
+	defer cancel()
+	out, err := cmd.Output()
+	return strings.TrimSpace(string(out)), err
+}
+
 // EnsureSession ensures the clux tmux session exists. If not, it creates one.
 func EnsureSession() error {
-	cmd, cancel := tmuxCommand("has-session", "-t", SessionName)
-	err := cmd.Run()
-	cancel()
-	if err == nil {
+	if err := runTmux("has-session", "-t", SessionName); err == nil {
 		return nil
 	}
-	cmd, cancel = tmuxCommand("new-session", "-d", "-s", SessionName)
-	err = cmd.Run()
-	cancel()
-	if err != nil {
+	if err := runTmux("new-session", "-d", "-s", SessionName); err != nil {
 		// Another process may have created it concurrently.
-		cmd, cancel = tmuxCommand("has-session", "-t", SessionName)
-		err2 := cmd.Run()
-		cancel()
-		if err2 == nil {
+		if err2 := runTmux("has-session", "-t", SessionName); err2 == nil {
 			return nil
 		}
 		return fmt.Errorf("creating clux session: %w", err)
