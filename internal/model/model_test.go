@@ -832,7 +832,6 @@ func TestModeNewSession_EnterWithInvalidDir(t *testing.T) {
 	}
 }
 
-
 func TestView_ModeConfirmKill_WithError(t *testing.T) {
 	m := New()
 	m.mode = ModeConfirmKill
@@ -927,13 +926,13 @@ func TestDashCols(t *testing.T) {
 		width int
 		want  int
 	}{
-		{200, 4},  // >= 180 → maxColsByWidth=4
-		{180, 4},  // >= 180 → maxColsByWidth=4
-		{179, 3},  // >= 120 → maxColsByWidth=3
-		{120, 3},  // >= 120 → maxColsByWidth=3
-		{119, 2},  // >= 80 → maxColsByWidth=2
-		{80, 2},   // >= 80 → maxColsByWidth=2
-		{79, 1},   // < 80 → maxColsByWidth=1
+		{200, 4}, // >= 180 → maxColsByWidth=4
+		{180, 4}, // >= 180 → maxColsByWidth=4
+		{179, 3}, // >= 120 → maxColsByWidth=3
+		{120, 3}, // >= 120 → maxColsByWidth=3
+		{119, 2}, // >= 80 → maxColsByWidth=2
+		{80, 2},  // >= 80 → maxColsByWidth=2
+		{79, 1},  // < 80 → maxColsByWidth=1
 		{50, 1},
 	}
 	for _, tt := range tests {
@@ -2038,6 +2037,28 @@ func TestBuildGroups_CorrectGrouping(t *testing.T) {
 	}
 	if len(groups[1].sessions) != 1 {
 		t.Errorf("expected 1 session in second group, got %d", len(groups[1].sessions))
+	}
+}
+
+func TestBuildGroups_InsertionOrderNotActivityOrder(t *testing.T) {
+	// repo-b appears first but has low activity (Idle).
+	// repo-a appears second but has high activity (Waiting).
+	// Under the old activity sort, repo-a would come first (priority 3 > 1).
+	// Under insertion order, repo-b should come first.
+	sessions := []session.Session{
+		{Name: "s1", Dir: "/home/user/go/src/github.com/owner/repo-b", Status: session.StatusIdle},
+		{Name: "s2", Dir: "/home/user/go/src/github.com/owner/repo-a", Status: session.StatusWaiting},
+	}
+	groups := buildGroups(sessions, "/home/user/go/src/")
+
+	if len(groups) != 2 {
+		t.Fatalf("expected 2 groups, got %d", len(groups))
+	}
+	if groups[0].name != "github.com/owner/repo-b" {
+		t.Errorf("expected first group 'github.com/owner/repo-b' (insertion order), got %q", groups[0].name)
+	}
+	if groups[1].name != "github.com/owner/repo-a" {
+		t.Errorf("expected second group 'github.com/owner/repo-a', got %q", groups[1].name)
 	}
 }
 
