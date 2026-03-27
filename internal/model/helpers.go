@@ -65,19 +65,6 @@ func statusSummary(sessions []session.Session) string {
 	return strings.Join(parts, ", ")
 }
 
-func statusPriority(s session.Status) int {
-	switch s {
-	case session.StatusWaiting:
-		return 3
-	case session.StatusWorking:
-		return 2
-	case session.StatusIdle:
-		return 1
-	default:
-		return 0
-	}
-}
-
 func statusStyle(s session.Status) lipgloss.Style {
 	switch s {
 	case session.StatusWorking:

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -457,7 +456,7 @@ func groupKey(s session.Session, ghqRoot string) string {
 	return dir
 }
 
-// buildGroups creates sorted session groups from filtered sessions.
+// buildGroups creates session groups from filtered sessions.
 func buildGroups(sessions []session.Session, ghqRoot string) []sessionGroup {
 	groups := make(map[string][]indexedSession)
 	var order []string
@@ -469,29 +468,13 @@ func buildGroups(sessions []session.Session, ghqRoot string) []sessionGroup {
 		groups[key] = append(groups[key], indexedSession{index: i, session: s})
 	}
 
-	// Convert map to sorted slice.
+	// Convert map to ordered slice.
 	result := make([]sessionGroup, 0, len(groups))
 	for _, name := range order {
 		result = append(result, sessionGroup{name: name, sessions: groups[name]})
 	}
 
-	// Sort groups by activity (most active first).
-	sort.SliceStable(result, func(i, j int) bool {
-		return groupPriority(result[i]) > groupPriority(result[j])
-	})
-
 	return result
-}
-
-// groupPriority returns the highest status priority among sessions in the group.
-func groupPriority(g sessionGroup) int {
-	maxPri := 0
-	for _, is := range g.sessions {
-		if p := statusPriority(is.session.Status); p > maxPri {
-			maxPri = p
-		}
-	}
-	return maxPri
 }
 
 // groupedSessionRows calculates the total visual rows in grouped mode

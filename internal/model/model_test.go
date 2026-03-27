@@ -882,26 +882,6 @@ func TestModeList_ShiftKSetsConfirmPaneIndex(t *testing.T) {
 	}
 }
 
-// --- statusPriority tests ---
-
-func TestStatusPriority(t *testing.T) {
-	tests := []struct {
-		status session.Status
-		want   int
-	}{
-		{session.StatusWaiting, 3},
-		{session.StatusWorking, 2},
-		{session.StatusIdle, 1},
-		{session.StatusUnknown, 0},
-	}
-	for _, tt := range tests {
-		got := statusPriority(tt.status)
-		if got != tt.want {
-			t.Errorf("statusPriority(%v) = %d, want %d", tt.status, got, tt.want)
-		}
-	}
-}
-
 // --- statusSummary tests ---
 
 func TestStatusSummary_Mixed(t *testing.T) {
@@ -2046,7 +2026,7 @@ func TestBuildGroups_CorrectGrouping(t *testing.T) {
 		t.Fatalf("expected 2 groups, got %d", len(groups))
 	}
 
-	// Groups should be sorted by activity: repo-a has Waiting (3), repo-b has Working (2).
+	// Groups should be in insertion order: repo-a appears first, then repo-b.
 	if groups[0].name != "github.com/owner/repo-a" {
 		t.Errorf("expected first group 'github.com/owner/repo-a', got %q", groups[0].name)
 	}
@@ -2075,33 +2055,6 @@ func TestBuildGroups_IndexPreserved(t *testing.T) {
 				t.Errorf("index %d points to %q but session is %q", is.index, sessions[is.index].Name, is.session.Name)
 			}
 		}
-	}
-}
-
-func TestGroupPriority(t *testing.T) {
-	tests := []struct {
-		name     string
-		statuses []session.Status
-		expected int
-	}{
-		{"waiting_highest", []session.Status{session.StatusIdle, session.StatusWaiting}, 3},
-		{"working_only", []session.Status{session.StatusWorking}, 2},
-		{"idle_only", []session.Status{session.StatusIdle}, 1},
-		{"unknown_only", []session.Status{session.StatusUnknown}, 0},
-		{"mixed", []session.Status{session.StatusUnknown, session.StatusIdle, session.StatusWorking}, 2},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			var sessions []indexedSession
-			for i, st := range tc.statuses {
-				sessions = append(sessions, indexedSession{index: i, session: session.Session{Status: st}})
-			}
-			g := sessionGroup{name: "test", sessions: sessions}
-			if got := groupPriority(g); got != tc.expected {
-				t.Errorf("expected priority %d, got %d", tc.expected, got)
-			}
-		})
 	}
 }
 
