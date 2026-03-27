@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/tanaka0325/clux/internal/session"
 )
@@ -39,6 +40,12 @@ type captureResult struct {
 // findClaudePanesFn is the function used to find all Claude panes.
 // It can be overridden in tests.
 var findClaudePanesFn = findClaudePanes
+
+// processMaps holds the process tree maps for reuse across the detection pipeline.
+type processMaps struct {
+	commByPID     map[int]string
+	childrenByPID map[int][]int
+}
 
 // listAllPanesFn is the function used to get all tmux panes. Overridable for tests.
 var listAllPanesFn = listAllPanes
@@ -172,17 +179,26 @@ func parsePaneListOutput(output string) []rawPaneInfo {
 	return panes
 }
 
+// findClaudePanesResult holds the result of findClaudePanes, including the
+// process tree maps so callers can reuse them without re-querying ps.
+type findClaudePanesResult struct {
+	panes         []claudePaneInfo
+	commByPID     map[int]string
+	childrenByPID map[int][]int
+}
+
 // findClaudePanes finds ALL panes across ALL tmux sessions that have a claude process.
 // Uses only 2 external commands: tmux list-panes -a and ps -ax.
 // Excludes the clux UI pane itself (detected by matching our own PID's pane).
-func findClaudePanes() ([]claudePaneInfo, error) {
+// Returns the matching panes along with the process tree maps for downstream reuse.
+func findClaudePanes() (findClaudePanesResult, error) {
 	paneOutput, err := listAllPanesFn()
 	if err != nil {
-		return nil, err
+		return findClaudePanesResult{}, err
 	}
 	psOutput, err := listProcessesFn()
 	if err != nil {
-		return nil, err
+		return findClaudePanesResult{}, err
 	}
 
 	panes := parsePaneListOutput(paneOutput)
@@ -208,7 +224,11 @@ func findClaudePanes() ([]claudePaneInfo, error) {
 			})
 		}
 	}
-	return result, nil
+	return findClaudePanesResult{
+		panes:         result,
+		commByPID:     commByPID,
+		childrenByPID: childrenByPID,
+	}, nil
 }
 
 // isAncestorOf checks if ancestorPID is an ancestor of targetPID in the process tree.
@@ -251,8 +271,9 @@ func capturePanesConcurrently(panes []claudePaneInfo) []captureResult {
 }
 
 // detectPaneMetadata detects status, then fetches summary and git branch concurrently.
-func detectPaneMetadata(content, sessionName, windowIndex, paneIndex, dir string) (session.Status, string, string) {
-	status := detectStatusWithHooksForSession(content, sessionName, windowIndex, paneIndex)
+// The processMaps are threaded through to avoid re-querying the process tree.
+func detectPaneMetadata(content, sessionName, windowIndex, paneIndex, dir string, pm processMaps) (session.Status, string, string) {
+	status := detectStatusWithHooksForSession(content, sessionName, windowIndex, paneIndex, pm)
 	var summary, branch string
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -330,6 +351,19 @@ var (
 	contentChangedFn    = contentChanged
 )
 
+// isPersistentChildByMaps returns true if the given PID is a long-lived background
+// process (MCP server, LSP, etc.) that should be excluded from grandchild
+// detection, using pre-built process maps instead of spawning subprocesses.
+func isPersistentChildByMaps(pid int, commByPID map[int]string) bool {
+	name := commByPID[pid]
+	switch name {
+	case "node", "gopls", "caffeinate",
+		"bigbrother-mcp-server", "tasq", "memq":
+		return true
+	}
+	return false
+}
+
 // parseClaudeStatus converts a @claude-status string to a session.Status.
 // Returns the status and true if the string was recognized, or StatusUnknown and false otherwise.
 func parseClaudeStatus(s string) (session.Status, bool) {
@@ -349,52 +383,24 @@ func parseClaudeStatus(s string) (session.Status, bool) {
 // processes that indicate active tool execution (e.g., bash → gh, grep).
 // Persistent child processes (MCP servers, LSP servers, caffeinate) are excluded
 // since they always have grandchildren and would cause false positives.
-func hasActiveChildrenForSession(sessionName, windowIndex, paneIndex string) bool {
-	panePID := tmuxDisplayOption(sessionName, windowIndex, paneIndex, "#{pane_pid}")
-	if panePID == "" {
+// Uses pre-built process tree maps to avoid spawning pgrep/ps subprocesses.
+func hasActiveChildrenForSession(sessionName, windowIndex, paneIndex string, pm processMaps) bool {
+	panePIDStr := tmuxDisplayOption(sessionName, windowIndex, paneIndex, "#{pane_pid}")
+	if panePIDStr == "" {
 		return false
 	}
-	cmd, cancel := procCommand("pgrep", "-P", panePID)
-	childOut, err := cmd.Output()
-	cancel()
+	panePID, err := strconv.Atoi(panePIDStr)
 	if err != nil {
 		return false
 	}
-	for _, child := range strings.Split(strings.TrimSpace(string(childOut)), "\n") {
-		if child = strings.TrimSpace(child); child == "" {
+	for _, childPID := range pm.childrenByPID[panePID] {
+		if isPersistentChildByMaps(childPID, pm.commByPID) {
 			continue
 		}
-		if isPersistentChild(child) {
-			continue
-		}
-		cmd, cancel = procCommand("pgrep", "-P", child)
-		err = cmd.Run()
-		cancel()
-		if err == nil {
+		// Check if this non-persistent child has any children (grandchildren of pane).
+		if len(pm.childrenByPID[childPID]) > 0 {
 			return true
 		}
-	}
-	return false
-}
-
-// isPersistentChild returns true if the given PID is a long-lived background
-// process (MCP server, LSP, etc.) that should be excluded from grandchild
-// detection. These processes are always present and their grandchildren do not
-// indicate active tool execution.
-func isPersistentChild(pid string) bool {
-	cmd, cancel := procCommand("ps", "-o", "comm=", "-p", pid)
-	out, err := cmd.Output()
-	cancel()
-	if err != nil {
-		return false
-	}
-	comm := strings.TrimSpace(string(out))
-	name := filepath.Base(comm)
-	// Known persistent processes spawned by Claude Code.
-	switch name {
-	case "node", "gopls", "caffeinate",
-		"bigbrother-mcp-server", "tasq", "memq":
-		return true
 	}
 	return false
 }
@@ -403,7 +409,8 @@ func isPersistentChild(pid string) bool {
 // approach: if pane content changed since last check → Working. If stable, use pattern
 // matching and process tree to distinguish Waiting vs Idle.
 // This function assumes the pane is already known to contain Claude Code.
-func detectStatusWithHooksForSession(content, sessionName, windowIndex, paneIndex string) session.Status {
+// The processMaps are threaded through to avoid re-querying the process tree.
+func detectStatusWithHooksForSession(content, sessionName, windowIndex, paneIndex string, pm processMaps) session.Status {
 	key := paneKey(sessionName, windowIndex, paneIndex)
 
 	// Primary signal: content hash comparison.
@@ -424,7 +431,7 @@ func detectStatusWithHooksForSession(content, sessionName, windowIndex, paneInde
 	}
 
 	// Process tree check for active tool execution (grandchild processes).
-	if hasActiveChildrenFn(sessionName, windowIndex, paneIndex) {
+	if hasActiveChildrenFn(sessionName, windowIndex, paneIndex, pm) {
 		debugLogf("[%s] proctree=active -> final=working", key)
 		return session.StatusWorking
 	}
@@ -502,16 +509,47 @@ func isWaiting(content string) bool {
 	return false
 }
 
+// branchCacheEntry holds a cached git branch result with a timestamp.
+type branchCacheEntry struct {
+	branch    string
+	fetchedAt time.Time
+}
+
+// branchCacheTTL is the time-to-live for cached git branch results.
+// Branch rarely changes between 1-second ticks, so 15 seconds is safe.
+const branchCacheTTL = 15 * time.Second
+
+var branchCache = struct {
+	sync.Mutex
+	entries map[string]branchCacheEntry
+}{entries: make(map[string]branchCacheEntry)}
+
 // getGitBranch returns the current git branch for the given directory.
+// Results are cached with a 15-second TTL to avoid forking git on every tick.
 // Returns empty string if not a git repo or on error.
 func getGitBranch(dir string) string {
+	now := time.Now()
+	branchCache.Lock()
+	if entry, ok := branchCache.entries[dir]; ok && now.Sub(entry.fetchedAt) < branchCacheTTL {
+		branchCache.Unlock()
+		return entry.branch
+	}
+	branchCache.Unlock()
+
 	cmd, cancel := gitCommand("-C", dir, "branch", "--show-current")
 	out, err := cmd.Output()
 	cancel()
-	if err != nil {
-		return ""
+
+	branch := ""
+	if err == nil {
+		branch = strings.TrimSpace(string(out))
 	}
-	return strings.TrimSpace(string(out))
+
+	branchCache.Lock()
+	branchCache.entries[dir] = branchCacheEntry{branch: branch, fetchedAt: now}
+	branchCache.Unlock()
+
+	return branch
 }
 
 // getWindowSummaryForSession retrieves the @clux-summary user option for a window in a given session.

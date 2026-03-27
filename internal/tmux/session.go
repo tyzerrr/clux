@@ -15,19 +15,24 @@ import (
 // Uses findClaudePanes() for global detection (2 external commands total),
 // then runs status detection (capture-pane + detectPaneMetadata) only on matching panes.
 func ListWindows() ([]session.Session, error) {
-	claudePanes, err := findClaudePanesFn()
+	found, err := findClaudePanesFn()
 	if err != nil {
 		return nil, fmt.Errorf("finding claude panes: %w", err)
 	}
 
-	if len(claudePanes) == 0 {
+	if len(found.panes) == 0 {
 		return nil, nil
 	}
 
-	results := capturePanesConcurrently(claudePanes)
+	pm := processMaps{
+		commByPID:     found.commByPID,
+		childrenByPID: found.childrenByPID,
+	}
+
+	results := capturePanesConcurrently(found.panes)
 
 	var sessions []session.Session
-	for i, p := range claudePanes {
+	for i, p := range found.panes {
 		if results[i].err != nil {
 			continue
 		}
@@ -51,7 +56,7 @@ func ListWindows() ([]session.Session, error) {
 			}
 		}
 
-		status, summary, branch := detectPaneMetadata(content, p.sessionName, p.windowIndex, p.paneIndex, p.dir)
+		status, summary, branch := detectPaneMetadata(content, p.sessionName, p.windowIndex, p.paneIndex, p.dir, pm)
 		setCachedResult(key, paneDetectResult{
 			status:  status,
 			branch:  branch,
