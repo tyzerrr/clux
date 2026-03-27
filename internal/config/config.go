@@ -256,9 +256,9 @@ func (k *KeymapConfig) HintScroll() string        { return formatKeyGroups(k.Scr
 
 // Config holds clux persistent configuration.
 type Config struct {
-	PreviewDefault bool                `toml:"preview_default"`
+	PreviewDefault *bool               `toml:"preview_default"`
 	Notifications  *NotificationConfig `toml:"notifications"`
-	GroupDefault   bool                `toml:"group_default"`
+	GroupDefault   *bool               `toml:"group_default"`
 	Keymaps        *KeymapConfig       `toml:"keymaps"`
 }
 
@@ -297,9 +297,7 @@ func Load() (*Config, error) {
 			return cfg, nil
 		}
 		// No files exist — return defaults
-		cfg = &Config{}
-		cfg.ensureDefaults()
-		return cfg, nil
+		return NewConfig(), nil
 	}
 
 	var cfg Config
@@ -355,6 +353,14 @@ func NewConfig() *Config {
 
 // ensureDefaults initializes all config sections with defaults for any missing fields.
 func (c *Config) ensureDefaults() {
+	t := true
+	if c.PreviewDefault == nil {
+		c.PreviewDefault = &t
+	}
+	if c.GroupDefault == nil {
+		f := false
+		c.GroupDefault = &f
+	}
 	if c.Notifications == nil {
 		c.Notifications = DefaultNotifications()
 	} else {
@@ -383,10 +389,10 @@ var configTemplate = template.Must(template.New("config").Funcs(template.FuncMap
 		return *b
 	},
 }).Parse(`# Show preview panel by default
-preview_default = {{ .PreviewDefault }}
+preview_default = {{ deref .PreviewDefault }}
 
 # Show grouped by repository by default
-group_default = {{ .GroupDefault }}
+group_default = {{ deref .GroupDefault }}
 
 # Bell notifications on status changes
 [notifications]
