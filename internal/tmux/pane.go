@@ -53,7 +53,7 @@ var listAllPanesFn = listAllPanes
 // listProcessesFn is the function used to get all processes. Overridable for tests.
 var listProcessesFn = listProcesses
 
-// listAllPanes runs tmux list-panes -a and returns the raw output.
+// listAllPanes runs tmux list-panes -a and returns the trimmed output.
 func listAllPanes() (string, error) {
 	out, err := runTmuxOutput("list-panes", "-a", "-F",
 		"#{pane_pid}\t#{session_name}\t#{window_index}\t#{pane_index}\t#{window_name}\t#{pane_current_path}")

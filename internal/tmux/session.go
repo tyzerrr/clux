@@ -268,10 +268,11 @@ func GenerateWindowName(dir string) string {
 	if err != nil {
 		return base
 	}
-	existing := strings.Split(out, "\n")
 	nameSet := make(map[string]bool)
-	for _, n := range existing {
-		nameSet[strings.TrimSpace(n)] = true
+	for _, n := range strings.Split(out, "\n") {
+		if trimmed := strings.TrimSpace(n); trimmed != "" {
+			nameSet[trimmed] = true
+		}
 	}
 	return deduplicateWindowName(base, nameSet)
 }
