@@ -420,7 +420,7 @@ func TestConfig_Keymaps_RoundTrip(t *testing.T) {
 			Quit: []string{"x"},
 		},
 	}
-	cfg.ensureKeymaps()
+	cfg.ensureDefaults()
 	if err := cfg.Save(); err != nil {
 		t.Fatalf("Save: %v", err)
 	}

@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/tanaka0325/clux/internal/config"
 )
 
 const tmuxConfBinding = `bind-key -T root C-. display-popup -E -w100% -h100% "clux"`
@@ -40,17 +42,18 @@ const (
 	setupError
 )
 
-func cmdSetup() {
-	fmt.Println("Setting up clux...")
+func cmdInit() {
+	fmt.Println("Initializing clux...")
 	fmt.Println()
 
 	r1 := setupPostToolUseHook()
 	r2 := setupClaudeMD()
 	r3 := setupTmuxConf()
+	r4 := setupConfig()
 
 	fmt.Println()
 
-	if r1 == setupError || r2 == setupError || r3 == setupError {
+	if r1 == setupError || r2 == setupError || r3 == setupError || r4 == setupError {
 		fmt.Println("Setup finished with errors.")
 		os.Exit(1)
 	}
@@ -261,6 +264,20 @@ func setupTmuxConfAt(path string) setupResult {
 	}
 
 	fmt.Printf("[✓] tmux key binding added to %s\n", path)
+	return setupSuccess
+}
+
+func setupConfig() setupResult {
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[✗] Failed to load config: %v\n", err)
+		return setupError
+	}
+	if err := cfg.Save(); err != nil {
+		fmt.Fprintf(os.Stderr, "[✗] Failed to save config: %v\n", err)
+		return setupError
+	}
+	fmt.Println("[✓] Config written with defaults to ~/.config/clux/config.toml")
 	return setupSuccess
 }
 

@@ -17,10 +17,10 @@ func main() {
 		switch os.Args[1] {
 		case "dashboard":
 			cmdDashboard()
-		case "setup":
-			cmdSetup()
+		case "init":
+			cmdInit()
 		default:
-			fmt.Fprintf(os.Stderr, "Unknown command: %s\nUsage: clux [dashboard|setup]\n", os.Args[1])
+			fmt.Fprintf(os.Stderr, "Unknown command: %s\nUsage: clux [dashboard|init]\n", os.Args[1])
 			os.Exit(1)
 		}
 		return

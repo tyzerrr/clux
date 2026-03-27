@@ -42,9 +42,9 @@ bind-key C-c display-popup -E -w100% -h100% "clux"
 
 This requires `Prefix` + `Ctrl-C` to launch.
 
-### Setup (optional)
+### Init (optional)
 
-Run `clux setup` to configure your environment:
+Run `clux init` to configure your environment:
 
 - Add a Claude Code `PostToolUse` hook to `~/.claude/settings.json` for instant Waiting status detection
 - Append `@clux-summary` instructions to `~/.claude/CLAUDE.md`
@@ -90,7 +90,7 @@ Run `clux setup` to configure your environment:
 ```
 clux                  Launch the TUI session switcher
 clux dashboard        Launch directly in dashboard mode
-clux setup            Install Claude Code hook and @clux-summary instructions
+clux init             Install Claude Code hook, @clux-summary instructions, and default config
 clux add <sess:win>   Register an external tmux session:window
 clux remove <sess:win> Unregister an external session
 clux list             List registered external sessions

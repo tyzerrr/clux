@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,12 +9,15 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"text/template"
+
+	"github.com/BurntSushi/toml"
 )
 
 // NotificationConfig controls which status transitions trigger a bell notification.
 type NotificationConfig struct {
-	WorkingToIdle    *bool `json:"working_to_idle,omitempty"`
-	WorkingToWaiting *bool `json:"working_to_waiting,omitempty"`
+	WorkingToIdle    *bool `toml:"working_to_idle"`
+	WorkingToWaiting *bool `toml:"working_to_waiting"`
 }
 
 // ShouldNotifyWorkingToIdle returns true if a Working→Idle bell should fire. Default: true.
@@ -35,24 +39,24 @@ func (n *NotificationConfig) ShouldNotifyWorkingToWaiting() bool {
 // KeymapConfig holds customizable key bindings for each action.
 // Each action maps to one or more key strings (as reported by bubbletea).
 type KeymapConfig struct {
-	MoveUp        []string `json:"move_up,omitempty"`
-	MoveDown      []string `json:"move_down,omitempty"`
-	MoveLeft      []string `json:"move_left,omitempty"`
-	MoveRight     []string `json:"move_right,omitempty"`
-	Quit          []string `json:"quit,omitempty"`
-	Filter        []string `json:"filter,omitempty"`
-	NewSession    []string `json:"new_session,omitempty"`
-	Kill          []string `json:"kill,omitempty"`
-	TogglePreview []string `json:"toggle_preview,omitempty"`
-	ScrollUp      []string `json:"scroll_up,omitempty"`
-	ScrollDown    []string `json:"scroll_down,omitempty"`
-	Dashboard     []string `json:"dashboard,omitempty"`
-	Broadcast     []string `json:"broadcast,omitempty"`
-	Group         []string `json:"group,omitempty"`
-	Input         []string `json:"input,omitempty"`
-	NextPage      []string `json:"next_page,omitempty"`
-	PrevPage      []string `json:"prev_page,omitempty"`
-	ToggleSelect  []string `json:"toggle_select,omitempty"`
+	MoveUp        []string `toml:"move_up"`
+	MoveDown      []string `toml:"move_down"`
+	MoveLeft      []string `toml:"move_left"`
+	MoveRight     []string `toml:"move_right"`
+	Quit          []string `toml:"quit"`
+	Filter        []string `toml:"filter"`
+	NewSession    []string `toml:"new_session"`
+	Kill          []string `toml:"kill"`
+	TogglePreview []string `toml:"toggle_preview"`
+	ScrollUp      []string `toml:"scroll_up"`
+	ScrollDown    []string `toml:"scroll_down"`
+	Dashboard     []string `toml:"dashboard"`
+	Broadcast     []string `toml:"broadcast"`
+	Group         []string `toml:"group"`
+	Input         []string `toml:"input"`
+	NextPage      []string `toml:"next_page"`
+	PrevPage      []string `toml:"prev_page"`
+	ToggleSelect  []string `toml:"toggle_select"`
 }
 
 // DefaultKeymap returns the default key bindings matching the original hardcoded values.
@@ -240,14 +244,17 @@ func (k *KeymapConfig) HintScroll() string        { return formatKeyGroups(k.Scr
 
 // Config holds clux persistent configuration.
 type Config struct {
-	PreviewDefault bool                `json:"preview_default"`
-	Notifications  *NotificationConfig `json:"notifications,omitempty"`
-	GroupDefault   bool                `json:"group_default"`
-	Keymaps        *KeymapConfig       `json:"keymaps,omitempty"`
+	PreviewDefault bool                `toml:"preview_default"`
+	Notifications  *NotificationConfig `toml:"notifications"`
+	GroupDefault   bool                `toml:"group_default"`
+	Keymaps        *KeymapConfig       `toml:"keymaps"`
 }
 
 const configDir = ".config/clux"
-const configFile = "sessions.json"
+const configFile = "config.toml"
+
+// Legacy file names for migration.
+var configFilesOld = []string{"config.json", "sessions.json"}
 
 // configPath returns the full path to the config file.
 func configPath() (string, error) {
@@ -258,38 +265,95 @@ func configPath() (string, error) {
 	return filepath.Join(home, configDir, configFile), nil
 }
 
-// Load reads the config from disk. Returns empty config if file doesn't exist.
+// Load reads the config from disk. If old JSON config files exist but config.toml
+// does not, it migrates by reading the old file, saving as config.toml, and removing
+// the old file. Returns empty config if no file exists.
 func Load() (*Config, error) {
 	path, err := configPath()
 	if err != nil {
 		return nil, err
 	}
+
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			cfg := &Config{}
-			cfg.ensureKeymaps()
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+		// config.toml doesn't exist — try migrating from old JSON files
+		cfg, migrated := tryMigrateFromJSON()
+		if migrated {
 			return cfg, nil
 		}
-		return nil, err
+		// No files exist — return defaults
+		cfg = &Config{}
+		cfg.ensureDefaults()
+		return cfg, nil
 	}
+
 	var cfg Config
-	if err := json.Unmarshal(data, &cfg); err != nil {
+	if err := toml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
-	cfg.ensureKeymaps()
+	cfg.ensureDefaults()
 	return &cfg, nil
+}
+
+// tryMigrateFromJSON attempts to load config from legacy JSON files.
+// Returns the config and true if migration succeeded, nil and false otherwise.
+func tryMigrateFromJSON() (*Config, bool) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, false
+	}
+	for _, oldFile := range configFilesOld {
+		oldPath := filepath.Join(home, configDir, oldFile)
+		oldData, err := os.ReadFile(oldPath)
+		if err != nil {
+			continue
+		}
+		var cfg Config
+		if err := json.Unmarshal(oldData, &cfg); err != nil {
+			continue
+		}
+		cfg.ensureDefaults()
+		// Best-effort: save as TOML and remove old file
+		if err := cfg.Save(); err == nil {
+			_ = os.Remove(oldPath)
+		}
+		return &cfg, true
+	}
+	return nil, false
+}
+
+// DefaultNotifications returns the default notification settings.
+func DefaultNotifications() *NotificationConfig {
+	t := true
+	return &NotificationConfig{
+		WorkingToIdle:    &t,
+		WorkingToWaiting: &t,
+	}
 }
 
 // NewConfig returns a Config with all defaults initialized.
 func NewConfig() *Config {
 	c := &Config{}
-	c.ensureKeymaps()
+	c.ensureDefaults()
 	return c
 }
 
-// ensureKeymaps initializes Keymaps if nil and applies defaults for any missing fields.
-func (c *Config) ensureKeymaps() {
+// ensureDefaults initializes all config sections with defaults for any missing fields.
+func (c *Config) ensureDefaults() {
+	if c.Notifications == nil {
+		c.Notifications = DefaultNotifications()
+	} else {
+		t := true
+		if c.Notifications.WorkingToIdle == nil {
+			c.Notifications.WorkingToIdle = &t
+		}
+		if c.Notifications.WorkingToWaiting == nil {
+			c.Notifications.WorkingToWaiting = &t
+		}
+	}
 	if c.Keymaps == nil {
 		c.Keymaps = DefaultKeymap()
 	} else {
@@ -297,8 +361,70 @@ func (c *Config) ensureKeymaps() {
 	}
 }
 
-// Save writes the config to disk.
+// configTemplate is the TOML template with comments for the config file.
+var configTemplate = template.Must(template.New("config").Funcs(template.FuncMap{
+	"tomlArray": tomlArray,
+	"deref": func(b *bool) bool {
+		if b == nil {
+			return true
+		}
+		return *b
+	},
+}).Parse(`# Show preview panel by default
+preview_default = {{ .PreviewDefault }}
+
+# Show grouped by repository by default
+group_default = {{ .GroupDefault }}
+
+# Bell notifications on status changes
+[notifications]
+# Notify when a session changes from Working to Idle
+working_to_idle = {{ deref .Notifications.WorkingToIdle }}
+# Notify when a session changes from Working to Waiting
+working_to_waiting = {{ deref .Notifications.WorkingToWaiting }}
+
+# Key bindings (each action accepts multiple keys)
+# Key names follow bubbletea conventions: "ctrl+x", "alt+x", "up", "down", "space", etc.
+[keymaps]
+# Navigation
+move_up = {{ tomlArray .Keymaps.MoveUp }}
+move_down = {{ tomlArray .Keymaps.MoveDown }}
+move_left = {{ tomlArray .Keymaps.MoveLeft }}
+move_right = {{ tomlArray .Keymaps.MoveRight }}
+
+# Actions
+quit = {{ tomlArray .Keymaps.Quit }}
+filter = {{ tomlArray .Keymaps.Filter }}
+new_session = {{ tomlArray .Keymaps.NewSession }}
+kill = {{ tomlArray .Keymaps.Kill }}
+toggle_preview = {{ tomlArray .Keymaps.TogglePreview }}
+dashboard = {{ tomlArray .Keymaps.Dashboard }}
+broadcast = {{ tomlArray .Keymaps.Broadcast }}
+group = {{ tomlArray .Keymaps.Group }}
+input = {{ tomlArray .Keymaps.Input }}
+
+# Scrolling and pagination
+scroll_up = {{ tomlArray .Keymaps.ScrollUp }}
+scroll_down = {{ tomlArray .Keymaps.ScrollDown }}
+next_page = {{ tomlArray .Keymaps.NextPage }}
+prev_page = {{ tomlArray .Keymaps.PrevPage }}
+
+# Selection (used in broadcast select mode)
+toggle_select = {{ tomlArray .Keymaps.ToggleSelect }}
+`))
+
+// tomlArray formats a string slice as a TOML inline array.
+func tomlArray(items []string) string {
+	quoted := make([]string, len(items))
+	for i, s := range items {
+		quoted[i] = fmt.Sprintf("%q", s)
+	}
+	return "[" + strings.Join(quoted, ", ") + "]"
+}
+
+// Save writes the config to disk as commented TOML.
 func (c *Config) Save() error {
+	c.ensureDefaults()
 	path, err := configPath()
 	if err != nil {
 		return err
@@ -306,16 +432,18 @@ func (c *Config) Save() error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(c, "", "  ")
-	if err != nil {
-		return err
+
+	var buf bytes.Buffer
+	if err := configTemplate.Execute(&buf, c); err != nil {
+		return fmt.Errorf("rendering config template: %w", err)
 	}
+
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	if err := os.WriteFile(tmp, buf.Bytes(), 0o600); err != nil {
 		return err
 	}
 	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp) // best-effort cleanup
+		_ = os.Remove(tmp)
 		return err
 	}
 	return nil
