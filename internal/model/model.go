@@ -68,22 +68,22 @@ type ListState struct {
 
 // DashboardState holds state for the dashboard view.
 type DashboardState struct {
-	cursor      int            // index into m.filtered for focused cell
-	previews    map[int]string // windowIndex -> pane content for each session
-	pageOffset  int            // index of first displayed item in dashboard
+	cursor      int             // index into m.filtered for focused cell
+	previews    map[int]string  // windowIndex -> pane content for each session
+	pageOffset  int             // index of first displayed item in dashboard
 	promptInput textinput.Model // inline input for sending text to a session from dashboard
 }
 
 // BroadcastState holds state for broadcast mode.
 type BroadcastState struct {
-	dirs        []string           // all ghq dirs (loaded once)
-	filtered    []string           // filtered by input
-	selected    map[string]bool    // selected dir paths (persists across filter changes)
-	input       textinput.Model    // filter input for repo select
-	cursor      int                // cursor in filtered
-	promptInput textinput.Model    // prompt text input
-	targets     []broadcastTarget  // resolved targets after selection
-	errors      []string           // dir validation errors collected during resolution
+	dirs        []string          // all ghq dirs (loaded once)
+	filtered    []string          // filtered by input
+	selected    map[string]bool   // selected dir paths (persists across filter changes)
+	input       textinput.Model   // filter input for repo select
+	cursor      int               // cursor in filtered
+	promptInput textinput.Model   // prompt text input
+	targets     []broadcastTarget // resolved targets after selection
+	errors      []string          // dir validation errors collected during resolution
 }
 
 // NewSessionState holds state for the new session overlay.
@@ -165,10 +165,10 @@ func New() Model {
 	}
 
 	return Model{
-		mode:        ModeList,
-		filterInput: ti,
-		cfg:         cfg,
-		configErr:   configErr,
+		mode:         ModeList,
+		filterInput:  ti,
+		cfg:          cfg,
+		configErr:    configErr,
 		groupEnabled: *cfg.GroupDefault,
 		prevStatuses: make(map[string]session.Status),
 		newSess: NewSessionState{
@@ -201,15 +201,7 @@ func NewDashboard() Model {
 
 // --- Accessor methods ---
 
-func (m Model) Sessions() []session.Session  { return m.sessions }
-func (m Model) Filtered() []session.Session  { return m.filtered }
-func (m Model) Cursor() int                  { return m.list.cursor }
-func (m Model) Mode() Mode                   { return m.mode }
-func (m Model) Width() int                   { return m.width }
-func (m Model) Height() int                  { return m.height }
-func (m Model) FilterInput() textinput.Model { return m.filterInput }
-func (m Model) Err() error                   { return m.err }
-func (m Model) GroupEnabled() bool            { return m.groupEnabled }
+func (m Model) GroupEnabled() bool { return m.groupEnabled }
 
 // --- Command functions ---
 
@@ -745,8 +737,8 @@ func (m Model) dashMaxVisible() int {
 		headerLines += 2
 	}
 	helpLines := 2
-	borderHeight := 2                      // lipgloss RoundedBorder adds top + bottom border lines per row
-	minCellHeight := 7 + borderHeight + 1  // minimum usable cell height including border and trailing newline
+	borderHeight := 2                     // lipgloss RoundedBorder adds top + bottom border lines per row
+	minCellHeight := 7 + borderHeight + 1 // minimum usable cell height including border and trailing newline
 	available := m.height - headerLines - helpLines
 	if available < minCellHeight {
 		return cols // at least one row

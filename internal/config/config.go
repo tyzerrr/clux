@@ -86,60 +86,29 @@ func DefaultKeymap() *KeymapConfig {
 // applyDefaults fills in any nil/empty slices with defaults from DefaultKeymap.
 func (k *KeymapConfig) applyDefaults() {
 	d := DefaultKeymap()
-	if len(k.MoveUp) == 0 {
-		k.MoveUp = d.MoveUp
+	setDefault := func(dst *[]string, src []string) {
+		if len(*dst) == 0 {
+			*dst = src
+		}
 	}
-	if len(k.MoveDown) == 0 {
-		k.MoveDown = d.MoveDown
-	}
-	if len(k.MoveLeft) == 0 {
-		k.MoveLeft = d.MoveLeft
-	}
-	if len(k.MoveRight) == 0 {
-		k.MoveRight = d.MoveRight
-	}
-	if len(k.Quit) == 0 {
-		k.Quit = d.Quit
-	}
-	if len(k.Filter) == 0 {
-		k.Filter = d.Filter
-	}
-	if len(k.NewSession) == 0 {
-		k.NewSession = d.NewSession
-	}
-	if len(k.Kill) == 0 {
-		k.Kill = d.Kill
-	}
-	if len(k.TogglePreview) == 0 {
-		k.TogglePreview = d.TogglePreview
-	}
-	if len(k.ScrollUp) == 0 {
-		k.ScrollUp = d.ScrollUp
-	}
-	if len(k.ScrollDown) == 0 {
-		k.ScrollDown = d.ScrollDown
-	}
-	if len(k.Dashboard) == 0 {
-		k.Dashboard = d.Dashboard
-	}
-	if len(k.Broadcast) == 0 {
-		k.Broadcast = d.Broadcast
-	}
-	if len(k.Group) == 0 {
-		k.Group = d.Group
-	}
-	if len(k.Input) == 0 {
-		k.Input = d.Input
-	}
-	if len(k.NextPage) == 0 {
-		k.NextPage = d.NextPage
-	}
-	if len(k.PrevPage) == 0 {
-		k.PrevPage = d.PrevPage
-	}
-	if len(k.ToggleSelect) == 0 {
-		k.ToggleSelect = d.ToggleSelect
-	}
+	setDefault(&k.MoveUp, d.MoveUp)
+	setDefault(&k.MoveDown, d.MoveDown)
+	setDefault(&k.MoveLeft, d.MoveLeft)
+	setDefault(&k.MoveRight, d.MoveRight)
+	setDefault(&k.Quit, d.Quit)
+	setDefault(&k.Filter, d.Filter)
+	setDefault(&k.NewSession, d.NewSession)
+	setDefault(&k.Kill, d.Kill)
+	setDefault(&k.TogglePreview, d.TogglePreview)
+	setDefault(&k.ScrollUp, d.ScrollUp)
+	setDefault(&k.ScrollDown, d.ScrollDown)
+	setDefault(&k.Dashboard, d.Dashboard)
+	setDefault(&k.Broadcast, d.Broadcast)
+	setDefault(&k.Group, d.Group)
+	setDefault(&k.Input, d.Input)
+	setDefault(&k.NextPage, d.NextPage)
+	setDefault(&k.PrevPage, d.PrevPage)
+	setDefault(&k.ToggleSelect, d.ToggleSelect)
 }
 
 // --- Is methods: check if a key matches an action ---
@@ -262,8 +231,10 @@ type Config struct {
 	Keymaps        *KeymapConfig       `toml:"keymaps"`
 }
 
-const configDir = ".config/clux"
-const configFile = "config.toml"
+const (
+	configDir  = ".config/clux"
+	configFile = "config.toml"
+)
 
 // Legacy file names for migration.
 var configFilesOld = []string{"config.json", "sessions.json"}
@@ -364,7 +335,6 @@ func (c *Config) ensureDefaults() {
 	if c.Notifications == nil {
 		c.Notifications = DefaultNotifications()
 	} else {
-		t := true
 		if c.Notifications.WorkingToIdle == nil {
 			c.Notifications.WorkingToIdle = &t
 		}

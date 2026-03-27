@@ -187,11 +187,11 @@ func (m *Model) dashMoveGrid(direction string, cols, pageItems int) tea.Cmd {
 // --- Styles ---
 
 var (
-	styleHeader   = lipgloss.NewStyle().Bold(true)
-	styleSelected = lipgloss.NewStyle().Reverse(true)
-	styleHelpBar  = lipgloss.NewStyle().Faint(true)
-	styleError    = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
-	styleDir      = lipgloss.NewStyle().Faint(true)
+	styleHeader      = lipgloss.NewStyle().Bold(true)
+	styleSelected    = lipgloss.NewStyle().Reverse(true)
+	styleHelpBar     = lipgloss.NewStyle().Faint(true)
+	styleError       = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+	styleDir         = lipgloss.NewStyle().Faint(true)
 	stylePreview     = lipgloss.NewStyle().Faint(true)
 	styleGroupHeader = lipgloss.NewStyle().Faint(true).Bold(true)
 
@@ -211,5 +211,7 @@ var (
 
 // --- Constants ---
 
-const overlayBorderPadding = 6 // Border(2) + Padding(1,2)*2 = 6
-const dashScrollbackLines = 500
+const (
+	overlayBorderPadding = 6   // Border(2) + Padding(1,2)*2 = 6
+	dashScrollbackLines  = 500
+)

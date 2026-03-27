@@ -11,41 +11,6 @@ import (
 	"github.com/tanaka0325/clux/internal/session"
 )
 
-// windowInfo holds parsed window metadata from list-panes.
-type windowInfo struct {
-	index     string
-	paneIndex string
-	name      string
-	dir       string
-}
-
-// parseListPanesOutput parses the tab-separated output of tmux list-panes
-// with format "#{window_index}\t#{pane_index}\t#{window_name}\t#{pane_current_path}".
-func parseListPanesOutput(output string) []windowInfo {
-	lines := strings.Split(strings.TrimSpace(output), "\n")
-	var windows []windowInfo
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		parts := strings.SplitN(line, "\t", 4)
-		if len(parts) < 4 {
-			continue
-		}
-		idx := parts[0]
-		if !validWindowIndex.MatchString(idx) {
-			continue
-		}
-		paneIdx := parts[1]
-		if !validWindowIndex.MatchString(paneIdx) {
-			continue
-		}
-		windows = append(windows, windowInfo{index: idx, paneIndex: paneIdx, name: parts[2], dir: parts[3]})
-	}
-	return windows
-}
-
 // ListWindows returns all panes across all tmux sessions that are running Claude Code, with their status.
 // Uses findClaudePanes() for global detection (2 external commands total),
 // then runs status detection (capture-pane + detectPaneMetadata) only on matching panes.

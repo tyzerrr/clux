@@ -36,8 +36,10 @@ const cluxSummaryBlock = `
 After understanding the first task in a session, run ` + "`" + `tmux set-option -p -t "$TMUX_PANE" @clux-summary "<summary>"` + "`" + ` to set a concise task summary (max 30 chars) as the pane's clux-summary metadata. When the topic or task direction changes, re-run the command with an updated summary.
 `
 
-const hookCommand = `tmux set-window-option @claude-status waiting 2>/dev/null || true`
-const hookMatcher = "AskUserQuestion"
+const (
+	hookCommand = `tmux set-window-option @claude-status waiting 2>/dev/null || true`
+	hookMatcher = "AskUserQuestion"
+)
 
 type setupResult int
 

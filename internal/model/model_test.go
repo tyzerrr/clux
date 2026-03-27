@@ -27,6 +27,56 @@ var testSessions = []session.Session{
 
 // --- Helper function tests ---
 
+func TestWrapCursor(t *testing.T) {
+	tests := []struct {
+		name              string
+		current, delta, length int
+		want              int
+	}{
+		{"forward", 0, 1, 5, 1},
+		{"backward", 2, -1, 5, 1},
+		{"wrap forward", 4, 1, 5, 0},
+		{"wrap backward", 0, -1, 5, 4},
+		{"zero length", 3, 1, 0, 0},
+		{"large delta forward", 1, 7, 5, 3},
+		{"large delta backward", 1, -2, 5, 4},
+		{"no movement", 2, 0, 5, 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := wrapCursor(tt.current, tt.delta, tt.length)
+			if got != tt.want {
+				t.Errorf("wrapCursor(%d, %d, %d) = %d, want %d", tt.current, tt.delta, tt.length, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestClampCursor(t *testing.T) {
+	tests := []struct {
+		name          string
+		cursor, length int
+		want          int
+	}{
+		{"within range", 2, 5, 2},
+		{"at start", 0, 5, 0},
+		{"at end", 4, 5, 4},
+		{"beyond end", 7, 5, 4},
+		{"zero length", 3, 0, 0},
+		{"negative cursor", -1, 5, 0},
+		{"length one at zero", 0, 1, 0},
+		{"length one beyond", 1, 1, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := clampCursor(tt.cursor, tt.length)
+			if got != tt.want {
+				t.Errorf("clampCursor(%d, %d) = %d, want %d", tt.cursor, tt.length, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestApplyFilter_EmptyQuery(t *testing.T) {
 	result := applyFilter(testSessions, "")
 	if len(result) != len(testSessions) {
