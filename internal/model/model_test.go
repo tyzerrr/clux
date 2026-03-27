@@ -2546,3 +2546,42 @@ func TestPlaceOverlay_ShortBackground(t *testing.T) {
 		t.Errorf("line 2: got %q, want %q", lines[2], "EF")
 	}
 }
+
+// --- Stale pageOffset bounds clamping tests ---
+
+func TestDashboard_StalePageOffset_UpdateDashboard(t *testing.T) {
+	// Simulate: pageOffset was set to 10 but sessions were killed externally,
+	// leaving only 2 sessions in filtered. updateDashboard must not panic.
+	sessions := make([]session.Session, 2)
+	for i := range sessions {
+		sessions[i] = session.Session{Name: fmt.Sprintf("s%d", i), Status: session.StatusIdle, WindowIndex: fmt.Sprintf("%d", i)}
+	}
+	m := testModel(sessions)
+	m.mode = ModeDashboard
+	m.width = 80
+	m.height = 20
+	m.dashboard.pageOffset = 10 // stale: exceeds len(filtered)=2
+
+	// This must not panic
+	result, _ := m.updateDashboard(tea.KeyPressMsg{Code: 'j', Text: "j"})
+	rm := result.(Model)
+	if rm.dashboard.pageOffset > len(rm.filtered) {
+		t.Errorf("expected pageOffset <= len(filtered)=%d, got %d", len(rm.filtered), rm.dashboard.pageOffset)
+	}
+}
+
+func TestDashboard_StalePageOffset_EmptyFiltered(t *testing.T) {
+	// Edge case: all sessions killed, filtered is empty but pageOffset is stale.
+	m := testModel(nil)
+	m.mode = ModeDashboard
+	m.width = 80
+	m.height = 20
+	m.dashboard.pageOffset = 5
+
+	// Must not panic
+	result, _ := m.updateDashboard(tea.KeyPressMsg{Code: 'j', Text: "j"})
+	rm := result.(Model)
+	if rm.dashboard.pageOffset != 0 {
+		t.Errorf("expected pageOffset=0 for empty filtered, got %d", rm.dashboard.pageOffset)
+	}
+}

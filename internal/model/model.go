@@ -599,6 +599,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, tea.Batch(cmds...)
 		case ModeDashboard, ModeDashboardPrompt:
+			if m.dashboard.pageOffset > len(m.filtered) {
+				m.dashboard.pageOffset = 0
+			}
 			pageItems := len(m.filtered) - m.dashboard.pageOffset
 			maxVisible := m.dashMaxVisible()
 			if pageItems > maxVisible {

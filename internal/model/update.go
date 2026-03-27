@@ -261,6 +261,9 @@ func (m Model) updateNewSession(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	cols := m.dashCols()
 	maxVisible := m.dashMaxVisible()
+	if m.dashboard.pageOffset > len(m.filtered) {
+		m.dashboard.pageOffset = 0
+	}
 	pageItems := len(m.filtered) - m.dashboard.pageOffset
 	if pageItems > maxVisible {
 		pageItems = maxVisible
