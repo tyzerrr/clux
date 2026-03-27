@@ -12,9 +12,22 @@ import (
 	"github.com/tanaka0325/clux/internal/tmux"
 )
 
+var (
+	version = "dev"
+	commit  = ""
+	date    = ""
+)
+
 func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
+		case "--version", "-v":
+			if commit != "" && date != "" {
+				fmt.Printf("clux %s (%s, built %s)\n", version, commit, date)
+			} else {
+				fmt.Printf("clux %s\n", version)
+			}
+			return
 		case "dashboard":
 			cmdDashboard()
 		case "init":
