@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"sync"
 	"time"
@@ -92,14 +93,15 @@ func debugLogf(format string, args ...any) {
 	debugLog(fmt.Sprintf(format, args...))
 }
 
-// debugLog appends a log line to /tmp/clux-debug.log when CLUX_DEBUG=1 is set.
-// The file is opened once and kept open for the lifetime of the process.
+// debugLog appends a log line to a UID-specific file in the OS temp directory
+// when CLUX_DEBUG=1 is set. The file is opened once and kept open for the
+// lifetime of the process.
 func debugLog(msg string) {
 	if !debugEnabled {
 		return
 	}
 	debugFileOnce.Do(func() {
-		f, err := os.OpenFile("/tmp/clux-debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+		f, err := os.OpenFile(filepath.Join(os.TempDir(), fmt.Sprintf("clux-debug-%d.log", os.Getuid())), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 		if err != nil {
 			return
 		}
