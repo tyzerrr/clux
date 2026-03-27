@@ -12,7 +12,6 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/x/ansi"
 	"github.com/rivo/uniseg"
 	"github.com/sahilm/fuzzy"
 	"github.com/tanaka0325/clux/internal/config"
@@ -58,63 +57,85 @@ type broadcastTarget struct {
 	dir string
 }
 
+// overlayCursor represents the cursor position within overlay content (before border/padding).
+type overlayCursor struct {
+	x, y int
+}
+
+// ListState holds state for the main list view.
+type ListState struct {
+	cursor int
+}
+
+// DashboardState holds state for the dashboard view.
+type DashboardState struct {
+	cursor      int            // index into m.filtered for focused cell
+	previews    map[int]string // windowIndex -> pane content for each session
+	pageOffset  int            // index of first displayed item in dashboard
+	promptInput textinput.Model // inline input for sending text to a session from dashboard
+}
+
+// BroadcastState holds state for broadcast mode.
+type BroadcastState struct {
+	dirs        []string           // all ghq dirs (loaded once)
+	filtered    []string           // filtered by input
+	selected    map[string]bool    // selected dir paths (persists across filter changes)
+	input       textinput.Model    // filter input for repo select
+	cursor      int                // cursor in filtered
+	promptInput textinput.Model    // prompt text input
+	targets     []broadcastTarget  // resolved targets after selection
+	errors      []string           // dir validation errors collected during resolution
+}
+
+// NewSessionState holds state for the new session overlay.
+type NewSessionState struct {
+	input      textinput.Model
+	cursor     int
+	returnMode Mode
+}
+
+// ConfirmState holds state for kill confirmation.
+type ConfirmState struct {
+	target      string // window name for display
+	windowIndex string // window index for tmux command
+	paneIndex   string // pane index for tmux command
+	sessionName string // tmux session name
+	returnMode  Mode   // mode to return to after confirm
+}
+
+// PreviewState holds state for the preview panel.
+type PreviewState struct {
+	enabled      bool   // toggle state
+	content      string // captured pane content for selected session
+	scrollOffset int    // lines scrolled up from bottom; 0 = live view
+}
+
 // Model is the main Bubble Tea model for Clux.
 type Model struct {
-	sessions    []session.Session
-	filtered    []session.Session // filtered view of sessions
-	cursor      int
-	mode        Mode
-	width       int
-	height      int
-	err         error
-	filterInput textinput.Model
-	cfg         *config.Config // persistent config
+	// Shared state
+	sessions      []session.Session
+	filtered      []session.Session // filtered view of sessions
+	mode          Mode
+	width         int
+	height        int
+	err           error
+	filterInput   textinput.Model
+	cfg           *config.Config // persistent config
+	configErr     error          // non-nil if config file failed to load (app uses defaults)
+	ghqRoot       string         // cached result of `ghq root`
+	repoDirs      []string       // all dirs from ghq
+	filteredDirs  []string       // filtered dirs for new session overlay
+	prevStatuses  map[string]session.Status
+	dashboardOnly bool // when true, Esc/q quits the app (popup mode)
+	groupEnabled  bool // toggle for grouped display
 
-	// Confirm kill mode
-	confirmTarget      string // window name for display
-	confirmWindowIndex string // window index for tmux command
-	confirmPaneIndex   string // pane index for tmux command
-	confirmSessionName string // tmux session name
-	confirmReturnMode  Mode   // mode to return to after confirm
-
-	// New session mode
-	repoDirs         []string // all dirs from ghq
-	filteredDirs     []string // filtered dirs
-	newSessionInput  textinput.Model
-	newSessionCursor int
-	newSessionReturnMode Mode // mode to return to after new session
-
-	// Preview mode
-	previewEnabled      bool   // toggle state, default false
-	previewContent      string // captured pane content for selected session
-	previewScrollOffset int    // lines scrolled up from bottom; 0 = live view
-
-	// Status change tracking for bell notification
-	prevStatuses map[string]session.Status
-
-	// Dashboard mode
-	dashCursor     int            // index into m.filtered for focused cell
-	dashPreviews   map[int]string // windowIndex -> pane content for each session
-	dashPageOffset int            // index of first displayed item in dashboard
-	dashboardOnly  bool           // when true, Esc/q quits the app (popup mode)
-	dashboardPromptInput textinput.Model // inline input for sending text to a session from dashboard
-
-	// Grouping mode
-	groupEnabled bool   // toggle for grouped display
-	ghqRoot      string // cached result of `ghq root`
-
-	// Config loading
-	configErr error // non-nil if config file failed to load (app uses defaults)
-
-	// Broadcast mode
-	broadcastDirs        []string           // all ghq dirs (loaded once)
-	broadcastFiltered    []string           // filtered by broadcastInput
-	broadcastSelected    map[string]bool    // selected dir paths (persists across filter changes)
-	broadcastInput       textinput.Model    // filter input for repo select
-	broadcastCursor      int                // cursor in broadcastFiltered
-	broadcastPromptInput textinput.Model    // prompt text input
-	broadcastTargets     []broadcastTarget  // resolved targets after selection
-	broadcastErrors      []string           // dir validation errors collected during resolution
+	// Sub-models
+	list      ListState
+	dashboard DashboardState
+	broadcast BroadcastState
+	newSess   NewSessionState
+	confirm   ConfirmState
+	preview   PreviewState
 }
 
 // New creates and returns an initialized Model.
@@ -145,19 +166,27 @@ func New() Model {
 	}
 
 	return Model{
-		mode:                 ModeList,
-		filterInput:          ti,
-		newSessionInput:      ni,
-		broadcastInput:       bci,
-		broadcastPromptInput: bpi,
-		dashboardPromptInput: di,
-		cfg:                  cfg,
-		configErr:            configErr,
-		previewEnabled:       *cfg.PreviewDefault,
-		groupEnabled:         *cfg.GroupDefault,
-		prevStatuses:         make(map[string]session.Status),
-		dashPreviews:         make(map[int]string),
-		broadcastSelected:    make(map[string]bool),
+		mode:        ModeList,
+		filterInput: ti,
+		cfg:         cfg,
+		configErr:   configErr,
+		groupEnabled: *cfg.GroupDefault,
+		prevStatuses: make(map[string]session.Status),
+		newSess: NewSessionState{
+			input: ni,
+		},
+		broadcast: BroadcastState{
+			input:       bci,
+			promptInput: bpi,
+			selected:    make(map[string]bool),
+		},
+		dashboard: DashboardState{
+			previews:    make(map[int]string),
+			promptInput: di,
+		},
+		preview: PreviewState{
+			enabled: *cfg.PreviewDefault,
+		},
 	}
 }
 
@@ -166,7 +195,7 @@ func New() Model {
 func NewDashboard() Model {
 	m := New()
 	m.mode = ModeDashboard
-	m.dashPreviews = make(map[int]string)
+	m.dashboard.previews = make(map[int]string)
 	m.dashboardOnly = true
 	return m
 }
@@ -175,7 +204,7 @@ func NewDashboard() Model {
 
 func (m Model) Sessions() []session.Session  { return m.sessions }
 func (m Model) Filtered() []session.Session  { return m.filtered }
-func (m Model) Cursor() int                  { return m.cursor }
+func (m Model) Cursor() int                  { return m.list.cursor }
 func (m Model) Mode() Mode                   { return m.mode }
 func (m Model) Width() int                   { return m.width }
 func (m Model) Height() int                  { return m.height }
@@ -234,8 +263,6 @@ func fetchPreviewCmdForSessionWithOffset(s session.Session, scrollOffset, height
 		return previewMsg(content)
 	}
 }
-
-const dashScrollbackLines = 500
 
 func fetchDashboardPreviewWithScrollback(s session.Session, tileIdx int) tea.Cmd {
 	return func() tea.Msg {
@@ -383,44 +410,6 @@ func applyFilter(sessions []session.Session, query string) []session.Session {
 	return result
 }
 
-
-func statusSummary(sessions []session.Session) string {
-	counts := make(map[session.Status]int)
-	for _, s := range sessions {
-		counts[s.Status]++
-	}
-	var parts []string
-	if n := counts[session.StatusWaiting]; n > 0 {
-		parts = append(parts, fmt.Sprintf("%d Waiting", n))
-	}
-	if n := counts[session.StatusWorking]; n > 0 {
-		parts = append(parts, fmt.Sprintf("%d Working", n))
-	}
-	if n := counts[session.StatusIdle]; n > 0 {
-		parts = append(parts, fmt.Sprintf("%d Idle", n))
-	}
-	if n := counts[session.StatusUnknown]; n > 0 {
-		parts = append(parts, fmt.Sprintf("%d Unknown", n))
-	}
-	if len(parts) == 0 {
-		return ""
-	}
-	return strings.Join(parts, ", ")
-}
-
-func statusPriority(s session.Status) int {
-	switch s {
-	case session.StatusWaiting:
-		return 3
-	case session.StatusWorking:
-		return 2
-	case session.StatusIdle:
-		return 1
-	default:
-		return 0
-	}
-}
-
 // ringBell returns a command that prints a terminal bell character.
 func ringBell() tea.Cmd {
 	return tea.Println("\a")
@@ -542,7 +531,6 @@ func (m Model) Init() tea.Cmd {
 	)
 }
 
-
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 
@@ -577,32 +565,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.filtered = applyFilter(m.sessions, m.filterInput.Value())
-		// Clamp cursor.
-		if len(m.filtered) == 0 {
-			m.cursor = 0
-		} else if m.cursor >= len(m.filtered) {
-			m.cursor = len(m.filtered) - 1
-		}
+		m.list.cursor = clampCursor(m.list.cursor, len(m.filtered))
 
 		if m.mode == ModeDashboard || m.mode == ModeDashboardPrompt {
 			maxVisible := m.dashMaxVisible()
 			// Snap page offset to a valid page boundary.
 			if maxVisible > 0 {
-				m.dashPageOffset = (m.dashPageOffset / maxVisible) * maxVisible
+				m.dashboard.pageOffset = (m.dashboard.pageOffset / maxVisible) * maxVisible
 			}
-			if m.dashPageOffset >= len(m.filtered) {
-				m.dashPageOffset = 0
+			if m.dashboard.pageOffset >= len(m.filtered) {
+				m.dashboard.pageOffset = 0
 			}
-			pageCount := len(m.filtered) - m.dashPageOffset
+			pageCount := len(m.filtered) - m.dashboard.pageOffset
 			if pageCount > maxVisible {
 				pageCount = maxVisible
 			}
 			if pageCount < 0 {
 				pageCount = 0
 			}
-			if m.dashCursor >= pageCount {
-				m.dashCursor = 0
-				m.previewScrollOffset = 0
+			if m.dashboard.cursor >= pageCount {
+				m.dashboard.cursor = 0
+				m.preview.scrollOffset = 0
 			}
 		}
 
@@ -610,11 +593,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if shouldBell {
 			cmds = append(cmds, ringBell())
 		}
-		if m.previewEnabled && len(m.filtered) > 0 {
-			if m.previewScrollOffset > 0 {
-				cmds = append(cmds, fetchPreviewCmdForSessionWithOffset(m.filtered[m.cursor], m.previewScrollOffset, previewHeight(m)))
+		if m.preview.enabled && len(m.filtered) > 0 {
+			if m.preview.scrollOffset > 0 {
+				cmds = append(cmds, fetchPreviewCmdForSessionWithOffset(m.filtered[m.list.cursor], m.preview.scrollOffset, previewHeight(m)))
 			} else {
-				cmds = append(cmds, fetchPreviewCmdForSession(m.filtered[m.cursor]))
+				cmds = append(cmds, fetchPreviewCmdForSession(m.filtered[m.list.cursor]))
 			}
 		}
 
@@ -624,15 +607,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case previewMsg:
-		m.previewContent = string(msg)
+		m.preview.content = string(msg)
 		return m, nil
 
 	case dashPreviewsMsg:
-		if m.dashPreviews == nil {
-			m.dashPreviews = make(map[int]string)
+		if m.dashboard.previews == nil {
+			m.dashboard.previews = make(map[int]string)
 		}
 		for k, v := range map[int]string(msg) {
-			m.dashPreviews[k] = v
+			m.dashboard.previews[k] = v
 		}
 		return m, nil
 
@@ -644,16 +627,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch m.mode { //nolint:exhaustive
 		case ModeList, ModeFilter, ModeListPrompt:
 			cmds := []tea.Cmd{fetchSessionsCmd, doTick()}
-			if m.previewEnabled && len(m.filtered) > 0 {
-				if m.previewScrollOffset > 0 {
-					cmds = append(cmds, fetchPreviewCmdForSessionWithOffset(m.filtered[m.cursor], m.previewScrollOffset, previewHeight(m)))
+			if m.preview.enabled && len(m.filtered) > 0 {
+				if m.preview.scrollOffset > 0 {
+					cmds = append(cmds, fetchPreviewCmdForSessionWithOffset(m.filtered[m.list.cursor], m.preview.scrollOffset, previewHeight(m)))
 				} else {
-					cmds = append(cmds, fetchPreviewCmdForSession(m.filtered[m.cursor]))
+					cmds = append(cmds, fetchPreviewCmdForSession(m.filtered[m.list.cursor]))
 				}
 			}
 			return m, tea.Batch(cmds...)
 		case ModeDashboard, ModeDashboardPrompt:
-			pageItems := len(m.filtered) - m.dashPageOffset
+			pageItems := len(m.filtered) - m.dashboard.pageOffset
 			maxVisible := m.dashMaxVisible()
 			if pageItems > maxVisible {
 				pageItems = maxVisible
@@ -661,10 +644,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if pageItems < 0 {
 				pageItems = 0
 			}
-			pageSessions := m.filtered[m.dashPageOffset : m.dashPageOffset+pageItems]
+			pageSessions := m.filtered[m.dashboard.pageOffset : m.dashboard.pageOffset+pageItems]
 			cmds := []tea.Cmd{fetchSessionsCmd, doTick()}
-			if m.previewScrollOffset > 0 && m.dashCursor < len(pageSessions) {
-				cmds = append(cmds, fetchDashboardPreviews(pageSessions, m.dashCursor))
+			if m.preview.scrollOffset > 0 && m.dashboard.cursor < len(pageSessions) {
+				cmds = append(cmds, fetchDashboardPreviews(pageSessions, m.dashboard.cursor))
 			} else {
 				cmds = append(cmds, fetchDashboardPreviews(pageSessions))
 			}
@@ -678,23 +661,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ghqDirsMsg:
 		m.repoDirs = []string(msg)
-		m.filteredDirs = filterDirs(m.repoDirs, m.newSessionInput.Value())
-		if len(m.filteredDirs) == 0 {
-			m.newSessionCursor = 0
-		} else if m.newSessionCursor >= len(m.filteredDirs) {
-			m.newSessionCursor = len(m.filteredDirs) - 1
-		}
+		m.filteredDirs = filterDirs(m.repoDirs, m.newSess.input.Value())
+		m.newSess.cursor = clampCursor(m.newSess.cursor, len(m.filteredDirs))
 		return m, nil
 
 	case broadcastGhqDirsMsg:
-		m.broadcastDirs = []string(msg)
-		m.broadcastFiltered = filterDirs(m.broadcastDirs, m.broadcastInput.Value())
-		m.broadcastCursor = 0
+		m.broadcast.dirs = []string(msg)
+		m.broadcast.filtered = filterDirs(m.broadcast.dirs, m.broadcast.input.Value())
+		m.broadcast.cursor = 0
 		return m, nil
 
 	case broadcastCompletedMsg:
 		m.mode = ModeList
-		m.broadcastErrors = msg.errors
+		m.broadcast.errors = msg.errors
 		return m, fetchSessionsCmd
 
 	case ghqRootMsg:
@@ -732,37 +711,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.filterInput, cmd = m.filterInput.Update(msg)
 			m.filtered = applyFilter(m.sessions, m.filterInput.Value())
-			if m.cursor >= len(m.filtered) {
-				m.cursor = 0
+			if m.list.cursor >= len(m.filtered) {
+				m.list.cursor = 0
 			}
 			return m, cmd
 
 		case ModeNewSession:
 			var cmd tea.Cmd
-			m.newSessionInput, cmd = m.newSessionInput.Update(msg)
-			m.filteredDirs = filterDirs(m.repoDirs, m.newSessionInput.Value())
-			if m.newSessionCursor >= len(m.filteredDirs) {
-				m.newSessionCursor = 0
+			m.newSess.input, cmd = m.newSess.input.Update(msg)
+			m.filteredDirs = filterDirs(m.repoDirs, m.newSess.input.Value())
+			if m.newSess.cursor >= len(m.filteredDirs) {
+				m.newSess.cursor = 0
 			}
 			return m, cmd
 
 		case ModeBroadcastSelect:
 			var cmd tea.Cmd
-			m.broadcastInput, cmd = m.broadcastInput.Update(msg)
-			m.broadcastFiltered = filterDirs(m.broadcastDirs, m.broadcastInput.Value())
-			if m.broadcastCursor >= len(m.broadcastFiltered) {
-				m.broadcastCursor = 0
+			m.broadcast.input, cmd = m.broadcast.input.Update(msg)
+			m.broadcast.filtered = filterDirs(m.broadcast.dirs, m.broadcast.input.Value())
+			if m.broadcast.cursor >= len(m.broadcast.filtered) {
+				m.broadcast.cursor = 0
 			}
 			return m, cmd
 
 		case ModeBroadcastPrompt:
 			var cmd tea.Cmd
-			m.broadcastPromptInput, cmd = m.broadcastPromptInput.Update(msg)
+			m.broadcast.promptInput, cmd = m.broadcast.promptInput.Update(msg)
 			return m, cmd
 
 		case ModeDashboardPrompt, ModeListPrompt:
 			var cmd tea.Cmd
-			m.dashboardPromptInput, cmd = m.dashboardPromptInput.Update(msg)
+			m.dashboard.promptInput, cmd = m.dashboard.promptInput.Update(msg)
 			return m, cmd
 		}
 	}
@@ -770,628 +749,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	key := msg.String()
-	km := m.cfg.Keymaps
-	switch {
-	case km.IsMoveUp(key):
-		if len(m.filtered) > 0 {
-			m.cursor = (m.cursor - 1 + len(m.filtered)) % len(m.filtered)
-			m.previewScrollOffset = 0
-			if m.previewEnabled {
-				return m, fetchPreviewCmdForSession(m.filtered[m.cursor])
-			}
-		}
-
-	case km.IsMoveDown(key):
-		if len(m.filtered) > 0 {
-			m.cursor = (m.cursor + 1) % len(m.filtered)
-			m.previewScrollOffset = 0
-			if m.previewEnabled {
-				return m, fetchPreviewCmdForSession(m.filtered[m.cursor])
-			}
-		}
-
-	case km.IsScrollUp(key):
-		if m.previewEnabled && len(m.filtered) > 0 && previewHeight(m) > 0 {
-			m.previewScrollOffset += previewScrollStep(m)
-			return m, fetchPreviewCmdForSessionWithOffset(m.filtered[m.cursor], m.previewScrollOffset, previewHeight(m))
-		}
-
-	case km.IsScrollDown(key):
-		if m.previewEnabled && len(m.filtered) > 0 && previewHeight(m) > 0 {
-			m.previewScrollOffset -= previewScrollStep(m)
-			if m.previewScrollOffset < 0 {
-				m.previewScrollOffset = 0
-			}
-			return m, fetchPreviewCmdForSessionWithOffset(m.filtered[m.cursor], m.previewScrollOffset, previewHeight(m))
-		}
-
-	case key == "enter":
-		if len(m.filtered) > 0 {
-			s := m.filtered[m.cursor]
-			sessionName := s.SessionName
-			if sessionName == "" {
-				sessionName = tmux.SessionName
-			}
-			windowIndex := s.WindowIndex
-			paneIndex := resolvePaneIndex(s.PaneIndex)
-			return m, func() tea.Msg {
-				if err := tmux.SwitchToWindow(sessionName, windowIndex, paneIndex); err != nil {
-					return errMsg(err)
-				}
-				return tea.QuitMsg{}
-			}
-		}
-
-	case km.IsNewSession(key):
-		m.mode = ModeNewSession
-		m.newSessionReturnMode = ModeList
-		m.err = nil
-		m.newSessionInput.SetValue("")
-		m.newSessionCursor = 0
-		cmds := []tea.Cmd{m.newSessionInput.Focus()}
-		if len(m.repoDirs) == 0 {
-			cmds = append(cmds, fetchGhqDirs)
-		} else {
-			m.filteredDirs = m.repoDirs
-		}
-		return m, tea.Batch(cmds...)
-
-	case km.IsKill(key):
-		if len(m.filtered) > 0 {
-			s := m.filtered[m.cursor]
-			m.confirmTarget = s.DisplayName()
-			m.confirmWindowIndex = s.WindowIndex
-			m.confirmPaneIndex = resolvePaneIndex(s.PaneIndex)
-			m.confirmSessionName = s.SessionName
-			m.err = nil
-			m.confirmReturnMode = ModeList
-			m.mode = ModeConfirmKill
-		}
-
-	case km.IsTogglePreview(key):
-		m.previewEnabled = !m.previewEnabled
-		if m.previewEnabled && len(m.filtered) > 0 {
-			return m, fetchPreviewCmdForSession(m.filtered[m.cursor])
-		}
-		if !m.previewEnabled {
-			m.previewContent = ""
-			m.previewScrollOffset = 0
-		}
-
-	case km.IsDashboard(key):
-		m.mode = ModeDashboard
-		m.dashCursor = 0
-		m.dashPageOffset = 0
-		m.previewScrollOffset = 0
-		m.dashPreviews = make(map[int]string)
-		maxVisible := m.dashMaxVisible()
-		pageItems := len(m.filtered)
-		if pageItems > maxVisible {
-			pageItems = maxVisible
-		}
-		return m, fetchDashboardPreviews(m.filtered[:pageItems])
-
-	case km.IsBroadcast(key):
-		m.mode = ModeBroadcastSelect
-		m.err = nil
-		m.broadcastInput.SetValue("")
-		m.broadcastCursor = 0
-		m.broadcastSelected = make(map[string]bool)
-		cmds := []tea.Cmd{m.broadcastInput.Focus()}
-		if len(m.broadcastDirs) == 0 {
-			cmds = append(cmds, fetchBroadcastGhqDirs)
-		} else {
-			m.broadcastFiltered = m.broadcastDirs
-		}
-		return m, tea.Batch(cmds...)
-
-	case km.IsGroup(key):
-		m.groupEnabled = !m.groupEnabled
-
-	case km.IsInput(key):
-		if len(m.filtered) > 0 {
-			m.mode = ModeListPrompt
-			m.dashboardPromptInput.SetValue("")
-			return m, m.dashboardPromptInput.Focus()
-		}
-
-	case km.IsFilter(key):
-		m.mode = ModeFilter
-		return m, m.filterInput.Focus()
-
-	case km.IsQuit(key), key == "esc":
-		return m, tea.Quit
-	}
-
-	return m, nil
-}
-
-func (m Model) updateListPrompt(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "enter":
-		text := strings.TrimSpace(m.dashboardPromptInput.Value())
-		if text == "" {
-			return m, nil
-		}
-		if m.cursor >= len(m.filtered) {
-			m.dashboardPromptInput.Blur()
-			m.mode = ModeList
-			return m, nil
-		}
-		s := m.filtered[m.cursor]
-		m.dashboardPromptInput.Blur()
-		m.mode = ModeList
-		sessionName := s.SessionName
-		if sessionName == "" {
-			sessionName = tmux.SessionName
-		}
-		paneIndex := resolvePaneIndex(s.PaneIndex)
-		windowIndex := s.WindowIndex
-		return m, func() tea.Msg {
-			if err := tmux.SendKeysLiteral(sessionName, windowIndex, paneIndex, text); err != nil {
-				return errMsg(err)
-			}
-			return nil
-		}
-	case "esc":
-		m.dashboardPromptInput.Blur()
-		m.mode = ModeList
-		return m, nil
-	default:
-		var cmd tea.Cmd
-		m.dashboardPromptInput, cmd = m.dashboardPromptInput.Update(msg)
-		return m, cmd
-	}
-}
-
-func (m Model) updateConfirmKill(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "y":
-		windowIndex := m.confirmWindowIndex
-		sessionName := m.confirmSessionName
-		if sessionName == "" {
-			sessionName = tmux.SessionName
-		}
-		m = m.clearConfirm()
-		return m, func() tea.Msg {
-			if err := tmux.KillWindowForSession(sessionName, windowIndex); err != nil {
-				return errMsg(err)
-			}
-			return windowKilledMsg{}
-		}
-	case "n", "esc":
-		m = m.clearConfirm()
-	}
-	return m, nil
-}
-
-// clearConfirm resets all confirm-kill fields and returns to the mode stored in confirmReturnMode.
-func (m Model) clearConfirm() Model {
-	m.confirmTarget = ""
-	m.confirmWindowIndex = ""
-	m.confirmPaneIndex = ""
-	m.confirmSessionName = ""
-	m.mode = m.confirmReturnMode
-	m.confirmReturnMode = 0
-	return m
-}
-
-func (m Model) updateFilter(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "enter":
-		// Confirm filter and return to list mode (filter preserved).
-		m.filterInput.Blur()
-		m.mode = ModeList
-		return m, nil
-
-	case "esc":
-		// Clear filter, back to ModeList with full list.
-		m.filterInput.SetValue("")
-		m.filterInput.Blur()
-		m.mode = ModeList
-		m.filtered = m.sessions
-		m.cursor = 0
-		return m, nil
-
-	default:
-		var cmd tea.Cmd
-		m.filterInput, cmd = m.filterInput.Update(msg)
-		m.filtered = applyFilter(m.sessions, m.filterInput.Value())
-		if m.cursor >= len(m.filtered) {
-			m.cursor = 0
-		}
-		return m, cmd
-	}
-}
-
-func (m Model) updateNewSession(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	key := msg.String()
-	km := m.cfg.Keymaps
-
-	switch {
-	case key == "enter":
-		if len(m.filteredDirs) > 0 {
-			dir := m.filteredDirs[m.newSessionCursor]
-			if err := tmux.ValidateDir(dir); err != nil {
-				m.err = err
-				return m, nil
-			}
-			m.newSessionInput.Blur()
-			m.mode = m.newSessionReturnMode
-			m.newSessionReturnMode = 0
-			name := tmux.GenerateWindowName(dir)
-			return m, func() tea.Msg {
-				if err := tmux.CreateWindow(name, dir); err != nil {
-					return errMsg(err)
-				}
-				return tea.QuitMsg{}
-			}
-		}
-		return m, nil
-
-	case key == "esc":
-		m.mode = m.newSessionReturnMode
-		m.newSessionReturnMode = 0
-		m.newSessionInput.Blur()
-		return m, nil
-
-	case km.IsMoveUpNonPrintable(key):
-		if len(m.filteredDirs) > 0 {
-			m.newSessionCursor = (m.newSessionCursor - 1 + len(m.filteredDirs)) % len(m.filteredDirs)
-		}
-		return m, nil
-
-	case km.IsMoveDownNonPrintable(key):
-		if len(m.filteredDirs) > 0 {
-			m.newSessionCursor = (m.newSessionCursor + 1) % len(m.filteredDirs)
-		}
-		return m, nil
-
-	default:
-		var cmd tea.Cmd
-		m.newSessionInput, cmd = m.newSessionInput.Update(msg)
-		m.filteredDirs = filterDirs(m.repoDirs, m.newSessionInput.Value())
-		if m.newSessionCursor >= len(m.filteredDirs) {
-			m.newSessionCursor = 0
-		}
-		return m, cmd
-	}
-}
-func (m Model) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	cols := m.dashCols()
-	maxVisible := m.dashMaxVisible()
-	pageItems := len(m.filtered) - m.dashPageOffset
-	if pageItems > maxVisible {
-		pageItems = maxVisible
-	}
-	if pageItems < 0 {
-		pageItems = 0
-	}
-
-	key := msg.String()
-	km := m.cfg.Keymaps
-	switch {
-	case key == "esc":
-		if m.dashboardOnly {
-			return m, tea.Quit
-		}
-		m.mode = ModeList
-		m.previewScrollOffset = 0
-		return m, nil
-	case km.IsDashboard(key):
-		if m.dashboardOnly {
-			return m, tea.Quit
-		}
-		m.mode = ModeList
-		m.previewScrollOffset = 0
-		return m, nil
-	case km.IsQuit(key):
-		return m, tea.Quit
-	case km.IsScrollUp(key):
-		if pageItems > 0 && m.dashPageOffset+m.dashCursor < len(m.filtered) {
-			wasZero := m.previewScrollOffset == 0
-			m.previewScrollOffset += dashPreviewScrollStep()
-			if !wasZero {
-				// Clamp only after scrollback content has been fetched
-				if maxOff := dashMaxScrollOffset(m); m.previewScrollOffset > maxOff {
-					m.previewScrollOffset = maxOff
-				}
-			}
-			if wasZero {
-				s := m.filtered[m.dashPageOffset+m.dashCursor]
-				return m, fetchDashboardPreviewWithScrollback(s, m.dashCursor)
-			}
-		}
-	case km.IsScrollDown(key):
-		if pageItems > 0 && m.dashPageOffset+m.dashCursor < len(m.filtered) {
-			m.previewScrollOffset -= dashPreviewScrollStep()
-			if m.previewScrollOffset < 0 {
-				m.previewScrollOffset = 0
-			}
-		}
-	case km.IsNextPage(key):
-		// Next page
-		nextOffset := m.dashPageOffset + maxVisible
-		if nextOffset < len(m.filtered) {
-			m.dashPageOffset = nextOffset
-			m.dashCursor = 0
-			m.previewScrollOffset = 0
-			pageSessions := m.filtered[m.dashPageOffset : m.dashPageOffset+min(m.dashMaxVisible(), len(m.filtered)-m.dashPageOffset)]
-			return m, fetchDashboardPreviews(pageSessions)
-		}
-	case km.IsPrevPage(key):
-		// Previous page
-		prevOffset := m.dashPageOffset - maxVisible
-		if prevOffset < 0 {
-			prevOffset = 0
-		}
-		if prevOffset != m.dashPageOffset {
-			m.dashPageOffset = prevOffset
-			m.dashCursor = 0
-			m.previewScrollOffset = 0
-			pageSessions := m.filtered[m.dashPageOffset : m.dashPageOffset+min(m.dashMaxVisible(), len(m.filtered)-m.dashPageOffset)]
-			return m, fetchDashboardPreviews(pageSessions)
-		}
-	case km.IsMoveLeft(key):
-		if m.dashCursor%cols > 0 {
-			m.dashCursor--
-			m.previewScrollOffset = 0
-		}
-	case km.IsMoveRight(key):
-		if m.dashCursor%cols < cols-1 && m.dashCursor+1 < pageItems {
-			m.dashCursor++
-			m.previewScrollOffset = 0
-		}
-	case km.IsMoveUp(key):
-		if m.dashCursor-cols >= 0 {
-			m.dashCursor -= cols
-			m.previewScrollOffset = 0
-		} else if m.dashPageOffset > 0 {
-			// Go to previous page
-			prevOffset := m.dashPageOffset - maxVisible
-			if prevOffset < 0 {
-				prevOffset = 0
-			}
-			m.dashPageOffset = prevOffset
-			m.dashCursor = 0
-			m.previewScrollOffset = 0
-			pageSessions := m.filtered[m.dashPageOffset : m.dashPageOffset+min(m.dashMaxVisible(), len(m.filtered)-m.dashPageOffset)]
-			return m, fetchDashboardPreviews(pageSessions)
-		}
-	case km.IsMoveDown(key):
-		if m.dashCursor+cols < pageItems {
-			m.dashCursor += cols
-			m.previewScrollOffset = 0
-		} else if m.dashPageOffset+maxVisible < len(m.filtered) {
-			// Go to next page
-			m.dashPageOffset += maxVisible
-			m.dashCursor = 0
-			m.previewScrollOffset = 0
-			pageSessions := m.filtered[m.dashPageOffset : m.dashPageOffset+min(m.dashMaxVisible(), len(m.filtered)-m.dashPageOffset)]
-			return m, fetchDashboardPreviews(pageSessions)
-		}
-	case key == "enter":
-		if pageItems > 0 && m.dashPageOffset+m.dashCursor < len(m.filtered) {
-			s := m.filtered[m.dashPageOffset+m.dashCursor]
-			sessionName := s.SessionName
-			if sessionName == "" {
-				sessionName = tmux.SessionName
-			}
-			paneIndex := resolvePaneIndex(s.PaneIndex)
-			return m, func() tea.Msg {
-				if err := tmux.SwitchToWindow(sessionName, s.WindowIndex, paneIndex); err != nil {
-					return errMsg(err)
-				}
-				return tea.QuitMsg{}
-			}
-		}
-	case km.IsKill(key):
-		if len(m.filtered) > 0 && m.dashPageOffset+m.dashCursor < len(m.filtered) {
-			s := m.filtered[m.dashPageOffset+m.dashCursor]
-			m.confirmTarget = s.DisplayName()
-			m.confirmWindowIndex = s.WindowIndex
-			m.confirmPaneIndex = resolvePaneIndex(s.PaneIndex)
-			m.confirmSessionName = s.SessionName
-			m.err = nil
-			m.confirmReturnMode = ModeDashboard
-			m.mode = ModeConfirmKill
-		}
-
-	case km.IsNewSession(key):
-		m.mode = ModeNewSession
-		m.newSessionReturnMode = ModeDashboard
-		m.err = nil
-		m.newSessionInput.SetValue("")
-		m.newSessionCursor = 0
-		cmds := []tea.Cmd{m.newSessionInput.Focus()}
-		if len(m.repoDirs) == 0 {
-			cmds = append(cmds, fetchGhqDirs)
-		} else {
-			m.filteredDirs = m.repoDirs
-		}
-		return m, tea.Batch(cmds...)
-
-	case km.IsFilter(key):
-		m.mode = ModeFilter
-		return m, m.filterInput.Focus()
-
-	case km.IsBroadcast(key):
-		m.mode = ModeBroadcastSelect
-		m.err = nil
-		m.broadcastInput.SetValue("")
-		m.broadcastCursor = 0
-		m.broadcastSelected = make(map[string]bool)
-		cmds := []tea.Cmd{m.broadcastInput.Focus()}
-		if len(m.broadcastDirs) == 0 {
-			cmds = append(cmds, fetchBroadcastGhqDirs)
-		} else {
-			m.broadcastFiltered = m.broadcastDirs
-		}
-		return m, tea.Batch(cmds...)
-
-	case km.IsInput(key):
-		if pageItems > 0 && m.dashPageOffset+m.dashCursor < len(m.filtered) {
-			m.mode = ModeDashboardPrompt
-			m.dashboardPromptInput.SetValue("")
-			return m, m.dashboardPromptInput.Focus()
-		}
-	}
-	return m, nil
-}
-
-func (m Model) updateDashboardPrompt(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "enter":
-		text := strings.TrimSpace(m.dashboardPromptInput.Value())
-		if text == "" {
-			return m, nil
-		}
-		idx := m.dashPageOffset + m.dashCursor
-		if idx >= len(m.filtered) {
-			m.dashboardPromptInput.Blur()
-			m.mode = ModeDashboard
-			return m, nil
-		}
-		s := m.filtered[idx]
-		m.dashboardPromptInput.Blur()
-		m.mode = ModeDashboard
-		sessionName := s.SessionName
-		if sessionName == "" {
-			sessionName = tmux.SessionName
-		}
-		paneIndex := resolvePaneIndex(s.PaneIndex)
-		windowIndex := s.WindowIndex
-		return m, func() tea.Msg {
-			if err := tmux.SendKeysLiteral(sessionName, windowIndex, paneIndex, text); err != nil {
-				return errMsg(err)
-			}
-			return nil
-		}
-	case "esc":
-		m.dashboardPromptInput.Blur()
-		m.mode = ModeDashboard
-		return m, nil
-	default:
-		var cmd tea.Cmd
-		m.dashboardPromptInput, cmd = m.dashboardPromptInput.Update(msg)
-		return m, cmd
-	}
-}
-
-func (m Model) updateBroadcastSelect(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	key := msg.String()
-	km := m.cfg.Keymaps
-	switch {
-	case key == "enter":
-		// Collect selected dirs; if nothing selected, treat cursor item as selected.
-		var selectedDirs []string
-		for dir, sel := range m.broadcastSelected {
-			if sel {
-				selectedDirs = append(selectedDirs, dir)
-			}
-		}
-		if len(selectedDirs) == 0 && len(m.broadcastFiltered) > 0 {
-			selectedDirs = append(selectedDirs, m.broadcastFiltered[m.broadcastCursor])
-		}
-		if len(selectedDirs) == 0 {
-			return m, nil
-		}
-		uniqueDirs := selectedDirs // already unique since map keys are unique
-		// Store as a temporary field; transition to prompt.
-		// We reuse broadcastTargets with dir only (windowIndex/sessionName resolved later).
-		m.broadcastTargets = make([]broadcastTarget, len(uniqueDirs))
-		for i, d := range uniqueDirs {
-			m.broadcastTargets[i] = broadcastTarget{dir: d}
-		}
-		m.broadcastInput.Blur()
-		m.mode = ModeBroadcastPrompt
-		m.broadcastPromptInput.SetValue("")
-		return m, m.broadcastPromptInput.Focus()
-
-	case key == "esc":
-		m.mode = ModeList
-		m.broadcastInput.Blur()
-		m.broadcastSelected = make(map[string]bool)
-		return m, nil
-
-	case km.IsToggleSelect(key):
-		// Toggle selection of item at cursor.
-		if len(m.broadcastFiltered) > 0 {
-			dir := m.broadcastFiltered[m.broadcastCursor]
-			m.broadcastSelected[dir] = !m.broadcastSelected[dir]
-		}
-		return m, nil
-
-	case km.IsMoveUpNonPrintable(key):
-		if len(m.broadcastFiltered) > 0 {
-			m.broadcastCursor = (m.broadcastCursor - 1 + len(m.broadcastFiltered)) % len(m.broadcastFiltered)
-		}
-		return m, nil
-
-	case km.IsMoveDownNonPrintable(key):
-		if len(m.broadcastFiltered) > 0 {
-			m.broadcastCursor = (m.broadcastCursor + 1) % len(m.broadcastFiltered)
-		}
-		return m, nil
-
-	default:
-		var cmd tea.Cmd
-		m.broadcastInput, cmd = m.broadcastInput.Update(msg)
-		m.broadcastFiltered = filterDirs(m.broadcastDirs, m.broadcastInput.Value())
-		if m.broadcastCursor >= len(m.broadcastFiltered) {
-			m.broadcastCursor = 0
-		}
-		return m, cmd
-	}
-}
-
-func (m Model) updateBroadcastPrompt(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "enter":
-		prompt := strings.TrimSpace(m.broadcastPromptInput.Value())
-		if prompt == "" {
-			return m, nil
-		}
-		m.broadcastPromptInput.Blur()
-		targets := m.broadcastTargets
-		m.broadcastTargets = nil
-		m.broadcastErrors = nil
-		return m, func() tea.Msg {
-			var dirErrors []string
-			for _, t := range targets {
-				if err := tmux.ValidateDir(t.dir); err != nil {
-					dirErrors = append(dirErrors, fmt.Sprintf("%s: %v", t.dir, err))
-					continue
-				}
-				name := tmux.GenerateWindowName(t.dir)
-				if _, err := tmux.CreateWindowSilent(name, t.dir, prompt); err != nil {
-					dirErrors = append(dirErrors, fmt.Sprintf("%s: %v", t.dir, err))
-				}
-			}
-			return broadcastCompletedMsg{errors: dirErrors}
-		}
-
-	case "esc":
-		m.broadcastPromptInput.Blur()
-		m.mode = ModeBroadcastSelect
-		return m, m.broadcastInput.Focus()
-
-	default:
-		var cmd tea.Cmd
-		m.broadcastPromptInput, cmd = m.broadcastPromptInput.Update(msg)
-		return m, cmd
-	}
-}
-
-// resolvePaneIndex returns p if non-empty, otherwise "0".
-func resolvePaneIndex(p string) string {
-	if p == "" {
-		return "0"
-	}
-	return p
-}
+// --- Dashboard layout helpers ---
 
 // dashCols returns the number of columns for the dashboard grid based on terminal width and session count.
 func (m Model) dashCols() int {
@@ -1463,7 +821,7 @@ func dashPreviewScrollStep() int {
 func dashTilePreviewLines(m Model) int {
 	cols := m.dashCols()
 	maxVisible := m.dashMaxVisible()
-	pageItems := len(m.filtered) - m.dashPageOffset
+	pageItems := len(m.filtered) - m.dashboard.pageOffset
 	if pageItems > maxVisible {
 		pageItems = maxVisible
 	}
@@ -1482,7 +840,7 @@ func dashTilePreviewLines(m Model) int {
 		heightRemainder = 0
 	}
 	rowCellHeight := baseCellHeight
-	if m.dashCursor/cols < heightRemainder {
+	if m.dashboard.cursor/cols < heightRemainder {
 		rowCellHeight++
 	}
 	pl := rowCellHeight - 2
@@ -1494,10 +852,10 @@ func dashTilePreviewLines(m Model) int {
 
 // dashMaxScrollOffset returns the maximum scroll offset based on cached preview content.
 func dashMaxScrollOffset(m Model) int {
-	if m.dashPreviews == nil {
+	if m.dashboard.previews == nil {
 		return 0
 	}
-	preview := m.dashPreviews[m.dashCursor]
+	preview := m.dashboard.previews[m.dashboard.cursor]
 	lines := strings.Split(preview, "\n")
 	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
 		lines = lines[:len(lines)-1]
@@ -1509,140 +867,13 @@ func dashMaxScrollOffset(m Model) int {
 	return maxScroll
 }
 
-// --- View ---
+// --- View helpers ---
 
-var (
-	styleHeader   = lipgloss.NewStyle().Bold(true)
-	styleSelected = lipgloss.NewStyle().Reverse(true)
-	styleHelpBar  = lipgloss.NewStyle().Faint(true)
-	styleError    = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
-	styleDir      = lipgloss.NewStyle().Faint(true)
-	stylePreview     = lipgloss.NewStyle().Faint(true)
-	styleGroupHeader = lipgloss.NewStyle().Faint(true).Bold(true)
-
-	styleWorking = lipgloss.NewStyle().Foreground(lipgloss.Color("2")) // green
-	styleWaiting = lipgloss.NewStyle().Foreground(lipgloss.Color("3")) // yellow
-	styleWarning = styleWaiting
-	styleIdle    = lipgloss.NewStyle().Foreground(lipgloss.Color("8")) // gray
-	styleUnknown = lipgloss.NewStyle().Foreground(lipgloss.Color("5")) // magenta
-
-	styleOverlayBorder = lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(lipgloss.Color("6")). // cyan
-				Padding(1, 2)
-	styleOverlayTitle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6"))
-	styleDimmed       = lipgloss.NewStyle().Faint(true)
-)
-
-func shortenDir(dir string) string {
-	parts := strings.Split(dir, "/")
-	if len(parts) <= 2 {
-		return dir
-	}
-	return strings.Join(parts[len(parts)-2:], "/")
-}
-
-func statusStyle(s session.Status) lipgloss.Style {
-	switch s {
-	case session.StatusWorking:
-		return styleWorking
-	case session.StatusWaiting:
-		return styleWaiting
-	case session.StatusIdle:
-		return styleIdle
-	default:
-		return styleUnknown
-	}
-}
-
-// placeOverlay composites the foreground string on top of the background string,
-// centered horizontally and vertically. Both strings may contain ANSI sequences.
-func placeOverlay(bg, fg string, bgWidth, bgHeight int) string {
-	bgLines := strings.Split(bg, "\n")
-	fgLines := strings.Split(fg, "\n")
-
-	for len(bgLines) < bgHeight {
-		bgLines = append(bgLines, "")
-	}
-
-	fgWidth := 0
-	for _, line := range fgLines {
-		if w := lipgloss.Width(line); w > fgWidth {
-			fgWidth = w
-		}
-	}
-
-	startX := (bgWidth - fgWidth) / 2
-	if startX < 0 {
-		startX = 0
-	}
-	startY := (len(bgLines) - len(fgLines)) / 2
-	if startY < 0 {
-		startY = 0
-	}
-
-	for i, fgLine := range fgLines {
-		bgIdx := startY + i
-		if bgIdx >= len(bgLines) {
-			break
-		}
-		pad := fgWidth - lipgloss.Width(fgLine)
-		if pad < 0 {
-			pad = 0
-		}
-		padded := fgLine + strings.Repeat(" ", pad)
-
-		// Preserve background on both sides of the overlay.
-		left := ansi.Truncate(bgLines[bgIdx], startX, "")
-		leftW := lipgloss.Width(left)
-		if leftW < startX {
-			left += strings.Repeat(" ", startX-leftW)
-		}
-
-		endX := startX + fgWidth
-		bgW := lipgloss.Width(bgLines[bgIdx])
-		right := ""
-		if bgW > endX {
-			right = ansi.Cut(bgLines[bgIdx], endX, bgW)
-		}
-
-		bgLines[bgIdx] = left + padded + right
-	}
-
-	return strings.Join(bgLines, "\n")
-}
-
-const overlayBorderPadding = 6 // Border(2) + Padding(1,2)*2 = 6
-
-func (m Model) overlayWidth(pct, minW, maxW int) int {
-	return min(max(m.width*pct/100, minW), maxW)
-}
-
-func (m Model) overlayHeight(pct, minH, maxH int) int {
-	return min(max(m.height*pct/100, minH), maxH)
-}
-
-// overlayListDims returns the standard overlay dimensions for list-style modals.
-func (m Model) overlayListDims() (int, int) {
-	return m.overlayWidth(60, 60, 100), m.overlayHeight(60, 10, 25)
-}
-
-// overlayListHeight returns the number of visible list items for a given overlay height.
-func overlayListHeight(overlayHeight int) int {
-	return min(max(overlayHeight-10, 3), overlayHeight)
-}
-
-func renderOverlayBox(content string, overlayWidth int) string {
-	innerWidth := overlayWidth - overlayBorderPadding
-	if innerWidth < 20 {
-		innerWidth = 20
-	}
-	return styleOverlayBorder.Width(innerWidth).Render(content)
-}
-
-// overlayCursor represents the cursor position within overlay content (before border/padding).
-type overlayCursor struct {
-	x, y int
+// newView creates a tea.View with AltScreen enabled.
+func newView(s string) tea.View {
+	v := tea.NewView(s)
+	v.AltScreen = true
+	return v
 }
 
 // textInputCursorX returns the display X position of the cursor within a textinput,
@@ -1655,45 +886,6 @@ func textInputCursorX(ti textinput.Model) int {
 	}
 	promptWidth := lipgloss.Width(ti.Prompt)
 	return promptWidth + uniseg.StringWidth(string(val[:pos]))
-}
-
-func (m Model) viewWithOverlayOn(base string, viewFn func(*strings.Builder) (string, *overlayCursor)) tea.View {
-	var b strings.Builder
-	overlay, cur := viewFn(&b)
-	if m.width > 0 && m.height > 0 {
-		v := newView(placeOverlay(base, overlay, m.width, m.height))
-		if cur != nil {
-			// Calculate absolute screen position of the cursor.
-			// The overlay is centered on the background.
-			fgLines := strings.Split(overlay, "\n")
-			fgWidth := 0
-			for _, line := range fgLines {
-				if w := lipgloss.Width(line); w > fgWidth {
-					fgWidth = w
-				}
-			}
-			startX := (m.width - fgWidth) / 2
-			if startX < 0 {
-				startX = 0
-			}
-			bgLines := m.height
-			startY := (bgLines - len(fgLines)) / 2
-			if startY < 0 {
-				startY = 0
-			}
-			// Border adds 1 on each side, padding adds 1 top/bottom and 2 left/right.
-			// Content offset from overlay top-left: X = 1(border) + 2(padding) = 3, Y = 1(border) + 1(padding) = 2
-			absX := startX + 3 + cur.x
-			absY := startY + 2 + cur.y
-			v.Cursor = tea.NewCursor(absX, absY)
-		}
-		return v
-	}
-	return newView(overlay)
-}
-
-func (m Model) viewWithOverlay(viewFn func(*strings.Builder) (string, *overlayCursor)) tea.View {
-	return m.viewWithOverlayOn(m.viewListBase(), viewFn)
 }
 
 // columnWidthsForWidth returns the name and branch column widths based on the given width.
@@ -1716,7 +908,7 @@ func (m Model) columnWidths() (int, int) {
 // listPanelWidth returns the width available for the session list panel.
 // When preview is enabled and the terminal is wide enough, the list gets the left portion.
 func (m Model) listPanelWidth() int {
-	if m.previewEnabled && m.width >= 80 {
+	if m.preview.enabled && m.width >= 80 {
 		// 45% for list, 1 for separator, rest for preview
 		w := m.width * 45 / 100
 		if w < 50 {
@@ -1733,766 +925,19 @@ func (m Model) listPanelWidth() int {
 
 // previewPanelWidth returns the width available for the preview panel.
 func (m Model) previewPanelWidth() int {
-	if !m.previewEnabled || m.width < 80 {
+	if !m.preview.enabled || m.width < 80 {
 		return 0
 	}
 	return m.width - m.listPanelWidth() - 1 // -1 for separator
 }
 
-// renderSessionRows writes session rows (grouped or flat) to the builder.
-// groups must be non-nil when m.groupEnabled is true.
-// panelWidth controls the width used for group header separators.
-func (m Model) renderSessionRows(b *strings.Builder, groups []sessionGroup, nameWidth, branchWidth, panelWidth int) {
-	b.WriteString(styleHelpBar.Render(fmt.Sprintf(" %-16s %-*s  %-*s %s", "Status", nameWidth, "Name", branchWidth, "Branch", "Dir")))
-	b.WriteString("\n")
-	if m.groupEnabled {
-		for _, g := range groups {
-			groupHeader := fmt.Sprintf("── %s (%d) ", g.name, len(g.sessions))
-			remaining := panelWidth - len([]rune(groupHeader))
-			if remaining > 0 {
-				groupHeader += strings.Repeat("─", remaining)
-			}
-			b.WriteString(styleGroupHeader.Render(groupHeader))
-			b.WriteString("\n")
-			for _, is := range g.sessions {
-				s := is.session
-				statusText := statusStyle(s.Status).Render(fmt.Sprintf("%s %-7s", s.Status.Icon(), s.Status.String()))
-				displayName := s.DisplayName()
-				if runes := []rune(displayName); len(runes) > nameWidth {
-					displayName = string(runes[:nameWidth-1]) + "…"
-				}
-				branch := s.Branch
-				if runes := []rune(branch); len(runes) > branchWidth {
-					branch = string(runes[:branchWidth-1]) + "…"
-				}
-				dir := styleDir.Render(shortenDir(s.Dir))
-				row := fmt.Sprintf("   %s  %-*s  %-*s %s", statusText, nameWidth, displayName, branchWidth, branch, dir)
-				if is.index == m.cursor {
-					row = styleSelected.Render(row)
-				}
-				b.WriteString(row)
-				b.WriteString("\n")
-			}
-		}
-	} else {
-		for i, s := range m.filtered {
-			statusText := statusStyle(s.Status).Render(fmt.Sprintf("%s %-7s", s.Status.Icon(), s.Status.String()))
-			displayName := s.DisplayName()
-			if runes := []rune(displayName); len(runes) > nameWidth {
-				displayName = string(runes[:nameWidth-1]) + "…"
-			}
-			branch := s.Branch
-			if runes := []rune(branch); len(runes) > branchWidth {
-				branch = string(runes[:branchWidth-1]) + "…"
-			}
-			dir := styleDir.Render(shortenDir(s.Dir))
-			row := fmt.Sprintf(" %s  %-*s  %-*s %s", statusText, nameWidth, displayName, branchWidth, branch, dir)
-			if i == m.cursor {
-				row = styleSelected.Render(row)
-			}
-			b.WriteString(row)
-			b.WriteString("\n")
-		}
-	}
-}
-
-// viewListBase renders the session list view dimmed, used as overlay background.
-func (m Model) viewListBase() string {
-	var leftBuf strings.Builder
-	leftWidth := m.listPanelWidth()
-
-	header := fmt.Sprintf("Clux — Sessions (%d)", len(m.filtered))
-	if summary := statusSummary(m.filtered); summary != "" {
-		header += " — " + summary
-	}
-	leftBuf.WriteString(styleHeader.Render(header))
-	leftBuf.WriteString("\n\n")
-
-	if m.configErr != nil {
-		leftBuf.WriteString(styleWarning.Render("Warning: config load failed: " + m.configErr.Error() + " (using defaults)"))
-		leftBuf.WriteString("\n\n")
-	}
-
-	nameWidth, branchWidth := m.columnWidths()
-
-	if len(m.filtered) == 0 {
-		leftBuf.WriteString("No Claude Code sessions found.\n")
-	} else {
-		var groups []sessionGroup
-		if m.groupEnabled {
-			groups = buildGroups(m.filtered, m.ghqRoot)
-		}
-		m.renderSessionRows(&leftBuf, groups, nameWidth, branchWidth, leftWidth)
-	}
-
-	showPreviewPanel := m.previewEnabled && len(m.filtered) > 0 && m.width >= 80
-	if !showPreviewPanel {
-		return styleDimmed.Render(leftBuf.String())
-	}
-
-	// Two-column layout for overlay background.
-	rightWidth := m.previewPanelWidth()
-	leftLines := strings.Split(leftBuf.String(), "\n")
-	if len(leftLines) > 0 && leftLines[len(leftLines)-1] == "" {
-		leftLines = leftLines[:len(leftLines)-1]
-	}
-
-	contentHeight := m.height
-	if contentHeight < 1 {
-		contentHeight = 1
-	}
-
-	var b strings.Builder
-	sep := stylePreview.Render("│")
-	for i := 0; i < contentHeight; i++ {
-		var left string
-		if i < len(leftLines) {
-			left = leftLines[i]
-		}
-		lw := lipgloss.Width(left)
-		if lw > leftWidth {
-			left = ansi.Truncate(left, leftWidth, "")
-		} else if lw < leftWidth {
-			left += strings.Repeat(" ", leftWidth-lw)
-		}
-
-		right := strings.Repeat(" ", rightWidth)
-
-		b.WriteString(left)
-		b.WriteString(sep)
-		b.WriteString(right)
-		b.WriteString("\n")
-	}
-
-	return styleDimmed.Render(b.String())
-}
-
-// newView creates a tea.View with AltScreen enabled.
-func newView(s string) tea.View {
-	v := tea.NewView(s)
-	v.AltScreen = true
-	return v
-}
-
-func (m Model) View() tea.View {
-	var b strings.Builder
-
-	if m.mode == ModeConfirmKill {
-		if m.confirmReturnMode == ModeDashboard {
-			return m.viewWithOverlayOn(styleDimmed.Render(m.viewDashboard(&b)), m.viewConfirmKill)
-		}
-		return m.viewWithOverlay(m.viewConfirmKill)
-	}
-
-	if m.mode == ModeNewSession {
-		if m.newSessionReturnMode == ModeDashboard {
-			return m.viewWithOverlayOn(styleDimmed.Render(m.viewDashboard(&b)), m.viewNewSession)
-		}
-		return m.viewWithOverlay(m.viewNewSession)
-	}
-
-	if m.mode == ModeDashboardPrompt {
-		return m.viewWithOverlayOn(styleDimmed.Render(m.viewDashboard(&b)), m.viewSendPrompt)
-	}
-
-	if m.mode == ModeDashboard {
-		return newView(m.viewDashboard(&b))
-	}
-
-	if m.mode == ModeBroadcastSelect {
-		return m.viewWithOverlay(m.viewBroadcastSelect)
-	}
-
-	if m.mode == ModeBroadcastPrompt {
-		return m.viewWithOverlay(m.viewBroadcastPrompt)
-	}
-
-	// Build helpbar first (spans full width at bottom).
-	var helpBar string
-	if m.mode == ModeFilter {
-		helpBar = " / " + m.filterInput.View() + "\n\n" + styleHelpBar.Render("↵:apply  Esc:clear")
-	} else {
-		km := m.cfg.Keymaps
-		previewLabel := km.HintTogglePreview() + ":preview"
-		if m.previewEnabled {
-			previewLabel = km.HintTogglePreview() + ":preview  " + km.HintScroll() + ":scroll"
-		}
-		groupLabel := km.HintGroup() + ":group"
-		helpBar = styleHelpBar.Render("↵:attach  " + km.HintNavigate() + ":navigate  " + km.HintNewSession() + ":new  " + km.HintInput() + ":send  " + km.HintBroadcast() + ":broadcast  " + km.HintKill() + ":kill  " + previewLabel + "  " + groupLabel + "  " + km.HintDashboard() + ":dashboard  " + km.HintFilter() + ":filter  " + km.HintQuit() + "/Esc:quit")
-	}
-
-	showPreviewPanel := m.previewEnabled && len(m.filtered) > 0 && m.width >= 80
-	leftWidth := m.listPanelWidth()
-
-	nameWidth, branchWidth := m.columnWidths()
-
-	// --- Build left panel (session list) ---
-	var leftBuf strings.Builder
-	header := fmt.Sprintf("Clux — Sessions (%d)", len(m.filtered))
-	if summary := statusSummary(m.filtered); summary != "" {
-		header += " — " + summary
-	}
-	leftBuf.WriteString(styleHeader.Render(header))
-	leftBuf.WriteString("\n\n")
-
-	if m.configErr != nil {
-		leftBuf.WriteString(styleWarning.Render("Warning: config load failed: " + m.configErr.Error() + " (using defaults)"))
-		leftBuf.WriteString("\n\n")
-	}
-
-	if m.err != nil {
-		leftBuf.WriteString(styleError.Render("Error: " + m.err.Error()))
-		leftBuf.WriteString("\n\n")
-	}
-
-	var groups []sessionGroup
-	if len(m.filtered) == 0 {
-		leftBuf.WriteString("No Claude Code sessions found. Start Claude Code in another tmux session.\n")
-	} else {
-		if m.groupEnabled {
-			groups = buildGroups(m.filtered, m.ghqRoot)
-		}
-		m.renderSessionRows(&leftBuf, groups, nameWidth, branchWidth, leftWidth)
-	}
-
-	if !showPreviewPanel {
-		// No preview panel: write left content + helpbar directly.
-		b.WriteString(leftBuf.String())
-		b.WriteString("\n")
-		b.WriteString(helpBar)
-	} else {
-		// Two-column layout: left panel | right panel, helpbar at bottom.
-		rightWidth := m.previewPanelWidth()
-
-		// --- Build right panel (preview) ---
-		var rightLines []string
-
-		// Preview header.
-		selectedName := m.filtered[m.cursor].DisplayName()
-		scrollIndicator := ""
-		if m.previewScrollOffset > 0 {
-			scrollIndicator = " ↑scrolled"
-		}
-		previewTitle := " Preview: " + selectedName + scrollIndicator
-		if lipgloss.Width(previewTitle) > rightWidth {
-			previewTitle = ansi.Truncate(previewTitle, rightWidth, "…")
-		}
-		rightLines = append(rightLines, styleHeader.Render(previewTitle))
-
-		// Separator line.
-		rightLines = append(rightLines, stylePreview.Render(strings.Repeat("─", rightWidth)))
-
-		// Preview content lines.
-		ph := previewHeight(m)
-		previewContentLines := strings.Split(m.previewContent, "\n")
-		// Remove trailing empty lines.
-		for len(previewContentLines) > 0 && strings.TrimSpace(previewContentLines[len(previewContentLines)-1]) == "" {
-			previewContentLines = previewContentLines[:len(previewContentLines)-1]
-		}
-		if len(previewContentLines) == 0 {
-			rightLines = append(rightLines, stylePreview.Render("  No preview available"))
-			for i := 1; i < ph; i++ {
-				rightLines = append(rightLines, "")
-			}
-		} else {
-			start := len(previewContentLines) - ph
-			if start < 0 {
-				start = 0
-			}
-			displayLines := previewContentLines[start:]
-			rightLines = append(rightLines, displayLines...)
-			// Pad to fill remaining height
-			for i := len(displayLines); i < ph; i++ {
-				rightLines = append(rightLines, "")
-			}
-		}
-
-		// --- Join left and right panels line by line ---
-		leftLines := strings.Split(leftBuf.String(), "\n")
-		// Remove trailing empty string from Split.
-		if len(leftLines) > 0 && leftLines[len(leftLines)-1] == "" {
-			leftLines = leftLines[:len(leftLines)-1]
-		}
-
-		// Total content height (excluding helpbar line).
-		contentHeight := m.height - 1
-		if contentHeight < 1 {
-			contentHeight = 1
-		}
-
-		sep := stylePreview.Render("│")
-
-		for i := 0; i < contentHeight; i++ {
-			// Left line: pad/truncate to leftWidth.
-			var left string
-			if i < len(leftLines) {
-				left = leftLines[i]
-			}
-			lw := lipgloss.Width(left)
-			if lw > leftWidth {
-				left = ansi.Truncate(left, leftWidth, "")
-			} else if lw < leftWidth {
-				left += strings.Repeat(" ", leftWidth-lw)
-			}
-
-			// Right line: pad/truncate to rightWidth.
-			var right string
-			if i < len(rightLines) {
-				right = rightLines[i]
-			}
-			rw := lipgloss.Width(right)
-			if rw > rightWidth {
-				right = ansi.Truncate(right, rightWidth, "")
-			} else if rw < rightWidth {
-				right += strings.Repeat(" ", rightWidth-rw)
-			}
-
-			b.WriteString(left)
-			b.WriteString(sep)
-			b.WriteString(right)
-			b.WriteString("\x1b[0m")
-			b.WriteString("\n")
-		}
-
-		// Helpbar at the bottom, spanning full width.
-		b.WriteString(helpBar)
-	}
-
-	if m.mode == ModeListPrompt {
-		return m.viewWithOverlayOn(styleDimmed.Render(b.String()), m.viewSendPrompt)
-	}
-
-	return newView(b.String())
-}
-
-func (m Model) viewNewSession(b *strings.Builder) (string, *overlayCursor) {
-	overlayWidth, overlayHeight := m.overlayListDims()
-
-	cursorY := 0
-	if m.err != nil {
-		b.WriteString(styleError.Render("Error: " + m.err.Error()))
-		b.WriteString("\n")
-		cursorY += 2 // error line + \n
-	}
-	b.WriteString(styleOverlayTitle.Render("New Session — Select Repository"))
-	b.WriteString("\n\n")
-	cursorY += 2 // title + blank line from \n\n
-	b.WriteString(" ")
-	b.WriteString(m.newSessionInput.View())
-	b.WriteString("\n\n")
-
-	listHeight := overlayListHeight(overlayHeight)
-
-	if len(m.filteredDirs) == 0 {
-		b.WriteString(styleHelpBar.Render(" No repositories found."))
-	} else {
-		maxShow := listHeight
-		offset := 0
-		if m.newSessionCursor >= maxShow {
-			offset = m.newSessionCursor - maxShow + 1
-		}
-		end := offset + maxShow
-		if end > len(m.filteredDirs) {
-			end = len(m.filteredDirs)
-		}
-		for i := offset; i < end; i++ {
-			dir := shortenDir(m.filteredDirs[i])
-			if i == m.newSessionCursor {
-				b.WriteString(styleSelected.Render(fmt.Sprintf(" > %s", dir)))
-			} else {
-				fmt.Fprintf(b, "   %s", dir)
-			}
-			b.WriteString("\n")
-		}
-		if end < len(m.filteredDirs) {
-			b.WriteString(styleHelpBar.Render(fmt.Sprintf("   ... and %d more", len(m.filteredDirs)-end)))
-		}
-	}
-
-	b.WriteString("\n\n")
-	km := m.cfg.Keymaps
-	b.WriteString(styleHelpBar.Render("↵:select  Esc:cancel  " + km.HintNavigate() + ":navigate"))
-
-	cur := &overlayCursor{x: 1 + textInputCursorX(m.newSessionInput), y: cursorY}
-	return renderOverlayBox(b.String(), overlayWidth), cur
-}
-func (m Model) viewDashboard(b *strings.Builder) string {
-	cols := m.dashCols()
-	maxVisible := m.dashMaxVisible()
-	pageItems := len(m.filtered) - m.dashPageOffset
-	if pageItems > maxVisible {
-		pageItems = maxVisible
-	}
-	if pageItems < 0 {
-		pageItems = 0
-	}
-
-	// Normal dashboard view
-	totalSessions := len(m.filtered)
-	rows := (pageItems + cols - 1) / cols
-	if rows == 0 {
-		rows = 1
-	}
-
-	// Header with page indicator
-	header := fmt.Sprintf("Clux — Dashboard (%d sessions)", totalSessions)
-	if summary := statusSummary(m.filtered); summary != "" {
-		header += " — " + summary
-	}
-	if totalSessions > maxVisible {
-		currentPage := m.dashPageOffset/maxVisible + 1
-		totalPages := (totalSessions + maxVisible - 1) / maxVisible
-		header += fmt.Sprintf("  Page %d/%d", currentPage, totalPages)
-	}
-	b.WriteString(styleHeader.Render(header))
-	b.WriteString("\n\n")
-
-	if m.configErr != nil {
-		b.WriteString(styleWarning.Render("Warning: config load failed: " + m.configErr.Error() + " (using defaults)"))
-		b.WriteString("\n\n")
-	}
-
-	if pageItems == 0 {
-		b.WriteString("No sessions to display.\n")
-	}
-
-	// Calculate cell dimensions
-	// Distribute horizontal remainder across left columns.
-	borderWidth := 2  // RoundedBorder left + right
-	paddingWidth := 2 // Padding(0, 1) left + right
-	cellChrome := borderWidth + paddingWidth
-	baseCellWidth := m.width / cols
-	widthRemainder := m.width % cols
-	if baseCellWidth < 20 {
-		baseCellWidth = 20
-		widthRemainder = 0
-	}
-	// colCellWidths[col] is the total cell width (lipgloss Width, includes border+padding).
-	// colContentWidths[col] is the usable text area for truncation.
-	colCellWidths := make([]int, cols)
-	colContentWidths := make([]int, cols)
-	for c := 0; c < cols; c++ {
-		w := baseCellWidth
-		if c < widthRemainder {
-			w++
-		}
-		colCellWidths[c] = w
-		cw := w - cellChrome
-		if cw < 16 {
-			cw = 16
-		}
-		colContentWidths[c] = cw
-	}
-	// availableHeight excludes header, helpbar, border lines (2 per row), and
-	// the trailing newline after each grid row (1 per row).
-	// cellHeight is the inner (content-only) height of each cell.
-	headerLines := 2
-	if m.configErr != nil {
-		headerLines += 2
-	}
-	helpLines := 2
-	borderHeight := 2 // lipgloss RoundedBorder adds top + bottom border lines per row
-	availableHeight := m.height - headerLines - helpLines - (rows * (borderHeight + 1))
-	baseCellHeight := availableHeight / rows
-	heightRemainder := availableHeight % rows
-	if baseCellHeight < 5 {
-		baseCellHeight = 5
-		heightRemainder = 0
-	}
-
-	// Render grid row by row
-	for row := 0; row < rows; row++ {
-		// Distribute remainder lines to top rows
-		rowCellHeight := baseCellHeight
-		if row < heightRemainder {
-			rowCellHeight++
-		}
-		rowPreviewLines := rowCellHeight - 2 // minus header line and separator
-		if rowPreviewLines < 1 {
-			rowPreviewLines = 1
-		}
-
-		// Build each cell for this row
-		var cellContents []string
-		for col := 0; col < cols; col++ {
-			cw := colContentWidths[col]
-			localIdx := row*cols + col
-			if localIdx >= pageItems {
-				// Empty cell
-				cellContents = append(cellContents, strings.Repeat(" ", cw))
-				continue
-			}
-			s := m.filtered[m.dashPageOffset+localIdx]
-
-			// Cell header: icon + status + name
-			icon := s.Status.Icon()
-			statusStr := s.Status.String()
-			displayName := s.DisplayName()
-			cellHeaderText := fmt.Sprintf(" %s %s %s", icon, statusStr, displayName)
-			// Truncate if needed
-			if lipgloss.Width(cellHeaderText) > cw {
-				cellHeaderText = ansi.Truncate(cellHeaderText, cw-1, "…")
-			}
-
-			// Get preview content
-			preview := ""
-			if m.dashPreviews != nil {
-				preview = m.dashPreviews[localIdx]
-			}
-
-			// Get last N lines of preview, applying scroll offset for selected tile
-			lines := strings.Split(preview, "\n")
-			// Remove trailing empty lines
-			for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
-				lines = lines[:len(lines)-1]
-			}
-			scrollOff := 0
-			if localIdx == m.dashCursor {
-				scrollOff = m.previewScrollOffset
-				maxScroll := len(lines) - rowPreviewLines
-				if maxScroll < 0 {
-					maxScroll = 0
-				}
-				if scrollOff > maxScroll {
-					scrollOff = maxScroll
-				}
-			}
-			start := len(lines) - rowPreviewLines - scrollOff
-			if start < 0 {
-				start = 0
-			}
-			end := start + rowPreviewLines
-			if end > len(lines) {
-				end = len(lines)
-			}
-			displayPreview := lines[start:end]
-
-			// Build cell string
-			var cell strings.Builder
-			cell.WriteString(cellHeaderText)
-			cell.WriteString("\n")
-			cell.WriteString(strings.Repeat("─", cw))
-			cell.WriteString("\n")
-			for i := 0; i < rowPreviewLines; i++ {
-				if i < len(displayPreview) {
-					line := displayPreview[i]
-					// Truncate line to cell width
-					if lipgloss.Width(line) > cw {
-						line = ansi.Truncate(line, cw-1, "…")
-					}
-					cell.WriteString(line)
-				}
-				if i < rowPreviewLines-1 {
-					cell.WriteString("\n")
-				}
-			}
-			cellContents = append(cellContents, cell.String())
-		}
-
-		// Use lipgloss to join cells horizontally
-		// Apply border style to focused cell
-		styledCells := make([]string, len(cellContents))
-		for col, content := range cellContents {
-			localIdx := row*cols + col
-			// lipgloss v2 Width/Height include border and padding.
-			style := lipgloss.NewStyle().
-				Width(colCellWidths[col]).
-				Height(rowCellHeight + borderHeight).
-				MaxHeight(rowCellHeight + borderHeight).
-				Padding(0, 1)
-			if localIdx == m.dashCursor && localIdx < pageItems {
-				style = style.
-					Border(lipgloss.RoundedBorder()).
-					BorderForeground(lipgloss.Color("39"))
-			} else if localIdx < pageItems {
-				style = style.
-					Border(lipgloss.RoundedBorder()).
-					BorderForeground(lipgloss.Color("240"))
-			} else {
-				style = style.
-					Border(lipgloss.HiddenBorder())
-			}
-			styledCells[col] = style.Render(content)
-		}
-		b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, styledCells...))
-		b.WriteString("\n")
-	}
-
-	// Help bar
-	b.WriteString("\n")
-	km := m.cfg.Keymaps
-	b.WriteString(styleHelpBar.Render("↵:attach  " + km.HintNavigateFull() + ":navigate  " + km.HintNewSession() + ":new  " + km.HintInput() + ":send  " + km.HintBroadcast() + ":broadcast  " + km.HintKill() + ":kill  " + km.HintScroll() + ":scroll  " + km.HintPrevPage() + ":prev " + km.HintNextPage() + ":next  " + km.HintFilter() + ":filter  Esc/" + km.HintDashboard() + ":back  " + km.HintQuit() + ":quit"))
-
-	return b.String()
-}
-
-func (m Model) viewBroadcastSelect(b *strings.Builder) (string, *overlayCursor) {
-	overlayWidth, overlayHeight := m.overlayListDims()
-
-	cursorY := 0
-	if m.err != nil {
-		b.WriteString(styleError.Render("Error: " + m.err.Error()))
-		b.WriteString("\n")
-		cursorY += 2 // error line + \n
-	}
-
-	selectedCount := 0
-	for _, sel := range m.broadcastSelected {
-		if sel {
-			selectedCount++
-		}
-	}
-
-	b.WriteString(styleOverlayTitle.Render(fmt.Sprintf("Broadcast — Select Repositories (%d selected)", selectedCount)))
-	b.WriteString("\n\n")
-	cursorY += 2 // title + blank line from \n\n
-	b.WriteString(" ")
-	b.WriteString(m.broadcastInput.View())
-	b.WriteString("\n\n")
-
-	listHeight := overlayListHeight(overlayHeight)
-
-	if len(m.broadcastFiltered) == 0 {
-		b.WriteString(styleHelpBar.Render(" No repositories found."))
-	} else {
-		maxShow := listHeight
-		offset := 0
-		if m.broadcastCursor >= maxShow {
-			offset = m.broadcastCursor - maxShow + 1
-		}
-		end := offset + maxShow
-		if end > len(m.broadcastFiltered) {
-			end = len(m.broadcastFiltered)
-		}
-		for i := offset; i < end; i++ {
-			fullDir := m.broadcastFiltered[i]
-			dir := shortenDir(fullDir)
-			checkmark := "[ ]"
-			if m.broadcastSelected[fullDir] {
-				checkmark = "[x]"
-			}
-			if i == m.broadcastCursor {
-				b.WriteString(styleSelected.Render(fmt.Sprintf(" > %s %s", checkmark, dir)))
-			} else {
-				fmt.Fprintf(b, "   %s %s", checkmark, dir)
-			}
-			b.WriteString("\n")
-		}
-		if end < len(m.broadcastFiltered) {
-			b.WriteString(styleHelpBar.Render(fmt.Sprintf("   ... and %d more", len(m.broadcastFiltered)-end)))
-		}
-	}
-
-	b.WriteString("\n\n")
-	km := m.cfg.Keymaps
-	b.WriteString(styleHelpBar.Render(km.HintToggleSelect() + ":toggle  ↵:confirm  Esc:cancel  " + km.HintNavigate() + ":navigate"))
-
-	cur := &overlayCursor{x: 1 + textInputCursorX(m.broadcastInput), y: cursorY}
-	return renderOverlayBox(b.String(), overlayWidth), cur
-}
-
-func (m Model) viewBroadcastPrompt(b *strings.Builder) (string, *overlayCursor) {
-	overlayWidth := m.overlayWidth(50, 60, 80)
-
-	selectedCount := len(m.broadcastTargets)
-	b.WriteString(styleOverlayTitle.Render(fmt.Sprintf("Broadcast — Enter Prompt (%d repos selected)", selectedCount)))
-	b.WriteString("\n\n")
-
-	// Line 0: title, line 1: blank (\n\n)
-	cursorY := 2
-	for _, t := range m.broadcastTargets {
-		fmt.Fprintf(b, "  • %s\n", styleDir.Render(shortenDir(t.dir)))
-		cursorY++ // one line per target
-	}
-	b.WriteString("\n")
-	cursorY++ // blank line from \n
-
-	b.WriteString(" ")
-	b.WriteString(m.broadcastPromptInput.View())
-	b.WriteString("\n\n")
-
-	if m.err != nil {
-		b.WriteString(styleError.Render("Error: " + m.err.Error()))
-		b.WriteString("\n\n")
-	}
-
-	b.WriteString(styleHelpBar.Render("↵:send  Esc:back"))
-
-	cur := &overlayCursor{x: 1 + textInputCursorX(m.broadcastPromptInput), y: cursorY}
-	return renderOverlayBox(b.String(), overlayWidth), cur
-}
-
-func (m Model) viewSendPrompt(b *strings.Builder) (string, *overlayCursor) {
-	overlayWidth := m.overlayWidth(50, 60, 80)
-
-	// Determine the target session based on the current mode.
-	var target *session.Session
-	if m.mode == ModeDashboardPrompt {
-		if idx := m.dashPageOffset + m.dashCursor; idx < len(m.filtered) {
-			target = &m.filtered[idx]
-		}
-	} else {
-		if m.cursor < len(m.filtered) {
-			target = &m.filtered[m.cursor]
-		}
-	}
-
-	targetName := ""
-	if target != nil {
-		targetName = target.DisplayName()
-	}
-
-	b.WriteString(styleOverlayTitle.Render(fmt.Sprintf("Send to [%s]", targetName)))
-	b.WriteString("\n")
-
-	// Show dir and branch info for the target session.
-	if target != nil {
-		dir := target.Dir
-		// Strip worktree paths to show the base repo.
-		if idx := strings.Index(dir, "/.claude/worktrees/"); idx >= 0 {
-			dir = dir[:idx]
-		}
-		info := shortenDir(dir)
-		if target.Branch != "" {
-			info += "  " + target.Branch
-		}
-		b.WriteString(styleDir.Render(" " + info))
-	}
-	b.WriteString("\n")
-
-	// Line 0: title, line 1: dir/branch info
-	cursorY := 2
-
-	b.WriteString(" ")
-	b.WriteString(m.dashboardPromptInput.View())
-	b.WriteString("\n\n")
-
-	if m.err != nil {
-		b.WriteString(styleError.Render("Error: " + m.err.Error()))
-		b.WriteString("\n\n")
-	}
-
-	b.WriteString(styleHelpBar.Render("↵:send  Esc:cancel"))
-
-	cur := &overlayCursor{x: 1 + textInputCursorX(m.dashboardPromptInput), y: cursorY}
-	return renderOverlayBox(b.String(), overlayWidth), cur
-}
-
-func (m Model) viewConfirmKill(b *strings.Builder) (string, *overlayCursor) {
-	overlayWidth := m.overlayWidth(40, 50, 60)
-
-	b.WriteString(styleOverlayTitle.Render("Kill Session"))
-	b.WriteString("\n\n")
-
-	fmt.Fprintf(b, "Kill session %q? (y/n)", m.confirmTarget)
-	b.WriteString("\n\n")
-
-	if m.err != nil {
-		b.WriteString(styleError.Render("Error: " + m.err.Error()))
-		b.WriteString("\n\n")
-	}
-
-	b.WriteString(styleHelpBar.Render("y:kill  n/Esc:cancel"))
-
-	return renderOverlayBox(b.String(), overlayWidth), nil
+// clearConfirm resets all confirm-kill fields and returns to the mode stored in confirmReturnMode.
+func (m Model) clearConfirm() Model {
+	m.confirm.target = ""
+	m.confirm.windowIndex = ""
+	m.confirm.paneIndex = ""
+	m.confirm.sessionName = ""
+	m.mode = m.confirm.returnMode
+	m.confirm.returnMode = 0
+	return m
 }

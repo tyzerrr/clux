@@ -158,84 +158,84 @@ func TestShortenDir_ShortPath(t *testing.T) {
 
 func TestModeList_JMovesDown(t *testing.T) {
 	m := testModel(testSessions)
-	m.cursor = 0
+	m.list.cursor = 0
 	msg := tea.KeyPressMsg{Code: 'j', Text: "j"}
 	result, _ := m.updateList(msg)
 	rm := result.(Model)
-	if rm.cursor != 1 {
-		t.Errorf("expected cursor=1, got %d", rm.cursor)
+	if rm.list.cursor != 1 {
+		t.Errorf("expected cursor=1, got %d", rm.list.cursor)
 	}
 }
 
 func TestModeList_DownMovesDown(t *testing.T) {
 	m := testModel(testSessions)
-	m.cursor = 0
+	m.list.cursor = 0
 	msg := tea.KeyPressMsg{Code: tea.KeyDown}
 	result, _ := m.updateList(msg)
 	rm := result.(Model)
-	if rm.cursor != 1 {
-		t.Errorf("expected cursor=1, got %d", rm.cursor)
+	if rm.list.cursor != 1 {
+		t.Errorf("expected cursor=1, got %d", rm.list.cursor)
 	}
 }
 
 func TestModeList_JWrapsAround(t *testing.T) {
 	m := testModel(testSessions)
-	m.cursor = len(testSessions) - 1
+	m.list.cursor = len(testSessions) - 1
 	msg := tea.KeyPressMsg{Code: 'j', Text: "j"}
 	result, _ := m.updateList(msg)
 	rm := result.(Model)
-	if rm.cursor != 0 {
-		t.Errorf("expected cursor to wrap to 0, got %d", rm.cursor)
+	if rm.list.cursor != 0 {
+		t.Errorf("expected cursor to wrap to 0, got %d", rm.list.cursor)
 	}
 }
 
 func TestModeList_KMovesUp(t *testing.T) {
 	m := testModel(testSessions)
-	m.cursor = 1
+	m.list.cursor = 1
 	msg := tea.KeyPressMsg{Code: 'k', Text: "k"}
 	result, _ := m.updateList(msg)
 	rm := result.(Model)
-	if rm.cursor != 0 {
-		t.Errorf("expected cursor=0, got %d", rm.cursor)
+	if rm.list.cursor != 0 {
+		t.Errorf("expected cursor=0, got %d", rm.list.cursor)
 	}
 }
 
 func TestModeList_UpMovesUp(t *testing.T) {
 	m := testModel(testSessions)
-	m.cursor = 1
+	m.list.cursor = 1
 	msg := tea.KeyPressMsg{Code: tea.KeyUp}
 	result, _ := m.updateList(msg)
 	rm := result.(Model)
-	if rm.cursor != 0 {
-		t.Errorf("expected cursor=0, got %d", rm.cursor)
+	if rm.list.cursor != 0 {
+		t.Errorf("expected cursor=0, got %d", rm.list.cursor)
 	}
 }
 
 func TestModeList_KWrapsAround(t *testing.T) {
 	m := testModel(testSessions)
-	m.cursor = 0
+	m.list.cursor = 0
 	msg := tea.KeyPressMsg{Code: 'k', Text: "k"}
 	result, _ := m.updateList(msg)
 	rm := result.(Model)
-	if rm.cursor != len(testSessions)-1 {
-		t.Errorf("expected cursor to wrap to %d, got %d", len(testSessions)-1, rm.cursor)
+	if rm.list.cursor != len(testSessions)-1 {
+		t.Errorf("expected cursor to wrap to %d, got %d", len(testSessions)-1, rm.list.cursor)
 	}
 }
 
 func TestModeList_ShiftKSetsConfirmKill(t *testing.T) {
 	m := testModel(testSessions)
-	m.cursor = 0
+	m.list.cursor = 0
 	msg := tea.KeyPressMsg{Code: 'K', Text: "K", ShiftedCode: 'K', Mod: tea.ModShift}
 	result, _ := m.updateList(msg)
 	rm := result.(Model)
 	if rm.mode != ModeConfirmKill {
 		t.Errorf("expected ModeConfirmKill, got %v", rm.mode)
 	}
-	if rm.confirmTarget != testSessions[0].DisplayName() {
-		t.Errorf("expected confirmTarget=%q, got %q", testSessions[0].DisplayName(), rm.confirmTarget)
+	if rm.confirm.target != testSessions[0].DisplayName() {
+		t.Errorf("expected confirmTarget=%q, got %q", testSessions[0].DisplayName(), rm.confirm.target)
 	}
-	if rm.confirmWindowIndex != testSessions[0].WindowIndex {
-		t.Errorf("expected confirmWindowIndex=%q, got %q", testSessions[0].WindowIndex, rm.confirmWindowIndex)
+	if rm.confirm.windowIndex != testSessions[0].WindowIndex {
+		t.Errorf("expected confirmWindowIndex=%q, got %q", testSessions[0].WindowIndex, rm.confirm.windowIndex)
 	}
 }
 
@@ -271,7 +271,7 @@ func TestModeList_SlashSetsFilterMode(t *testing.T) {
 
 func TestModeList_EnterWithSessionsReturnsCmd(t *testing.T) {
 	m := testModel(testSessions)
-	m.cursor = 0
+	m.list.cursor = 0
 	msg := tea.KeyPressMsg{Code: tea.KeyEnter}
 	_, cmd := m.updateList(msg)
 	if cmd == nil {
@@ -293,19 +293,19 @@ func TestModeList_EnterWithEmptyListReturnsNilCmd(t *testing.T) {
 func TestModeConfirmKill_YGoesBackToList(t *testing.T) {
 	m := testModel(testSessions)
 	m.mode = ModeConfirmKill
-	m.confirmTarget = "test-session"
-	m.confirmWindowIndex = "0"
+	m.confirm.target = "test-session"
+	m.confirm.windowIndex = "0"
 	msg := tea.KeyPressMsg{Code: 'y', Text: "y"}
 	result, cmd := m.updateConfirmKill(msg)
 	rm := result.(Model)
 	if rm.mode != ModeList {
 		t.Errorf("expected ModeList, got %v", rm.mode)
 	}
-	if rm.confirmTarget != "" {
-		t.Errorf("expected confirmTarget cleared, got %q", rm.confirmTarget)
+	if rm.confirm.target != "" {
+		t.Errorf("expected confirmTarget cleared, got %q", rm.confirm.target)
 	}
-	if rm.confirmWindowIndex != "" {
-		t.Errorf("expected confirmWindowIndex cleared, got %q", rm.confirmWindowIndex)
+	if rm.confirm.windowIndex != "" {
+		t.Errorf("expected confirmWindowIndex cleared, got %q", rm.confirm.windowIndex)
 	}
 	if cmd == nil {
 		t.Error("expected non-nil cmd from y key in ConfirmKill mode")
@@ -315,14 +315,14 @@ func TestModeConfirmKill_YGoesBackToList(t *testing.T) {
 func TestModeConfirmKill_YWithCustomSessionName(t *testing.T) {
 	m := testModel(testSessions)
 	m.mode = ModeConfirmKill
-	m.confirmTarget = "test-session"
-	m.confirmWindowIndex = "0"
-	m.confirmSessionName = "custom-session"
+	m.confirm.target = "test-session"
+	m.confirm.windowIndex = "0"
+	m.confirm.sessionName = "custom-session"
 	msg := tea.KeyPressMsg{Code: 'y', Text: "y"}
 	result, cmd := m.updateConfirmKill(msg)
 	rm := result.(Model)
-	if rm.confirmSessionName != "" {
-		t.Errorf("expected confirmSessionName cleared, got %q", rm.confirmSessionName)
+	if rm.confirm.sessionName != "" {
+		t.Errorf("expected confirmSessionName cleared, got %q", rm.confirm.sessionName)
 	}
 	if cmd == nil {
 		t.Error("expected non-nil cmd from y key with custom session")
@@ -332,19 +332,19 @@ func TestModeConfirmKill_YWithCustomSessionName(t *testing.T) {
 func TestModeConfirmKill_NGoesBackToList(t *testing.T) {
 	m := testModel(testSessions)
 	m.mode = ModeConfirmKill
-	m.confirmTarget = "test-session"
-	m.confirmWindowIndex = "0"
+	m.confirm.target = "test-session"
+	m.confirm.windowIndex = "0"
 	msg := tea.KeyPressMsg{Code: 'n', Text: "n"}
 	result, cmd := m.updateConfirmKill(msg)
 	rm := result.(Model)
 	if rm.mode != ModeList {
 		t.Errorf("expected ModeList, got %v", rm.mode)
 	}
-	if rm.confirmTarget != "" {
-		t.Errorf("expected confirmTarget cleared, got %q", rm.confirmTarget)
+	if rm.confirm.target != "" {
+		t.Errorf("expected confirmTarget cleared, got %q", rm.confirm.target)
 	}
-	if rm.confirmWindowIndex != "" {
-		t.Errorf("expected confirmWindowIndex cleared, got %q", rm.confirmWindowIndex)
+	if rm.confirm.windowIndex != "" {
+		t.Errorf("expected confirmWindowIndex cleared, got %q", rm.confirm.windowIndex)
 	}
 	if cmd != nil {
 		t.Error("expected nil cmd from n key in ConfirmKill mode")
@@ -354,26 +354,26 @@ func TestModeConfirmKill_NGoesBackToList(t *testing.T) {
 func TestModeConfirmKill_EscGoesBackToList(t *testing.T) {
 	m := testModel(testSessions)
 	m.mode = ModeConfirmKill
-	m.confirmTarget = "test-session"
-	m.confirmWindowIndex = "0"
+	m.confirm.target = "test-session"
+	m.confirm.windowIndex = "0"
 	msg := tea.KeyPressMsg{Code: tea.KeyEscape}
 	result, _ := m.updateConfirmKill(msg)
 	rm := result.(Model)
 	if rm.mode != ModeList {
 		t.Errorf("expected ModeList, got %v", rm.mode)
 	}
-	if rm.confirmTarget != "" {
-		t.Errorf("expected confirmTarget cleared, got %q", rm.confirmTarget)
+	if rm.confirm.target != "" {
+		t.Errorf("expected confirmTarget cleared, got %q", rm.confirm.target)
 	}
-	if rm.confirmWindowIndex != "" {
-		t.Errorf("expected confirmWindowIndex cleared, got %q", rm.confirmWindowIndex)
+	if rm.confirm.windowIndex != "" {
+		t.Errorf("expected confirmWindowIndex cleared, got %q", rm.confirm.windowIndex)
 	}
 }
 
 func TestModeConfirmKill_OtherKeyStays(t *testing.T) {
 	m := testModel(testSessions)
 	m.mode = ModeConfirmKill
-	m.confirmTarget = "test-session"
+	m.confirm.target = "test-session"
 	msg := tea.KeyPressMsg{Code: 'x', Text: "x"}
 	result, _ := m.updateConfirmKill(msg)
 	rm := result.(Model)
@@ -435,12 +435,12 @@ func TestModeNewSession_UpMovesCursorUp(t *testing.T) {
 	m := testModel(testSessions)
 	m.mode = ModeNewSession
 	m.filteredDirs = []string{"/repo/a", "/repo/b", "/repo/c"}
-	m.newSessionCursor = 1
+	m.newSess.cursor = 1
 	msg := tea.KeyPressMsg{Code: tea.KeyUp}
 	result, _ := m.updateNewSession(msg)
 	rm := result.(Model)
-	if rm.newSessionCursor != 0 {
-		t.Errorf("expected newSessionCursor=0, got %d", rm.newSessionCursor)
+	if rm.newSess.cursor != 0 {
+		t.Errorf("expected newSessionCursor=0, got %d", rm.newSess.cursor)
 	}
 }
 
@@ -448,12 +448,12 @@ func TestModeNewSession_CtrlKMovesCursorUp(t *testing.T) {
 	m := testModel(testSessions)
 	m.mode = ModeNewSession
 	m.filteredDirs = []string{"/repo/a", "/repo/b", "/repo/c"}
-	m.newSessionCursor = 2
+	m.newSess.cursor = 2
 	msg := tea.KeyPressMsg{Code: 'k', Mod: tea.ModCtrl}
 	result, _ := m.updateNewSession(msg)
 	rm := result.(Model)
-	if rm.newSessionCursor != 1 {
-		t.Errorf("expected newSessionCursor=1, got %d", rm.newSessionCursor)
+	if rm.newSess.cursor != 1 {
+		t.Errorf("expected newSessionCursor=1, got %d", rm.newSess.cursor)
 	}
 }
 
@@ -461,12 +461,12 @@ func TestModeNewSession_UpWrapsAround(t *testing.T) {
 	m := testModel(testSessions)
 	m.mode = ModeNewSession
 	m.filteredDirs = []string{"/repo/a", "/repo/b", "/repo/c"}
-	m.newSessionCursor = 0
+	m.newSess.cursor = 0
 	msg := tea.KeyPressMsg{Code: tea.KeyUp}
 	result, _ := m.updateNewSession(msg)
 	rm := result.(Model)
-	if rm.newSessionCursor != len(m.filteredDirs)-1 {
-		t.Errorf("expected newSessionCursor to wrap to %d, got %d", len(m.filteredDirs)-1, rm.newSessionCursor)
+	if rm.newSess.cursor != len(m.filteredDirs)-1 {
+		t.Errorf("expected newSessionCursor to wrap to %d, got %d", len(m.filteredDirs)-1, rm.newSess.cursor)
 	}
 }
 
@@ -474,12 +474,12 @@ func TestModeNewSession_DownMovesCursorDown(t *testing.T) {
 	m := testModel(testSessions)
 	m.mode = ModeNewSession
 	m.filteredDirs = []string{"/repo/a", "/repo/b", "/repo/c"}
-	m.newSessionCursor = 0
+	m.newSess.cursor = 0
 	msg := tea.KeyPressMsg{Code: tea.KeyDown}
 	result, _ := m.updateNewSession(msg)
 	rm := result.(Model)
-	if rm.newSessionCursor != 1 {
-		t.Errorf("expected newSessionCursor=1, got %d", rm.newSessionCursor)
+	if rm.newSess.cursor != 1 {
+		t.Errorf("expected newSessionCursor=1, got %d", rm.newSess.cursor)
 	}
 }
 
@@ -487,12 +487,12 @@ func TestModeNewSession_CtrlJMovesCursorDown(t *testing.T) {
 	m := testModel(testSessions)
 	m.mode = ModeNewSession
 	m.filteredDirs = []string{"/repo/a", "/repo/b", "/repo/c"}
-	m.newSessionCursor = 1
+	m.newSess.cursor = 1
 	msg := tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl}
 	result, _ := m.updateNewSession(msg)
 	rm := result.(Model)
-	if rm.newSessionCursor != 2 {
-		t.Errorf("expected newSessionCursor=2, got %d", rm.newSessionCursor)
+	if rm.newSess.cursor != 2 {
+		t.Errorf("expected newSessionCursor=2, got %d", rm.newSess.cursor)
 	}
 }
 
@@ -501,12 +501,12 @@ func TestModeNewSession_DownWrapsAround(t *testing.T) {
 	m.mode = ModeNewSession
 	dirs := []string{"/repo/a", "/repo/b", "/repo/c"}
 	m.filteredDirs = dirs
-	m.newSessionCursor = len(dirs) - 1
+	m.newSess.cursor = len(dirs) - 1
 	msg := tea.KeyPressMsg{Code: tea.KeyDown}
 	result, _ := m.updateNewSession(msg)
 	rm := result.(Model)
-	if rm.newSessionCursor != 0 {
-		t.Errorf("expected newSessionCursor to wrap to 0, got %d", rm.newSessionCursor)
+	if rm.newSess.cursor != 0 {
+		t.Errorf("expected newSessionCursor to wrap to 0, got %d", rm.newSess.cursor)
 	}
 }
 
@@ -580,7 +580,7 @@ func TestView_ModeDashboard_ConfigErrorWarning(t *testing.T) {
 func TestView_ModeConfirmKill(t *testing.T) {
 	m := testModel(testSessions)
 	m.mode = ModeConfirmKill
-	m.confirmTarget = "alpha-session"
+	m.confirm.target = "alpha-session"
 	view := m.View().Content
 	if !strings.Contains(view, "Kill session") {
 		t.Error("expected view to contain 'Kill session'")
@@ -630,15 +630,15 @@ func TestUpdate_SessionsMsg(t *testing.T) {
 func TestUpdate_SessionsMsg_ClampsCursor(t *testing.T) {
 	m := New()
 	// Set cursor beyond the new sessions length
-	m.cursor = 5
+	m.list.cursor = 5
 	sessions := []session.Session{
 		{Name: "only-one", Dir: "/tmp", Status: session.StatusIdle, WindowIndex: "0"},
 	}
 	msg := sessionsMsg(sessions)
 	result, _ := m.Update(msg)
 	rm := result.(Model)
-	if rm.cursor != 0 {
-		t.Errorf("expected cursor clamped to 0, got %d", rm.cursor)
+	if rm.list.cursor != 0 {
+		t.Errorf("expected cursor clamped to 0, got %d", rm.list.cursor)
 	}
 }
 
@@ -777,7 +777,7 @@ func TestView_ModeNewSession(t *testing.T) {
 	m := New()
 	m.mode = ModeNewSession
 	m.filteredDirs = []string{"/repo/alpha", "/repo/beta", "/repo/charlie"}
-	m.newSessionCursor = 1
+	m.newSess.cursor = 1
 	view := m.View().Content
 	if !strings.Contains(view, "New Session") {
 		t.Error("expected view to contain 'New Session'")
@@ -804,7 +804,7 @@ func TestModeNewSession_EnterWithValidDir(t *testing.T) {
 	m := testModel(testSessions)
 	m.mode = ModeNewSession
 	m.filteredDirs = []string{os.TempDir()}
-	m.newSessionCursor = 0
+	m.newSess.cursor = 0
 	msg := tea.KeyPressMsg{Code: tea.KeyEnter}
 	result, cmd := m.updateNewSession(msg)
 	rm := result.(Model)
@@ -820,7 +820,7 @@ func TestModeNewSession_EnterWithInvalidDir(t *testing.T) {
 	m := testModel(testSessions)
 	m.mode = ModeNewSession
 	m.filteredDirs = []string{"/nonexistent/path/xyz"}
-	m.newSessionCursor = 0
+	m.newSess.cursor = 0
 	msg := tea.KeyPressMsg{Code: tea.KeyEnter}
 	result, cmd := m.updateNewSession(msg)
 	rm := result.(Model)
@@ -836,7 +836,7 @@ func TestModeNewSession_EnterWithInvalidDir(t *testing.T) {
 func TestView_ModeConfirmKill_WithError(t *testing.T) {
 	m := New()
 	m.mode = ModeConfirmKill
-	m.confirmTarget = "test-session"
+	m.confirm.target = "test-session"
 	m.err = fmt.Errorf("test error")
 	view := m.View().Content
 	if !strings.Contains(view, "Error:") {
@@ -894,11 +894,11 @@ func TestModeList_ShiftKSetsConfirmPaneIndex(t *testing.T) {
 	msg := tea.KeyPressMsg{Code: 'K', Text: "K", ShiftedCode: 'K', Mod: tea.ModShift}
 	result, _ := m.updateList(msg)
 	updated := result.(Model)
-	if updated.confirmWindowIndex != "3" {
-		t.Errorf("confirmWindowIndex = %q, want %q", updated.confirmWindowIndex, "3")
+	if updated.confirm.windowIndex != "3" {
+		t.Errorf("confirmWindowIndex = %q, want %q", updated.confirm.windowIndex, "3")
 	}
-	if updated.confirmPaneIndex != "2" {
-		t.Errorf("confirmPaneIndex = %q, want %q", updated.confirmPaneIndex, "2")
+	if updated.confirm.paneIndex != "2" {
+		t.Errorf("confirmPaneIndex = %q, want %q", updated.confirm.paneIndex, "2")
 	}
 }
 
@@ -1006,21 +1006,21 @@ func TestApplyFilter_MatchBySummary(t *testing.T) {
 
 func TestModeList_PTogglesPreview(t *testing.T) {
 	m := testModel(testSessions)
-	m.previewEnabled = false
+	m.preview.enabled = false
 	msg := tea.KeyPressMsg{Code: 'p', Text: "p"}
 	result, _ := m.updateList(msg)
 	rm := result.(Model)
-	if !rm.previewEnabled {
+	if !rm.preview.enabled {
 		t.Error("expected previewEnabled=true after first p")
 	}
 
 	// Toggle back
 	result2, _ := rm.updateList(msg)
 	rm2 := result2.(Model)
-	if rm2.previewEnabled {
+	if rm2.preview.enabled {
 		t.Error("expected previewEnabled=false after second p")
 	}
-	if rm2.previewContent != "" {
+	if rm2.preview.content != "" {
 		t.Error("expected previewContent cleared")
 	}
 }
@@ -1035,8 +1035,8 @@ func TestModeList_DSwitchesToDashboard(t *testing.T) {
 	if rm.mode != ModeDashboard {
 		t.Errorf("expected ModeDashboard, got %v", rm.mode)
 	}
-	if rm.dashCursor != 0 {
-		t.Errorf("expected dashCursor=0, got %d", rm.dashCursor)
+	if rm.dashboard.cursor != 0 {
+		t.Errorf("expected dashCursor=0, got %d", rm.dashboard.cursor)
 	}
 }
 
@@ -1088,38 +1088,38 @@ func TestModeDashboard_Navigation(t *testing.T) {
 	m.mode = ModeDashboard
 	m.width = 160  // >= 120 → 3 cols
 	m.height = 100 // enough height so all 6 sessions fit on one page
-	m.dashCursor = 0
+	m.dashboard.cursor = 0
 
 	// Move right
 	msg := tea.KeyPressMsg{Code: 'l', Text: "l"}
 	result, _ := m.updateDashboard(msg)
 	rm := result.(Model)
-	if rm.dashCursor != 1 {
-		t.Errorf("after l: expected dashCursor=1, got %d", rm.dashCursor)
+	if rm.dashboard.cursor != 1 {
+		t.Errorf("after l: expected dashCursor=1, got %d", rm.dashboard.cursor)
 	}
 
 	// Move down (3 cols → cursor goes from 1 to 4)
 	msg = tea.KeyPressMsg{Code: 'j', Text: "j"}
 	result, _ = rm.updateDashboard(msg)
 	rm = result.(Model)
-	if rm.dashCursor != 4 {
-		t.Errorf("after j: expected dashCursor=4, got %d", rm.dashCursor)
+	if rm.dashboard.cursor != 4 {
+		t.Errorf("after j: expected dashCursor=4, got %d", rm.dashboard.cursor)
 	}
 
 	// Move left
 	msg = tea.KeyPressMsg{Code: 'h', Text: "h"}
 	result, _ = rm.updateDashboard(msg)
 	rm = result.(Model)
-	if rm.dashCursor != 3 {
-		t.Errorf("after h: expected dashCursor=3, got %d", rm.dashCursor)
+	if rm.dashboard.cursor != 3 {
+		t.Errorf("after h: expected dashCursor=3, got %d", rm.dashboard.cursor)
 	}
 
 	// Move up (3 → 0)
 	msg = tea.KeyPressMsg{Code: 'k', Text: "k"}
 	result, _ = rm.updateDashboard(msg)
 	rm = result.(Model)
-	if rm.dashCursor != 0 {
-		t.Errorf("after k: expected dashCursor=0, got %d", rm.dashCursor)
+	if rm.dashboard.cursor != 0 {
+		t.Errorf("after k: expected dashCursor=0, got %d", rm.dashboard.cursor)
 	}
 }
 
@@ -1127,15 +1127,15 @@ func TestModeDashboard_ShiftKSetsConfirmKill(t *testing.T) {
 	m := testModel(testSessions)
 	m.mode = ModeDashboard
 	m.width = 200
-	m.dashCursor = 0
+	m.dashboard.cursor = 0
 
 	result, _ := m.updateDashboard(tea.KeyPressMsg{Code: 'K', Text: "K"})
 	rm := result.(Model)
 	if rm.mode != ModeConfirmKill {
 		t.Errorf("expected ModeConfirmKill, got %v", rm.mode)
 	}
-	if rm.confirmWindowIndex != testSessions[0].WindowIndex {
-		t.Errorf("expected confirmWindowIndex=%q, got %q", testSessions[0].WindowIndex, rm.confirmWindowIndex)
+	if rm.confirm.windowIndex != testSessions[0].WindowIndex {
+		t.Errorf("expected confirmWindowIndex=%q, got %q", testSessions[0].WindowIndex, rm.confirm.windowIndex)
 	}
 }
 
@@ -1194,42 +1194,42 @@ func TestModeDashboard_BSetsBroadcastSelect(t *testing.T) {
 func broadcastModel(dirs []string) Model {
 	m := New()
 	m.mode = ModeBroadcastSelect
-	m.broadcastDirs = dirs
-	m.broadcastFiltered = dirs
-	m.broadcastSelected = make(map[string]bool)
-	_ = m.broadcastInput.Focus()
+	m.broadcast.dirs = dirs
+	m.broadcast.filtered = dirs
+	m.broadcast.selected = make(map[string]bool)
+	_ = m.broadcast.input.Focus()
 	return m
 }
 
 func TestModeBroadcastSelect_EscGoesBackToList(t *testing.T) {
 	m := broadcastModel([]string{"/repo/a", "/repo/b"})
-	m.broadcastSelected["/repo/a"] = true
+	m.broadcast.selected["/repo/a"] = true
 	result, _ := m.updateBroadcastSelect(tea.KeyPressMsg{Code: tea.KeyEscape})
 	rm := result.(Model)
 	if rm.mode != ModeList {
 		t.Errorf("expected ModeList, got %v", rm.mode)
 	}
-	if len(rm.broadcastSelected) != 0 {
-		t.Errorf("expected broadcastSelected cleared, got %d", len(rm.broadcastSelected))
+	if len(rm.broadcast.selected) != 0 {
+		t.Errorf("expected broadcastSelected cleared, got %d", len(rm.broadcast.selected))
 	}
 }
 
 func TestModeBroadcastSelect_SpaceTogglesSelection(t *testing.T) {
 	dirs := []string{"/repo/a", "/repo/b"}
 	m := broadcastModel(dirs)
-	m.broadcastCursor = 0
+	m.broadcast.cursor = 0
 
 	// Toggle on
 	result, _ := m.updateBroadcastSelect(tea.KeyPressMsg{Code: ' ', Text: " "})
 	rm := result.(Model)
-	if !rm.broadcastSelected["/repo/a"] {
+	if !rm.broadcast.selected["/repo/a"] {
 		t.Error("expected /repo/a to be selected")
 	}
 
 	// Toggle off
 	result, _ = rm.updateBroadcastSelect(tea.KeyPressMsg{Code: ' ', Text: " "})
 	rm = result.(Model)
-	if rm.broadcastSelected["/repo/a"] {
+	if rm.broadcast.selected["/repo/a"] {
 		t.Error("expected /repo/a to be deselected")
 	}
 }
@@ -1237,52 +1237,52 @@ func TestModeBroadcastSelect_SpaceTogglesSelection(t *testing.T) {
 func TestModeBroadcastSelect_UpDownMovesCursor(t *testing.T) {
 	dirs := []string{"/repo/a", "/repo/b", "/repo/c"}
 	m := broadcastModel(dirs)
-	m.broadcastCursor = 0
+	m.broadcast.cursor = 0
 
 	// Down
 	result, _ := m.updateBroadcastSelect(tea.KeyPressMsg{Code: tea.KeyDown})
 	rm := result.(Model)
-	if rm.broadcastCursor != 1 {
-		t.Errorf("expected cursor=1, got %d", rm.broadcastCursor)
+	if rm.broadcast.cursor != 1 {
+		t.Errorf("expected cursor=1, got %d", rm.broadcast.cursor)
 	}
 
 	// Up wraps
-	rm.broadcastCursor = 0
+	rm.broadcast.cursor = 0
 	result, _ = rm.updateBroadcastSelect(tea.KeyPressMsg{Code: tea.KeyUp})
 	rm = result.(Model)
-	if rm.broadcastCursor != 2 {
-		t.Errorf("expected cursor to wrap to 2, got %d", rm.broadcastCursor)
+	if rm.broadcast.cursor != 2 {
+		t.Errorf("expected cursor to wrap to 2, got %d", rm.broadcast.cursor)
 	}
 
 	// Ctrl+J
-	rm.broadcastCursor = 0
+	rm.broadcast.cursor = 0
 	result, _ = rm.updateBroadcastSelect(tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl})
 	rm = result.(Model)
-	if rm.broadcastCursor != 1 {
-		t.Errorf("expected cursor=1 after ctrl+j, got %d", rm.broadcastCursor)
+	if rm.broadcast.cursor != 1 {
+		t.Errorf("expected cursor=1 after ctrl+j, got %d", rm.broadcast.cursor)
 	}
 
 	// Ctrl+K
-	rm.broadcastCursor = 1
+	rm.broadcast.cursor = 1
 	result, _ = rm.updateBroadcastSelect(tea.KeyPressMsg{Code: 'k', Mod: tea.ModCtrl})
 	rm = result.(Model)
-	if rm.broadcastCursor != 0 {
-		t.Errorf("expected cursor=0 after ctrl+k, got %d", rm.broadcastCursor)
+	if rm.broadcast.cursor != 0 {
+		t.Errorf("expected cursor=0 after ctrl+k, got %d", rm.broadcast.cursor)
 	}
 }
 
 func TestModeBroadcastSelect_EnterWithSelectionGoesToPrompt(t *testing.T) {
 	dirs := []string{"/repo/a", "/repo/b"}
 	m := broadcastModel(dirs)
-	m.broadcastSelected["/repo/a"] = true
+	m.broadcast.selected["/repo/a"] = true
 
 	result, cmd := m.updateBroadcastSelect(tea.KeyPressMsg{Code: tea.KeyEnter})
 	rm := result.(Model)
 	if rm.mode != ModeBroadcastPrompt {
 		t.Errorf("expected ModeBroadcastPrompt, got %v", rm.mode)
 	}
-	if len(rm.broadcastTargets) != 1 {
-		t.Errorf("expected 1 target, got %d", len(rm.broadcastTargets))
+	if len(rm.broadcast.targets) != 1 {
+		t.Errorf("expected 1 target, got %d", len(rm.broadcast.targets))
 	}
 	if cmd == nil {
 		t.Error("expected non-nil cmd (focus prompt)")
@@ -1292,15 +1292,15 @@ func TestModeBroadcastSelect_EnterWithSelectionGoesToPrompt(t *testing.T) {
 func TestModeBroadcastSelect_EnterWithNoSelectionUsesCurrentItem(t *testing.T) {
 	dirs := []string{"/repo/a", "/repo/b"}
 	m := broadcastModel(dirs)
-	m.broadcastCursor = 1
+	m.broadcast.cursor = 1
 
 	result, _ := m.updateBroadcastSelect(tea.KeyPressMsg{Code: tea.KeyEnter})
 	rm := result.(Model)
 	if rm.mode != ModeBroadcastPrompt {
 		t.Errorf("expected ModeBroadcastPrompt, got %v", rm.mode)
 	}
-	if len(rm.broadcastTargets) != 1 || rm.broadcastTargets[0].dir != "/repo/b" {
-		t.Errorf("expected cursor item /repo/b as target, got %+v", rm.broadcastTargets)
+	if len(rm.broadcast.targets) != 1 || rm.broadcast.targets[0].dir != "/repo/b" {
+		t.Errorf("expected cursor item /repo/b as target, got %+v", rm.broadcast.targets)
 	}
 }
 
@@ -1323,8 +1323,8 @@ func TestModeBroadcastSelect_EnterWithEmptyListStays(t *testing.T) {
 func TestModeBroadcastPrompt_EscGoesBackToSelect(t *testing.T) {
 	m := New()
 	m.mode = ModeBroadcastPrompt
-	m.broadcastTargets = []broadcastTarget{{dir: "/repo/a"}}
-	_ = m.broadcastPromptInput.Focus()
+	m.broadcast.targets = []broadcastTarget{{dir: "/repo/a"}}
+	_ = m.broadcast.promptInput.Focus()
 
 	result, cmd := m.updateBroadcastPrompt(tea.KeyPressMsg{Code: tea.KeyEscape})
 	rm := result.(Model)
@@ -1339,8 +1339,8 @@ func TestModeBroadcastPrompt_EscGoesBackToSelect(t *testing.T) {
 func TestModeBroadcastPrompt_EnterWithEmptyStays(t *testing.T) {
 	m := New()
 	m.mode = ModeBroadcastPrompt
-	_ = m.broadcastPromptInput.Focus()
-	m.broadcastPromptInput.SetValue("")
+	_ = m.broadcast.promptInput.Focus()
+	m.broadcast.promptInput.SetValue("")
 
 	result, cmd := m.updateBroadcastPrompt(tea.KeyPressMsg{Code: tea.KeyEnter})
 	rm := result.(Model)
@@ -1355,15 +1355,15 @@ func TestModeBroadcastPrompt_EnterWithEmptyStays(t *testing.T) {
 func TestModeBroadcastPrompt_EnterWithTextReturnsCmd(t *testing.T) {
 	m := New()
 	m.mode = ModeBroadcastPrompt
-	m.broadcastTargets = []broadcastTarget{{dir: "/repo/a"}}
-	_ = m.broadcastPromptInput.Focus()
-	m.broadcastPromptInput.SetValue("do the thing")
+	m.broadcast.targets = []broadcastTarget{{dir: "/repo/a"}}
+	_ = m.broadcast.promptInput.Focus()
+	m.broadcast.promptInput.SetValue("do the thing")
 
 	result, cmd := m.updateBroadcastPrompt(tea.KeyPressMsg{Code: tea.KeyEnter})
 	rm := result.(Model)
 	// After enter, broadcastTargets should be cleared (moved into closure)
-	if rm.broadcastTargets != nil {
-		t.Errorf("expected broadcastTargets cleared, got %v", rm.broadcastTargets)
+	if rm.broadcast.targets != nil {
+		t.Errorf("expected broadcastTargets cleared, got %v", rm.broadcast.targets)
 	}
 	if cmd == nil {
 		t.Error("expected non-nil cmd")
@@ -1376,11 +1376,11 @@ func TestModeBroadcastPrompt_EnterWithTextReturnsCmd(t *testing.T) {
 
 func TestUpdate_PreviewMsg(t *testing.T) {
 	m := testModel(testSessions)
-	m.previewEnabled = true
+	m.preview.enabled = true
 	result, _ := m.Update(previewMsg("pane content here"))
 	rm := result.(Model)
-	if rm.previewContent != "pane content here" {
-		t.Errorf("expected previewContent='pane content here', got %q", rm.previewContent)
+	if rm.preview.content != "pane content here" {
+		t.Errorf("expected previewContent='pane content here', got %q", rm.preview.content)
 	}
 }
 
@@ -1390,11 +1390,11 @@ func TestUpdate_DashPreviewsMsg(t *testing.T) {
 	previews := map[int]string{0: "content0", 1: "content1"}
 	result, _ := m.Update(dashPreviewsMsg(previews))
 	rm := result.(Model)
-	if len(rm.dashPreviews) != 2 {
-		t.Errorf("expected 2 dash previews, got %d", len(rm.dashPreviews))
+	if len(rm.dashboard.previews) != 2 {
+		t.Errorf("expected 2 dash previews, got %d", len(rm.dashboard.previews))
 	}
-	if rm.dashPreviews[0] != "content0" {
-		t.Errorf("expected dashPreviews[0]='content0', got %q", rm.dashPreviews[0])
+	if rm.dashboard.previews[0] != "content0" {
+		t.Errorf("expected dashPreviews[0]='content0', got %q", rm.dashboard.previews[0])
 	}
 }
 
@@ -1404,28 +1404,28 @@ func TestUpdate_BroadcastGhqDirsMsg(t *testing.T) {
 	dirs := []string{"/repo/a", "/repo/b", "/repo/c"}
 	result, _ := m.Update(broadcastGhqDirsMsg(dirs))
 	rm := result.(Model)
-	if len(rm.broadcastDirs) != 3 {
-		t.Errorf("expected 3 broadcastDirs, got %d", len(rm.broadcastDirs))
+	if len(rm.broadcast.dirs) != 3 {
+		t.Errorf("expected 3 broadcastDirs, got %d", len(rm.broadcast.dirs))
 	}
-	if len(rm.broadcastFiltered) != 3 {
-		t.Errorf("expected 3 broadcastFiltered, got %d", len(rm.broadcastFiltered))
+	if len(rm.broadcast.filtered) != 3 {
+		t.Errorf("expected 3 broadcastFiltered, got %d", len(rm.broadcast.filtered))
 	}
-	if rm.broadcastCursor != 0 {
-		t.Errorf("expected cursor reset to 0, got %d", rm.broadcastCursor)
+	if rm.broadcast.cursor != 0 {
+		t.Errorf("expected cursor reset to 0, got %d", rm.broadcast.cursor)
 	}
 }
 
 func TestUpdate_BroadcastCompletedMsg(t *testing.T) {
 	m := New()
 	m.mode = ModeBroadcastPrompt
-	m.broadcastTargets = []broadcastTarget{{dir: "/repo/a"}}
+	m.broadcast.targets = []broadcastTarget{{dir: "/repo/a"}}
 	result, cmd := m.Update(broadcastCompletedMsg{errors: nil})
 	rm := result.(Model)
 	if rm.mode != ModeList {
 		t.Errorf("expected ModeList, got %v", rm.mode)
 	}
-	if len(rm.broadcastErrors) != 0 {
-		t.Errorf("expected no errors, got %v", rm.broadcastErrors)
+	if len(rm.broadcast.errors) != 0 {
+		t.Errorf("expected no errors, got %v", rm.broadcast.errors)
 	}
 	if cmd == nil {
 		t.Error("expected non-nil cmd to fetch sessions")
@@ -1441,8 +1441,8 @@ func TestUpdate_BroadcastCompletedMsg_WithErrors(t *testing.T) {
 	if rm.mode != ModeList {
 		t.Errorf("expected ModeList, got %v", rm.mode)
 	}
-	if len(rm.broadcastErrors) != 1 {
-		t.Errorf("expected 1 error, got %d", len(rm.broadcastErrors))
+	if len(rm.broadcast.errors) != 1 {
+		t.Errorf("expected 1 error, got %d", len(rm.broadcast.errors))
 	}
 	if cmd == nil {
 		t.Error("expected non-nil cmd to fetch sessions")
@@ -1458,7 +1458,7 @@ func TestView_ModeDashboard(t *testing.T) {
 	m.mode = ModeDashboard
 	m.width = 120
 	m.height = 40
-	m.dashPreviews = map[int]string{0: "preview content"}
+	m.dashboard.previews = map[int]string{0: "preview content"}
 	out := m.View().Content
 	if out == "" {
 		t.Error("expected non-empty view for ModeDashboard")
@@ -1470,8 +1470,8 @@ func TestView_ModeBroadcastSelect(t *testing.T) {
 	m.mode = ModeBroadcastSelect
 	m.width = 80
 	m.height = 24
-	m.broadcastDirs = []string{"/repo/a", "/repo/b"}
-	m.broadcastFiltered = m.broadcastDirs
+	m.broadcast.dirs = []string{"/repo/a", "/repo/b"}
+	m.broadcast.filtered = m.broadcast.dirs
 	out := m.View().Content
 	if out == "" {
 		t.Error("expected non-empty view for ModeBroadcastSelect")
@@ -1483,7 +1483,7 @@ func TestView_ModeBroadcastPrompt(t *testing.T) {
 	m.mode = ModeBroadcastPrompt
 	m.width = 80
 	m.height = 24
-	m.broadcastTargets = []broadcastTarget{{dir: "/repo/a"}}
+	m.broadcast.targets = []broadcastTarget{{dir: "/repo/a"}}
 	out := m.View().Content
 	if out == "" {
 		t.Error("expected non-empty view for ModeBroadcastPrompt")
@@ -1549,14 +1549,14 @@ func TestPreviewScrollOffset_ResetOnCursorMove(t *testing.T) {
 	m := testModel(testSessions)
 	m.width = 80
 	m.height = 40
-	m.previewEnabled = true
-	m.previewScrollOffset = 10
+	m.preview.enabled = true
+	m.preview.scrollOffset = 10
 
 	// Move cursor down, offset should reset
 	result, _ := m.updateList(tea.KeyPressMsg{Code: 'j', Text: "j"})
 	rm := result.(Model)
-	if rm.previewScrollOffset != 0 {
-		t.Errorf("expected previewScrollOffset=0 after cursor move, got %d", rm.previewScrollOffset)
+	if rm.preview.scrollOffset != 0 {
+		t.Errorf("expected previewScrollOffset=0 after cursor move, got %d", rm.preview.scrollOffset)
 	}
 }
 
@@ -1564,29 +1564,29 @@ func TestPreviewScrollOffset_ResetOnCursorMoveUp(t *testing.T) {
 	m := testModel(testSessions)
 	m.width = 80
 	m.height = 40
-	m.previewEnabled = true
-	m.previewScrollOffset = 5
-	m.cursor = 1
+	m.preview.enabled = true
+	m.preview.scrollOffset = 5
+	m.list.cursor = 1
 
 	result, _ := m.updateList(tea.KeyPressMsg{Code: 'k', Text: "k"})
 	rm := result.(Model)
-	if rm.previewScrollOffset != 0 {
-		t.Errorf("expected previewScrollOffset=0 after cursor move up, got %d", rm.previewScrollOffset)
+	if rm.preview.scrollOffset != 0 {
+		t.Errorf("expected previewScrollOffset=0 after cursor move up, got %d", rm.preview.scrollOffset)
 	}
 }
 
 func TestPreviewScrollOffset_ResetOnPreviewToggleOff(t *testing.T) {
 	m := testModel(testSessions)
-	m.previewEnabled = true
-	m.previewScrollOffset = 7
-	m.previewContent = "some content"
+	m.preview.enabled = true
+	m.preview.scrollOffset = 7
+	m.preview.content = "some content"
 
 	result, _ := m.updateList(tea.KeyPressMsg{Code: 'p', Text: "p"})
 	rm := result.(Model)
-	if rm.previewScrollOffset != 0 {
-		t.Errorf("expected previewScrollOffset=0 after toggle off, got %d", rm.previewScrollOffset)
+	if rm.preview.scrollOffset != 0 {
+		t.Errorf("expected previewScrollOffset=0 after toggle off, got %d", rm.preview.scrollOffset)
 	}
-	if rm.previewEnabled {
+	if rm.preview.enabled {
 		t.Error("expected previewEnabled=false after toggle")
 	}
 }
@@ -1595,16 +1595,16 @@ func TestPreviewScrollOffset_ResetOnDashboardEntry(t *testing.T) {
 	m := testModel(testSessions)
 	m.width = 200
 	m.height = 40
-	m.previewEnabled = true
-	m.previewScrollOffset = 10
+	m.preview.enabled = true
+	m.preview.scrollOffset = 10
 
 	result, _ := m.updateList(tea.KeyPressMsg{Code: 'd', Text: "d"})
 	rm := result.(Model)
 	if rm.mode != ModeDashboard {
 		t.Errorf("expected ModeDashboard, got %v", rm.mode)
 	}
-	if rm.previewScrollOffset != 0 {
-		t.Errorf("expected previewScrollOffset=0 after entering dashboard, got %d", rm.previewScrollOffset)
+	if rm.preview.scrollOffset != 0 {
+		t.Errorf("expected previewScrollOffset=0 after entering dashboard, got %d", rm.preview.scrollOffset)
 	}
 }
 
@@ -1612,13 +1612,13 @@ func TestPreviewScroll_CtrlU_IncreasesOffset(t *testing.T) {
 	m := testModel(testSessions)
 	m.width = 80
 	m.height = 40
-	m.previewEnabled = true
-	m.previewScrollOffset = 0
+	m.preview.enabled = true
+	m.preview.scrollOffset = 0
 
 	result, _ := m.updateList(tea.KeyPressMsg{Mod: tea.ModCtrl, Code: 'u'})
 	rm := result.(Model)
-	if rm.previewScrollOffset <= 0 {
-		t.Errorf("expected previewScrollOffset > 0 after Ctrl+U, got %d", rm.previewScrollOffset)
+	if rm.preview.scrollOffset <= 0 {
+		t.Errorf("expected previewScrollOffset > 0 after Ctrl+U, got %d", rm.preview.scrollOffset)
 	}
 }
 
@@ -1626,13 +1626,13 @@ func TestPreviewScroll_CtrlD_DecreasesOffset(t *testing.T) {
 	m := testModel(testSessions)
 	m.width = 80
 	m.height = 40
-	m.previewEnabled = true
-	m.previewScrollOffset = 20
+	m.preview.enabled = true
+	m.preview.scrollOffset = 20
 
 	result, _ := m.updateList(tea.KeyPressMsg{Mod: tea.ModCtrl, Code: 'd'})
 	rm := result.(Model)
-	if rm.previewScrollOffset >= 20 {
-		t.Errorf("expected previewScrollOffset < 20 after Ctrl+D, got %d", rm.previewScrollOffset)
+	if rm.preview.scrollOffset >= 20 {
+		t.Errorf("expected previewScrollOffset < 20 after Ctrl+D, got %d", rm.preview.scrollOffset)
 	}
 }
 
@@ -1640,25 +1640,25 @@ func TestPreviewScroll_CtrlD_ClampsAtZero(t *testing.T) {
 	m := testModel(testSessions)
 	m.width = 80
 	m.height = 40
-	m.previewEnabled = true
-	m.previewScrollOffset = 1 // less than scroll step
+	m.preview.enabled = true
+	m.preview.scrollOffset = 1 // less than scroll step
 
 	result, _ := m.updateList(tea.KeyPressMsg{Mod: tea.ModCtrl, Code: 'd'})
 	rm := result.(Model)
-	if rm.previewScrollOffset < 0 {
-		t.Errorf("expected previewScrollOffset >= 0, got %d", rm.previewScrollOffset)
+	if rm.preview.scrollOffset < 0 {
+		t.Errorf("expected previewScrollOffset >= 0, got %d", rm.preview.scrollOffset)
 	}
 }
 
 func TestPreviewScroll_NoOpWhenPreviewDisabled(t *testing.T) {
 	m := testModel(testSessions)
-	m.previewEnabled = false
-	m.previewScrollOffset = 0
+	m.preview.enabled = false
+	m.preview.scrollOffset = 0
 
 	result, _ := m.updateList(tea.KeyPressMsg{Mod: tea.ModCtrl, Code: 'u'})
 	rm := result.(Model)
-	if rm.previewScrollOffset != 0 {
-		t.Errorf("expected previewScrollOffset=0 when preview disabled, got %d", rm.previewScrollOffset)
+	if rm.preview.scrollOffset != 0 {
+		t.Errorf("expected previewScrollOffset=0 when preview disabled, got %d", rm.preview.scrollOffset)
 	}
 }
 
@@ -1763,7 +1763,7 @@ func TestDashboard_Pagination_NextPage(t *testing.T) {
 	m.mode = ModeDashboard
 	m.width = 80  // 1 col
 	m.height = 20 // limited height forces pagination
-	m.dashPageOffset = 0
+	m.dashboard.pageOffset = 0
 
 	maxVisible := m.dashMaxVisible()
 	if maxVisible >= 20 {
@@ -1772,11 +1772,11 @@ func TestDashboard_Pagination_NextPage(t *testing.T) {
 
 	result, _ := m.updateDashboard(tea.KeyPressMsg{Code: ']', Text: "]"})
 	rm := result.(Model)
-	if rm.dashPageOffset != maxVisible {
-		t.Errorf("expected dashPageOffset=%d after ], got %d", maxVisible, rm.dashPageOffset)
+	if rm.dashboard.pageOffset != maxVisible {
+		t.Errorf("expected dashPageOffset=%d after ], got %d", maxVisible, rm.dashboard.pageOffset)
 	}
-	if rm.dashCursor != 0 {
-		t.Errorf("expected dashCursor=0 after page change, got %d", rm.dashCursor)
+	if rm.dashboard.cursor != 0 {
+		t.Errorf("expected dashCursor=0 after page change, got %d", rm.dashboard.cursor)
 	}
 }
 
@@ -1790,13 +1790,13 @@ func TestDashboard_Pagination_PrevPage(t *testing.T) {
 	m.width = 80
 	m.height = 20
 	maxVisible := m.dashMaxVisible()
-	m.dashPageOffset = maxVisible // start on page 2
-	m.dashCursor = 0
+	m.dashboard.pageOffset = maxVisible // start on page 2
+	m.dashboard.cursor = 0
 
 	result, _ := m.updateDashboard(tea.KeyPressMsg{Code: '[', Text: "["})
 	rm := result.(Model)
-	if rm.dashPageOffset != 0 {
-		t.Errorf("expected dashPageOffset=0 after [, got %d", rm.dashPageOffset)
+	if rm.dashboard.pageOffset != 0 {
+		t.Errorf("expected dashPageOffset=0 after [, got %d", rm.dashboard.pageOffset)
 	}
 }
 
@@ -1809,12 +1809,12 @@ func TestDashboard_Pagination_PrevPage_AtStart(t *testing.T) {
 	m.mode = ModeDashboard
 	m.width = 80
 	m.height = 20
-	m.dashPageOffset = 0 // already on first page
+	m.dashboard.pageOffset = 0 // already on first page
 
 	result, _ := m.updateDashboard(tea.KeyPressMsg{Code: '[', Text: "["})
 	rm := result.(Model)
-	if rm.dashPageOffset != 0 {
-		t.Errorf("expected dashPageOffset=0 (no change), got %d", rm.dashPageOffset)
+	if rm.dashboard.pageOffset != 0 {
+		t.Errorf("expected dashPageOffset=0 (no change), got %d", rm.dashboard.pageOffset)
 	}
 }
 
@@ -1827,7 +1827,7 @@ func TestDashboard_ViewShowsPageIndicator(t *testing.T) {
 	m.mode = ModeDashboard
 	m.width = 80
 	m.height = 20
-	m.dashPageOffset = 0
+	m.dashboard.pageOffset = 0
 
 	var b strings.Builder
 	view := m.viewDashboard(&b)
@@ -1855,13 +1855,13 @@ func TestDashboard_CtrlU_ScrollsPreviewUp(t *testing.T) {
 	m.mode = ModeDashboard
 	m.width = 80
 	m.height = 20
-	m.dashCursor = 0
-	m.dashPreviews = map[int]string{0: testDashPreview(50), 1: testDashPreview(50)}
+	m.dashboard.cursor = 0
+	m.dashboard.previews = map[int]string{0: testDashPreview(50), 1: testDashPreview(50)}
 
 	result, _ := m.updateDashboard(tea.KeyPressMsg{Mod: tea.ModCtrl, Code: 'u'})
 	rm := result.(Model)
-	if rm.previewScrollOffset <= 0 {
-		t.Errorf("expected previewScrollOffset > 0 after ctrl+u, got %d", rm.previewScrollOffset)
+	if rm.preview.scrollOffset <= 0 {
+		t.Errorf("expected previewScrollOffset > 0 after ctrl+u, got %d", rm.preview.scrollOffset)
 	}
 }
 
@@ -1874,14 +1874,14 @@ func TestDashboard_CtrlD_ScrollsPreviewDown(t *testing.T) {
 	m.mode = ModeDashboard
 	m.width = 80
 	m.height = 20
-	m.dashCursor = 0
-	m.dashPreviews = map[int]string{0: testDashPreview(50), 1: testDashPreview(50)}
-	m.previewScrollOffset = 10
+	m.dashboard.cursor = 0
+	m.dashboard.previews = map[int]string{0: testDashPreview(50), 1: testDashPreview(50)}
+	m.preview.scrollOffset = 10
 
 	result, _ := m.updateDashboard(tea.KeyPressMsg{Mod: tea.ModCtrl, Code: 'd'})
 	rm := result.(Model)
-	if rm.previewScrollOffset >= 10 {
-		t.Errorf("expected previewScrollOffset < 10 after ctrl+d, got %d", rm.previewScrollOffset)
+	if rm.preview.scrollOffset >= 10 {
+		t.Errorf("expected previewScrollOffset < 10 after ctrl+d, got %d", rm.preview.scrollOffset)
 	}
 }
 
@@ -1893,13 +1893,13 @@ func TestDashboard_CtrlD_ClampsToZero(t *testing.T) {
 	m.mode = ModeDashboard
 	m.width = 80
 	m.height = 20
-	m.dashCursor = 0
-	m.previewScrollOffset = 1
+	m.dashboard.cursor = 0
+	m.preview.scrollOffset = 1
 
 	result, _ := m.updateDashboard(tea.KeyPressMsg{Mod: tea.ModCtrl, Code: 'd'})
 	rm := result.(Model)
-	if rm.previewScrollOffset != 0 {
-		t.Errorf("expected previewScrollOffset=0 after ctrl+d clamp, got %d", rm.previewScrollOffset)
+	if rm.preview.scrollOffset != 0 {
+		t.Errorf("expected previewScrollOffset=0 after ctrl+d clamp, got %d", rm.preview.scrollOffset)
 	}
 }
 
@@ -1912,13 +1912,13 @@ func TestDashboard_CursorMove_ResetsScrollOffset(t *testing.T) {
 	m.mode = ModeDashboard
 	m.width = 160 // wide enough for 2 columns
 	m.height = 20
-	m.dashCursor = 0
-	m.previewScrollOffset = 10
+	m.dashboard.cursor = 0
+	m.preview.scrollOffset = 10
 
 	result, _ := m.updateDashboard(tea.KeyPressMsg{Code: 'l', Text: "l"})
 	rm := result.(Model)
-	if rm.previewScrollOffset != 0 {
-		t.Errorf("expected previewScrollOffset=0 after cursor move, got %d", rm.previewScrollOffset)
+	if rm.preview.scrollOffset != 0 {
+		t.Errorf("expected previewScrollOffset=0 after cursor move, got %d", rm.preview.scrollOffset)
 	}
 }
 
@@ -1930,15 +1930,15 @@ func TestDashboard_ExitToList_ResetsScrollOffset(t *testing.T) {
 	m.mode = ModeDashboard
 	m.width = 80
 	m.height = 20
-	m.previewScrollOffset = 5
+	m.preview.scrollOffset = 5
 
 	result, _ := m.updateDashboard(tea.KeyPressMsg{Code: 'd', Text: "d"})
 	rm := result.(Model)
 	if rm.mode != ModeList {
 		t.Fatalf("expected ModeList, got %d", rm.mode)
 	}
-	if rm.previewScrollOffset != 0 {
-		t.Errorf("expected previewScrollOffset=0 after exiting dashboard, got %d", rm.previewScrollOffset)
+	if rm.preview.scrollOffset != 0 {
+		t.Errorf("expected previewScrollOffset=0 after exiting dashboard, got %d", rm.preview.scrollOffset)
 	}
 }
 
@@ -1948,14 +1948,14 @@ func TestListPanelWidth(t *testing.T) {
 	m := testModel(nil)
 
 	// Preview disabled: full width
-	m.previewEnabled = false
+	m.preview.enabled = false
 	m.width = 200
 	if got := m.listPanelWidth(); got != 200 {
 		t.Errorf("preview off: expected 200, got %d", got)
 	}
 
 	// Preview enabled, wide terminal: 45%
-	m.previewEnabled = true
+	m.preview.enabled = true
 	m.width = 200
 	if got := m.listPanelWidth(); got != 90 {
 		t.Errorf("wide: expected 90 (45%% of 200), got %d", got)
@@ -1976,7 +1976,7 @@ func TestListPanelWidth(t *testing.T) {
 
 func TestPreviewPanelWidth_Invariant(t *testing.T) {
 	m := testModel(nil)
-	m.previewEnabled = true
+	m.preview.enabled = true
 
 	for _, w := range []int{80, 100, 120, 160, 200, 256} {
 		m.width = w
@@ -2292,7 +2292,7 @@ func TestModeDashboardPrompt_EnterWithTextReturns(t *testing.T) {
 	m := testModel(testSessions)
 	m.mode = ModeDashboardPrompt
 	m.width = 200
-	m.dashboardPromptInput.SetValue("hello")
+	m.dashboard.promptInput.SetValue("hello")
 
 	result, cmd := m.updateDashboardPrompt(tea.KeyPressMsg{Code: tea.KeyEnter, Text: ""})
 	rm := result.(Model)
@@ -2308,7 +2308,7 @@ func TestModeDashboardPrompt_EnterEmptyDoesNothing(t *testing.T) {
 	m := testModel(testSessions)
 	m.mode = ModeDashboardPrompt
 	m.width = 200
-	m.dashboardPromptInput.SetValue("")
+	m.dashboard.promptInput.SetValue("")
 
 	result, cmd := m.updateDashboardPrompt(tea.KeyPressMsg{Code: tea.KeyEnter, Text: ""})
 	rm := result.(Model)
@@ -2324,7 +2324,7 @@ func TestModeDashboardPrompt_EnterWhitespaceOnlyDoesNothing(t *testing.T) {
 	m := testModel(testSessions)
 	m.mode = ModeDashboardPrompt
 	m.width = 200
-	m.dashboardPromptInput.SetValue("   ")
+	m.dashboard.promptInput.SetValue("   ")
 
 	result, cmd := m.updateDashboardPrompt(tea.KeyPressMsg{Code: tea.KeyEnter, Text: ""})
 	rm := result.(Model)
@@ -2340,8 +2340,8 @@ func TestModeDashboardPrompt_EnterWithStaleIndex(t *testing.T) {
 	m := testModel(testSessions)
 	m.mode = ModeDashboardPrompt
 	m.width = 200
-	m.dashboardPromptInput.SetValue("hello")
-	m.dashCursor = 99 // out of bounds
+	m.dashboard.promptInput.SetValue("hello")
+	m.dashboard.cursor = 99 // out of bounds
 
 	result, cmd := m.updateDashboardPrompt(tea.KeyPressMsg{Code: tea.KeyEnter, Text: ""})
 	rm := result.(Model)
@@ -2391,7 +2391,7 @@ func TestModeListPrompt_EscGoesBack(t *testing.T) {
 func TestModeListPrompt_EnterWithTextReturns(t *testing.T) {
 	m := testModel(testSessions)
 	m.mode = ModeListPrompt
-	m.dashboardPromptInput.SetValue("hello")
+	m.dashboard.promptInput.SetValue("hello")
 
 	result, cmd := m.updateListPrompt(tea.KeyPressMsg{Code: tea.KeyEnter, Text: ""})
 	rm := result.(Model)
@@ -2406,7 +2406,7 @@ func TestModeListPrompt_EnterWithTextReturns(t *testing.T) {
 func TestModeListPrompt_EnterEmptyDoesNothing(t *testing.T) {
 	m := testModel(testSessions)
 	m.mode = ModeListPrompt
-	m.dashboardPromptInput.SetValue("")
+	m.dashboard.promptInput.SetValue("")
 
 	result, cmd := m.updateListPrompt(tea.KeyPressMsg{Code: tea.KeyEnter, Text: ""})
 	rm := result.(Model)
@@ -2421,7 +2421,7 @@ func TestModeListPrompt_EnterEmptyDoesNothing(t *testing.T) {
 func TestModeListPrompt_EnterWhitespaceOnlyDoesNothing(t *testing.T) {
 	m := testModel(testSessions)
 	m.mode = ModeListPrompt
-	m.dashboardPromptInput.SetValue("   ")
+	m.dashboard.promptInput.SetValue("   ")
 
 	result, cmd := m.updateListPrompt(tea.KeyPressMsg{Code: tea.KeyEnter, Text: ""})
 	rm := result.(Model)
@@ -2436,8 +2436,8 @@ func TestModeListPrompt_EnterWhitespaceOnlyDoesNothing(t *testing.T) {
 func TestModeListPrompt_EnterWithStaleIndex(t *testing.T) {
 	m := testModel(testSessions)
 	m.mode = ModeListPrompt
-	m.dashboardPromptInput.SetValue("hello")
-	m.cursor = 99 // out of bounds
+	m.dashboard.promptInput.SetValue("hello")
+	m.list.cursor = 99 // out of bounds
 
 	result, cmd := m.updateListPrompt(tea.KeyPressMsg{Code: tea.KeyEnter, Text: ""})
 	rm := result.(Model)
@@ -2456,8 +2456,8 @@ func TestView_ModeDashboardPrompt_OverlaySendPrompt(t *testing.T) {
 	m.mode = ModeDashboardPrompt
 	m.width = 120
 	m.height = 40
-	m.dashCursor = 0
-	m.dashPageOffset = 0
+	m.dashboard.cursor = 0
+	m.dashboard.pageOffset = 0
 	view := m.View().Content
 	// Should contain overlay title with target session name
 	if !strings.Contains(view, "Send to") {
@@ -2480,7 +2480,7 @@ func TestView_ModeListPrompt_OverlaySendPrompt(t *testing.T) {
 	m.mode = ModeListPrompt
 	m.width = 120
 	m.height = 40
-	m.cursor = 1
+	m.list.cursor = 1
 	view := m.View().Content
 	// Should contain overlay title with target session name
 	if !strings.Contains(view, "Send to") {
@@ -2497,7 +2497,7 @@ func TestViewSendPrompt_ShowsDirAndBranch(t *testing.T) {
 	}
 	m := testModel(sessions)
 	m.mode = ModeListPrompt
-	m.cursor = 0
+	m.list.cursor = 0
 	var b strings.Builder
 	overlay, _ := m.viewSendPrompt(&b)
 	if !strings.Contains(overlay, "feature/overlay") {
@@ -2511,7 +2511,7 @@ func TestViewSendPrompt_StripsWorktreePath(t *testing.T) {
 	}
 	m := testModel(sessions)
 	m.mode = ModeListPrompt
-	m.cursor = 0
+	m.list.cursor = 0
 	var b strings.Builder
 	overlay, _ := m.viewSendPrompt(&b)
 	if strings.Contains(overlay, ".claude/worktrees") {
@@ -2527,8 +2527,8 @@ func TestViewSendPrompt_DashboardPromptUsesCorrectTarget(t *testing.T) {
 	}
 	m := testModel(sessions)
 	m.mode = ModeDashboardPrompt
-	m.dashPageOffset = 0
-	m.dashCursor = 2
+	m.dashboard.pageOffset = 0
+	m.dashboard.cursor = 2
 	var b strings.Builder
 	overlay, _ := m.viewSendPrompt(&b)
 	if !strings.Contains(overlay, "third") {
@@ -2539,7 +2539,7 @@ func TestViewSendPrompt_DashboardPromptUsesCorrectTarget(t *testing.T) {
 func TestViewSendPrompt_EmptyFilteredSessions(t *testing.T) {
 	m := testModel(nil)
 	m.mode = ModeListPrompt
-	m.cursor = 0
+	m.list.cursor = 0
 	var b strings.Builder
 	overlay, cur := m.viewSendPrompt(&b)
 	if !strings.Contains(overlay, "Send to") {
