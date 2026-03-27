@@ -91,32 +91,39 @@ Run `clux init` to configure your environment:
 clux                  Launch the TUI session switcher
 clux dashboard        Launch directly in dashboard mode
 clux init             Install Claude Code hook, @clux-summary instructions, and default config
-clux add <sess:win>   Register an external tmux session:window
-clux remove <sess:win> Unregister an external session
-clux list             List registered external sessions
 ```
 
 ## Configuration
 
-Config file: `~/.config/clux/sessions.json`
+Config file: `~/.config/clux/config.toml`
 
-```json
-{
-  "preview_default": false,
-  "group_default": false,
-  "notifications": {
-    "working_to_idle": true,
-    "working_to_waiting": true
-  }
-}
+```toml
+# Show preview panel by default
+preview_default = true
+
+# Show grouped by repository by default
+group_default = false
+
+# Bell notifications on status changes
+[notifications]
+working_to_idle = true
+working_to_waiting = true
+
+# Key bindings (each action accepts multiple keys)
+[keymaps]
+move_up = ["k", "up"]
+move_down = ["j", "down"]
+quit = ["q"]
+# ... (see full list in generated config)
 ```
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `preview_default` | `false` | Start with preview panel open |
+| `preview_default` | `true` | Start with preview panel open |
 | `group_default` | `false` | Start with grouping enabled |
 | `notifications.working_to_idle` | `true` | Bell on Working → Idle |
 | `notifications.working_to_waiting` | `true` | Bell on Working → Waiting |
+| `keymaps.*` | (see defaults) | Custom key bindings per action |
 
 ## Requirements
 
