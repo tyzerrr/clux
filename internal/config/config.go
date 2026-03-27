@@ -203,20 +203,32 @@ func formatKey(key string) string {
 	return key
 }
 
-// formatKeyGroups returns a slash-joined, deduplicated display string for multiple key lists.
-func formatKeyGroups(keyGroups ...[]string) string {
+// formatKeyGroupsMax returns a slash-joined, deduplicated display string for multiple key lists,
+// limiting each group to at most max keys (0 means unlimited).
+func formatKeyGroupsMax(max int, keyGroups ...[]string) string {
 	seen := make(map[string]bool)
 	var parts []string
 	for _, keys := range keyGroups {
+		count := 0
 		for _, key := range keys {
+			if max > 0 && count >= max {
+				break
+			}
 			d := formatKey(key)
 			if !seen[d] {
 				seen[d] = true
 				parts = append(parts, d)
+				count++
 			}
 		}
 	}
 	return strings.Join(parts, "/")
+}
+
+// formatKeyGroups returns a slash-joined, deduplicated display string for multiple key lists,
+// showing at most 2 keys per group to keep the help bar concise.
+func formatKeyGroups(keyGroups ...[]string) string {
+	return formatKeyGroupsMax(2, keyGroups...)
 }
 
 func (k *KeymapConfig) HintMoveUp() string      { return formatKeyGroups(k.MoveUp) }

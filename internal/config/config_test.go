@@ -395,6 +395,42 @@ func TestFormatKey_SpecialKeys(t *testing.T) {
 	}
 }
 
+func TestFormatKeyGroupsMax(t *testing.T) {
+	// max=2 limits each group to 2 keys
+	got := formatKeyGroupsMax(2, []string{"a", "b", "c", "d"})
+	if got != "a/b" {
+		t.Errorf("expected 'a/b', got %q", got)
+	}
+
+	// max=0 means unlimited
+	got = formatKeyGroupsMax(0, []string{"a", "b", "c"})
+	if got != "a/b/c" {
+		t.Errorf("expected 'a/b/c', got %q", got)
+	}
+
+	// multiple groups each capped at 2
+	got = formatKeyGroupsMax(2, []string{"a", "b", "c"}, []string{"x", "y", "z"})
+	if got != "a/b/x/y" {
+		t.Errorf("expected 'a/b/x/y', got %q", got)
+	}
+
+	// deduplication: duplicate from group 1 does not count toward group 2 limit
+	got = formatKeyGroupsMax(2, []string{"a", "b"}, []string{"a", "c", "d"})
+	if got != "a/b/c/d" {
+		t.Errorf("expected 'a/b/c/d', got %q", got)
+	}
+}
+
+func TestFormatKeyGroups_CapsAtTwo(t *testing.T) {
+	km := DefaultKeymap()
+	// MoveUp has 4 default keys; hint should only show 2
+	hint := km.HintMoveUp()
+	parts := strings.Split(hint, "/")
+	if len(parts) > 2 {
+		t.Errorf("HintMoveUp should show at most 2 keys, got %d: %q", len(parts), hint)
+	}
+}
+
 func TestConfig_Keymaps_LoadDefaults(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)

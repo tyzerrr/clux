@@ -2321,7 +2321,7 @@ func (m Model) viewDashboard(b *strings.Builder) string {
 	// Help bar
 	b.WriteString("\n")
 	km := m.cfg.Keymaps
-	b.WriteString(styleHelpBar.Render("↵:attach  " + km.HintInput() + ":send  " + km.HintKill() + ":kill  " + km.HintNewSession() + ":new  " + km.HintFilter() + ":filter  " + km.HintBroadcast() + ":broadcast  " + km.HintScroll() + ":scroll  " + km.HintPrevPage() + ":prev " + km.HintNextPage() + ":next  " + km.HintNavigateFull() + ":navigate  Esc/" + km.HintDashboard() + ":back  " + km.HintQuit() + ":quit"))
+	b.WriteString(styleHelpBar.Render("↵:attach  " + km.HintNavigateFull() + ":navigate  " + km.HintNewSession() + ":new  " + km.HintInput() + ":send  " + km.HintBroadcast() + ":broadcast  " + km.HintKill() + ":kill  " + km.HintScroll() + ":scroll  " + km.HintPrevPage() + ":prev " + km.HintNextPage() + ":next  " + km.HintFilter() + ":filter  Esc/" + km.HintDashboard() + ":back  " + km.HintQuit() + ":quit"))
 
 	return b.String()
 }
