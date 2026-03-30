@@ -358,8 +358,7 @@ var (
 func isPersistentChildByMaps(pid int, commByPID map[int]string) bool {
 	name := commByPID[pid]
 	switch name {
-	case "node", "gopls", "caffeinate",
-		"bigbrother-mcp-server", "tasq", "memq":
+	case "node", "gopls", "caffeinate":
 		return true
 	}
 	return false
