@@ -51,8 +51,8 @@ func hashContent(content string) uint64 {
 		if idleTimerPattern.MatchString(line) {
 			continue
 		}
-		io.WriteString(h, line)
-		io.WriteString(h, "\n")
+		_, _ = io.WriteString(h, line)
+		_, _ = io.WriteString(h, "\n")
 	}
 	return h.Sum64()
 }
