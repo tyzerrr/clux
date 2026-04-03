@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -18,24 +19,28 @@ var (
 	date    = ""
 )
 
+type cliAction int
+
+const (
+	cliActionLaunch cliAction = iota
+	cliActionDashboard
+	cliActionInit
+	cliActionExit
+)
+
 func main() {
-	if len(os.Args) > 1 {
-		switch os.Args[1] {
-		case "--version", "-v":
-			if commit != "" && date != "" {
-				fmt.Printf("clux %s (%s, built %s)\n", version, commit, date)
-			} else {
-				fmt.Printf("clux %s\n", version)
-			}
-			return
-		case "dashboard":
-			cmdDashboard()
-		case "init":
-			cmdInit()
-		default:
-			fmt.Fprintf(os.Stderr, "Unknown command: %s\nUsage: clux [dashboard|init]\n", os.Args[1])
-			os.Exit(1)
+	action, exitCode := dispatchCLI(os.Args[1:], os.Stdout, os.Stderr)
+	switch action {
+	case cliActionExit:
+		if exitCode != 0 {
+			os.Exit(exitCode)
 		}
+		return
+	case cliActionDashboard:
+		cmdDashboard()
+		return
+	case cliActionInit:
+		cmdInit()
 		return
 	}
 
@@ -67,6 +72,114 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func dispatchCLI(args []string, stdout, stderr io.Writer) (cliAction, int) {
+	if len(args) == 0 {
+		return cliActionLaunch, 0
+	}
+
+	switch args[0] {
+	case "-h", "--help":
+		if len(args) > 1 {
+			return writeUnexpectedArgs(stderr, "clux", args[1:])
+		}
+		writeRootHelp(stdout)
+		return cliActionExit, 0
+	case "-v", "--version":
+		if len(args) > 1 {
+			return writeUnexpectedArgs(stderr, "clux", args[1:])
+		}
+		writeVersion(stdout)
+		return cliActionExit, 0
+	case "dashboard":
+		return dispatchSubcommand(args[1:], "dashboard", writeDashboardHelp, cliActionDashboard, stdout, stderr)
+	case "init":
+		return dispatchSubcommand(args[1:], "init", writeInitHelp, cliActionInit, stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "clux: unknown command %q\n\n", args[0])
+		writeRootHelp(stderr)
+		return cliActionExit, 1
+	}
+}
+
+func dispatchSubcommand(args []string, name string, helpWriter func(io.Writer), action cliAction, stdout, stderr io.Writer) (cliAction, int) {
+	if len(args) == 0 {
+		return action, 0
+	}
+	if len(args) == 1 && isHelpFlag(args[0]) {
+		helpWriter(stdout)
+		return cliActionExit, 0
+	}
+	return writeUnexpectedArgs(stderr, "clux "+name, args)
+}
+
+func writeUnexpectedArgs(w io.Writer, command string, args []string) (cliAction, int) {
+	fmt.Fprintf(w, "%s: unexpected argument %q\n\n", command, args[0])
+	switch command {
+	case "clux":
+		writeRootHelp(w)
+	case "clux dashboard":
+		writeDashboardHelp(w)
+	case "clux init":
+		writeInitHelp(w)
+	}
+	return cliActionExit, 1
+}
+
+func isHelpFlag(arg string) bool {
+	return arg == "-h" || arg == "--help"
+}
+
+func writeVersion(w io.Writer) {
+	if commit != "" && date != "" {
+		fmt.Fprintf(w, "clux %s (%s, built %s)\n", version, commit, date)
+		return
+	}
+	fmt.Fprintf(w, "clux %s\n", version)
+}
+
+func writeRootHelp(w io.Writer) {
+	fmt.Fprint(w, `Usage:
+  clux [command]
+
+Launch the clux TUI session switcher.
+
+Commands:
+  dashboard    Launch directly in dashboard mode
+  init         Install hook, tmux binding, @clux-summary instructions, and default config
+
+Options:
+  -h, --help       Show help
+  -v, --version    Show version information
+
+Examples:
+  clux
+  clux dashboard
+  clux init
+`)
+}
+
+func writeDashboardHelp(w io.Writer) {
+	fmt.Fprint(w, `Usage:
+  clux dashboard
+
+Launch clux directly in dashboard mode.
+
+Options:
+  -h, --help    Show help
+`)
+}
+
+func writeInitHelp(w io.Writer) {
+	fmt.Fprint(w, `Usage:
+  clux init
+
+Install the Claude Code hook, tmux binding, @clux-summary instructions, and default config.
+
+Options:
+  -h, --help    Show help
+`)
 }
 
 func cmdDashboard() {
