@@ -20,6 +20,12 @@ var (
 	// Requires a gerund word (\w+ing) to avoid false positives on truncated
 	// tool output lines like "⏺ Bash(long command…".
 	spinnerPattern = regexp.MustCompile(`(?m)^\s*[\x{2720}-\x{2767}\x{23FA}\x{25C9}-\x{25CF}] \S*[Ii]ng\b.*…`)
+
+	// localAgentCountPattern matches Claude Code's status bar when background
+	// agents are active, e.g. "▸▸ accept edits on · 3 local agents" or
+	// "· 1 local agent". The "N local agent(s)" pattern is specific enough
+	// to avoid false positives on discussion text.
+	localAgentCountPattern = regexp.MustCompile(`\d+ local agents?\b`)
 )
 
 // claudePaneInfo holds metadata for a pane identified as running Claude Code.
@@ -482,6 +488,12 @@ func isWorking(content string) bool {
 	// "ing") to avoid false positives on truncated tool output lines like
 	// "⏺ Bash(very long command…".
 	if spinnerPattern.MatchString(content) {
+		return true
+	}
+
+	// Agent count in status bar: "▸▸ accept edits on · 3 local agents".
+	// Catches background agents when the "still running" suffix is absent.
+	if localAgentCountPattern.MatchString(content) {
 		return true
 	}
 

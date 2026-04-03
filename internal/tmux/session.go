@@ -39,10 +39,12 @@ func ListWindows() ([]session.Session, error) {
 		content := results[i].content
 		key := paneKey(p.sessionName, p.windowIndex, p.paneIndex)
 
-		// If content hasn't changed and we have a cached result, reuse it.
+		// If content hasn't changed and we have a fresh cached result, reuse it.
+		// The TTL ensures we periodically re-evaluate even when content is stable,
+		// because external signals (hooks, process tree) can change independently.
 		unchanged, contentHash := contentHashUnchanged(key, content)
 		if unchanged {
-			if cached, ok := getCachedResult(key); ok {
+			if cached, ok := getCachedResult(key); ok && time.Since(cached.detectedAt) < paneDetectCacheTTL {
 				sessions = append(sessions, session.Session{
 					Name:        p.windowName,
 					Summary:     cached.summary,

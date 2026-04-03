@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/tanaka0325/clux/internal/session"
 )
@@ -28,13 +29,21 @@ var (
 	paneDetectCache   = map[string]paneDetectResult{}
 )
 
+// paneDetectCacheTTL is the maximum age of a cached detection result before
+// it must be re-evaluated. Even when pane content is stable (hash unchanged),
+// external signals like @claude-status hooks, process trees, and status bar
+// patterns can change independently. Without a TTL, a stale "Working" or
+// "Waiting" result would persist indefinitely once content stabilizes.
+const paneDetectCacheTTL = 5 * time.Second
+
 // paneDetectResult stores the last detected status and branch for each pane,
 // keyed by the same paneKey. When the content hash hasn't changed between
 // ticks, these cached values are reused to skip expensive pgrep/git calls.
 type paneDetectResult struct {
-	status  session.Status
-	branch  string
-	summary string
+	status     session.Status
+	branch     string
+	summary    string
+	detectedAt time.Time
 }
 
 // paneKey returns the canonical map key for a pane's content hash.
@@ -129,8 +138,9 @@ func getCachedResult(key string) (paneDetectResult, bool) {
 	return r, ok
 }
 
-// setCachedResult stores a detection result in the cache.
+// setCachedResult stores a detection result in the cache with the current timestamp.
 func setCachedResult(key string, r paneDetectResult) {
+	r.detectedAt = time.Now()
 	paneCacheMu.Lock()
 	defer paneCacheMu.Unlock()
 	paneDetectCache[key] = r

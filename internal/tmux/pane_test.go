@@ -256,6 +256,30 @@ func TestDetect_BackgroundAgent_OverridesHookWaiting(t *testing.T) {
 	assert(t, st == session.StatusWorking, "expected Working (agent overrides hook waiting), got %v", st)
 }
 
+// Hash stable + "accept edits on · N local agents" in status bar -> Working
+func TestDetect_AcceptEditsWithAgents_Working(t *testing.T) {
+	withMockedDeps(t,
+		func(_, _, _ string) string { return "waiting" },
+		func(_, _, _ string, _ processMaps) bool { return false },
+		func(_ string, _ uint64) bool { return false },
+	)
+	content := "some output\n❯ \n  [Opus 4.6 (1M context)]\n  ▸▸ accept edits on · 3 local agents"
+	st := detectStatusWithHooksForSession(content, "clux", "0", "0", processMaps{}, hashContent(content))
+	assert(t, st == session.StatusWorking, "expected Working (accept edits with local agents), got %v", st)
+}
+
+// Hash stable + "accept edits on · 1 local agent" (singular) -> Working
+func TestDetect_AcceptEditsWithSingleAgent_Working(t *testing.T) {
+	withMockedDeps(t,
+		func(_, _, _ string) string { return "waiting" },
+		func(_, _, _ string, _ processMaps) bool { return false },
+		func(_ string, _ uint64) bool { return false },
+	)
+	content := "some output\n❯ \n  [Opus 4.6 (1M context)]\n  ▸▸ accept edits on · 1 local agent"
+	st := detectStatusWithHooksForSession(content, "clux", "0", "0", processMaps{}, hashContent(content))
+	assert(t, st == session.StatusWorking, "expected Working (accept edits with 1 local agent), got %v", st)
+}
+
 // "local agent" in scrollback (beyond bottomScanLines) -> Idle, not false positive
 func TestDetect_OldLocalAgentInScrollback_HashStable_Idle(t *testing.T) {
 	withMockedDeps(t,
