@@ -82,13 +82,13 @@ func dispatchCLI(args []string, stdout, stderr io.Writer) (cliAction, int) {
 	switch args[0] {
 	case "-h", "--help":
 		if len(args) > 1 {
-			return writeUnexpectedArgs(stderr, "clux", args[1:])
+			return writeUnexpectedArgs(stderr, "clux", args[1:], writeRootHelp)
 		}
 		writeRootHelp(stdout)
 		return cliActionExit, 0
 	case "-v", "--version":
 		if len(args) > 1 {
-			return writeUnexpectedArgs(stderr, "clux", args[1:])
+			return writeUnexpectedArgs(stderr, "clux", args[1:], writeRootHelp)
 		}
 		writeVersion(stdout)
 		return cliActionExit, 0
@@ -111,19 +111,12 @@ func dispatchSubcommand(args []string, name string, helpWriter func(io.Writer), 
 		helpWriter(stdout)
 		return cliActionExit, 0
 	}
-	return writeUnexpectedArgs(stderr, "clux "+name, args)
+	return writeUnexpectedArgs(stderr, "clux "+name, args, helpWriter)
 }
 
-func writeUnexpectedArgs(w io.Writer, command string, args []string) (cliAction, int) {
+func writeUnexpectedArgs(w io.Writer, command string, args []string, helpWriter func(io.Writer)) (cliAction, int) {
 	fmt.Fprintf(w, "%s: unexpected argument %q\n\n", command, args[0])
-	switch command {
-	case "clux":
-		writeRootHelp(w)
-	case "clux dashboard":
-		writeDashboardHelp(w)
-	case "clux init":
-		writeInitHelp(w)
-	}
+	helpWriter(w)
 	return cliActionExit, 1
 }
 
