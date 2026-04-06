@@ -97,7 +97,7 @@ func dispatchCLI(args []string, stdout, stderr io.Writer) (cliAction, int) {
 	case "init":
 		return dispatchSubcommand(args[1:], "init", writeInitHelp, cliActionInit, stdout, stderr)
 	default:
-		fmt.Fprintf(stderr, "clux: unknown command %q\n\n", args[0])
+		_, _ = fmt.Fprintf(stderr, "clux: unknown command %q\n\n", args[0])
 		writeRootHelp(stderr)
 		return cliActionExit, 1
 	}
@@ -115,7 +115,7 @@ func dispatchSubcommand(args []string, name string, helpWriter func(io.Writer), 
 }
 
 func writeUnexpectedArgs(w io.Writer, command string, args []string, helpWriter func(io.Writer)) (cliAction, int) {
-	fmt.Fprintf(w, "%s: unexpected argument %q\n\n", command, args[0])
+	_, _ = fmt.Fprintf(w, "%s: unexpected argument %q\n\n", command, args[0])
 	helpWriter(w)
 	return cliActionExit, 1
 }
@@ -126,14 +126,14 @@ func isHelpFlag(arg string) bool {
 
 func writeVersion(w io.Writer) {
 	if commit != "" && date != "" {
-		fmt.Fprintf(w, "clux %s (%s, built %s)\n", version, commit, date)
+		_, _ = fmt.Fprintf(w, "clux %s (%s, built %s)\n", version, commit, date)
 		return
 	}
-	fmt.Fprintf(w, "clux %s\n", version)
+	_, _ = fmt.Fprintf(w, "clux %s\n", version)
 }
 
 func writeRootHelp(w io.Writer) {
-	fmt.Fprint(w, `Usage:
+	_, _ = fmt.Fprint(w, `Usage:
   clux [command]
 
 Launch the clux TUI session switcher.
@@ -154,7 +154,7 @@ Examples:
 }
 
 func writeDashboardHelp(w io.Writer) {
-	fmt.Fprint(w, `Usage:
+	_, _ = fmt.Fprint(w, `Usage:
   clux dashboard
 
 Launch clux directly in dashboard mode.
@@ -165,7 +165,7 @@ Options:
 }
 
 func writeInitHelp(w io.Writer) {
-	fmt.Fprint(w, `Usage:
+	_, _ = fmt.Fprint(w, `Usage:
   clux init
 
 Install the Claude Code hook, tmux binding, @clux-summary instructions, and default config.
