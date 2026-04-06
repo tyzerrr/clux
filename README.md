@@ -113,6 +113,7 @@ Type to fuzzy-filter the repo list. If no repos are selected, the repo at the cu
 clux                  Launch the TUI session switcher
 clux dashboard        Launch directly in dashboard mode
 clux init             Install hook, tmux binding, @clux-summary instructions, and default config
+clux --help, -h       Show help
 clux --version, -v    Show version information
 ```
 
